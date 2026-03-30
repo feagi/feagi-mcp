@@ -5,6 +5,8 @@ from typing import Any
 
 import httpx
 
+from feagi_mcp.area_metadata import enrich_area_list, enrich_area_with_name, get_semantic_info
+
 logger = logging.getLogger(__name__)
 
 
@@ -73,6 +75,32 @@ class FeagiClient:
             logger.error(f"list_cortical_areas failed: {e}")
             return []
 
+    async def list_cortical_area_names(self) -> list[str]:
+        """Get simple list of all cortical area names."""
+        try:
+            url = f"{self.base_url}/v1/cortical_area/cortical_area_name_list"
+            response = await self._client.get(url)
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("cortical_area_name_list", [])
+            logger.error(f"list_cortical_area_names failed: HTTP {response.status_code}")
+            return []
+        except Exception as e:
+            logger.error(f"list_cortical_area_names failed: {e}")
+            return []
+
+    async def list_morphologies(self) -> dict[str, Any]:
+        """Get all morphology definitions including connectivity rules."""
+        try:
+            response = await self._client.get(f"{self.base_url}/v1/morphology/morphologies")
+            if response.status_code == 200:
+                return response.json()
+            logger.error(f"list_morphologies failed: HTTP {response.status_code}")
+            return {}
+        except Exception as e:
+            logger.error(f"list_morphologies failed: {e}")
+            return {}
+
     async def get_genome_info(self) -> dict[str, Any]:
         """Get current genome metadata."""
         try:
@@ -125,6 +153,320 @@ class FeagiClient:
         except Exception as e:
             logger.error(f"upload_genome failed: {e}")
             return {"error": str(e), "success": False}
+
+    async def load_barebones_genome(self) -> dict[str, Any]:
+        """Load the barebones genome (minimal core areas).
+
+        Returns:
+            Load result with success status and cortical area count
+        """
+        try:
+            response = await self._client.post(
+                f"{self.base_url}/v1/genome/upload/barebones",
+            )
+            if response.status_code == 200:
+                return response.json()
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+                "success": False,
+            }
+        except Exception as e:
+            logger.error(f"load_barebones_genome failed: {e}")
+            return {"error": str(e), "success": False}
+
+    async def create_morphology(
+        self,
+        morphology_name: str,
+        morphology_type: str,
+        morphology_parameters: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Create a custom morphology definition.
+
+        Args:
+            morphology_name: Unique morphology name
+            morphology_type: Type (vectors, patterns, functions, composite)
+            morphology_parameters: Type-specific parameters
+
+        Returns:
+            Status of morphology creation
+        """
+        try:
+            payload = {
+                "morphology_name": morphology_name,
+                "morphology_type": morphology_type,
+                "morphology_parameters": morphology_parameters,
+            }
+            response = await self._client.post(
+                f"{self.base_url}/v1/morphology/morphology", json=payload
+            )
+            if response.status_code == 200:
+                return response.json()
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+                "success": False,
+            }
+        except Exception as e:
+            logger.error(f"create_morphology failed: {e}")
+            return {"error": str(e), "success": False}
+
+    async def get_cortical_area_geometry(self) -> dict[str, Any]:
+        """Get full geometry info for all cortical areas.
+
+        Uses the same endpoint as Brain Visualizer (`GET .../cortical_area/geometry`).
+
+        Returns:
+            Dictionary mapping cortical_id to geometry properties
+        """
+        try:
+            response = await self._client.get(
+                f"{self.base_url}/v1/cortical_area/cortical_area/geometry"
+            )
+            if response.status_code == 200:
+                return response.json()
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error(f"get_cortical_area_geometry failed: {e}")
+            return {"error": str(e)}
+
+    async def get_cortical_id_name_mapping(self) -> dict[str, Any]:
+        """GET /v1/cortical_area/cortical_id_name_mapping — same as Brain Visualizer."""
+        try:
+            response = await self._client.get(
+                f"{self.base_url}/v1/cortical_area/cortical_id_name_mapping"
+            )
+            if response.status_code == 200:
+                return response.json()
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error(f"get_cortical_id_name_mapping failed: {e}")
+            return {"error": str(e)}
+
+    async def resolve_cortical_display_name(
+        self,
+        display_name: str,
+        match_mode: str = "exact",
+    ) -> dict[str, Any]:
+        """Map a human-readable cortical name to base64 cortical_id(s).
+
+        Args:
+            display_name: Genome display name (e.g. \"Object Segmentation-0-0\").
+            match_mode: \"exact\" | \"substring\" | \"icase\" (case-insensitive exact).
+        """
+        mapping = await self.get_cortical_id_name_mapping()
+        if not isinstance(mapping, dict):
+            return {"error": "invalid_mapping_response"}
+        if "error" in mapping:
+            return mapping
+
+        matches: list[dict[str, str]] = []
+        needle = display_name.strip()
+        for cid, name in mapping.items():
+            if not isinstance(name, str):
+                continue
+            if match_mode == "substring":
+                if needle.lower() in name.lower():
+                    matches.append({"cortical_id": cid, "cortical_name": name})
+            elif match_mode == "icase":
+                if name.strip().lower() == needle.lower():
+                    matches.append({"cortical_id": cid, "cortical_name": name})
+            else:
+                if name.strip() == needle:
+                    matches.append({"cortical_id": cid, "cortical_name": name})
+
+        resolved = matches[0]["cortical_id"] if len(matches) == 1 else None
+        return {
+            "display_name": display_name,
+            "match_mode": match_mode,
+            "match_count": len(matches),
+            "matches": matches,
+            "resolved_cortical_id": resolved,
+        }
+
+    async def get_cortical_map_detailed(self) -> dict[str, Any]:
+        """GET /v1/cortical_area/cortical_map_detailed — outgoing mapping graph (BV reload)."""
+        try:
+            response = await self._client.get(
+                f"{self.base_url}/v1/cortical_area/cortical_map_detailed"
+            )
+            if response.status_code == 200:
+                return response.json()
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error(f"get_cortical_map_detailed failed: {e}")
+            return {"error": str(e)}
+
+    async def get_regions_members(self) -> dict[str, Any]:
+        """GET /v1/region/regions_members — brain regions and member cortical areas (BV)."""
+        try:
+            response = await self._client.get(f"{self.base_url}/v1/region/regions_members")
+            if response.status_code == 200:
+                return response.json()
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error(f"get_regions_members failed: {e}")
+            return {"error": str(e)}
+
+    async def get_genome_file_name(self) -> dict[str, Any]:
+        """GET /v1/genome/file_name — loaded genome file label."""
+        try:
+            response = await self._client.get(f"{self.base_url}/v1/genome/file_name")
+            if response.status_code == 200:
+                return response.json()
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error(f"get_genome_file_name failed: {e}")
+            return {"error": str(e)}
+
+    async def save_genome_to_filesystem(
+        self,
+        file_path: str | None = None,
+        genome_id: str | None = None,
+        genome_title: str | None = None,
+    ) -> dict[str, Any]:
+        """POST /v1/genome/save — persist current genome JSON (Brain Visualizer save)."""
+        try:
+            body: dict[str, str] = {}
+            if file_path:
+                body["file_path"] = file_path
+            if genome_id:
+                body["genome_id"] = genome_id
+            if genome_title:
+                body["genome_title"] = genome_title
+            response = await self._client.post(
+                f"{self.base_url}/v1/genome/save",
+                json=body,
+            )
+            if response.status_code == 200:
+                return response.json()
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error(f"save_genome_to_filesystem failed: {e}")
+            return {"error": str(e)}
+
+    async def fetch_cortical_area_properties(self, cortical_id: str) -> dict[str, Any]:
+        """POST /v1/cortical_area/cortical_area_properties — full connectome area record (BV inspector)."""
+        try:
+            response = await self._client.post(
+                f"{self.base_url}/v1/cortical_area/cortical_area_properties",
+                json={"cortical_id": cortical_id},
+            )
+            if response.status_code == 200:
+                return response.json()
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error(f"fetch_cortical_area_properties failed: {e}")
+            return {"error": str(e)}
+
+    async def fetch_multi_cortical_area_properties(
+        self, cortical_ids: list[str]
+    ) -> dict[str, Any]:
+        """POST /v1/cortical_area/multi/cortical_area_properties — batch properties (BV)."""
+        try:
+            response = await self._client.post(
+                f"{self.base_url}/v1/cortical_area/multi/cortical_area_properties",
+                json=cortical_ids,
+            )
+            if response.status_code == 200:
+                return response.json()
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error(f"fetch_multi_cortical_area_properties failed: {e}")
+            return {"error": str(e)}
+
+    async def reset_cortical_neural_state(self, area_ids: list[str]) -> dict[str, Any]:
+        """PUT /v1/cortical_area/reset — reset runtime state for areas (BV reset neurons)."""
+        try:
+            response = await self._client.put(
+                f"{self.base_url}/v1/cortical_area/reset",
+                json={"area_list": area_ids},
+            )
+            if response.status_code == 200:
+                return response.json()
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error(f"reset_cortical_neural_state failed: {e}")
+            return {"error": str(e)}
+
+    async def clone_cortical_area_via_api(
+        self,
+        source_area_id: str,
+        new_name: str,
+        coordinates_3d: list[int],
+        coordinates_2d: list[int],
+        clone_cortical_mapping: bool,
+        parent_region_id: str | None = None,
+    ) -> dict[str, Any]:
+        """POST /v1/cortical_area/clone — duplicate custom/memory area (BV clone)."""
+        try:
+            payload: dict[str, Any] = {
+                "source_area_id": source_area_id,
+                "new_name": new_name,
+                "coordinates_3d": [
+                    int(coordinates_3d[0]),
+                    int(coordinates_3d[1]),
+                    int(coordinates_3d[2]),
+                ],
+                "coordinates_2d": [int(coordinates_2d[0]), int(coordinates_2d[1])],
+                "clone_cortical_mapping": clone_cortical_mapping,
+            }
+            if parent_region_id is not None:
+                payload["parent_region_id"] = parent_region_id
+            response = await self._client.post(
+                f"{self.base_url}/v1/cortical_area/clone",
+                json=payload,
+            )
+            if response.status_code == 200:
+                return response.json()
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error(f"clone_cortical_area_via_api failed: {e}")
+            return {"error": str(e)}
+
+    async def get_cortical_template(self) -> dict[str, Any]:
+        """GET /v1/genome/cortical_template — IPU/OPU templates (BV template picker)."""
+        try:
+            response = await self._client.get(f"{self.base_url}/v1/genome/cortical_template")
+            if response.status_code == 200:
+                return response.json()
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error(f"get_cortical_template failed: {e}")
+            return {"error": str(e)}
 
     async def get_connectivity(self, src_area: str, dst_area: str) -> dict[str, Any]:
         """Get connectivity information between two cortical areas.
@@ -273,30 +615,23 @@ class FeagiClient:
                             area_id = key.split("-cx-")[0].replace("_____10c-", "")
                             device_count_key = key.replace("__name-t", "devcnt-i")
                             device_count = blueprint.get(device_count_key, 0)
-                            opu_areas.append(
-                                {
-                                    "name": value,
-                                    "id": area_id,
-                                    "device_count": device_count,
-                                }
-                            )
+                            enriched = enrich_area_with_name(area_id, value, device_count)
+                            opu_areas.append(enriched)
                         elif group == "IPU":
                             area_id = key.split("-cx-")[0].replace("_____10c-", "")
                             device_count_key = key.replace("__name-t", "devcnt-i")
                             device_count = blueprint.get(device_count_key, 0)
-                            ipu_areas.append(
-                                {
-                                    "name": value,
-                                    "id": area_id,
-                                    "device_count": device_count,
-                                }
-                            )
+                            enriched = enrich_area_with_name(area_id, value, device_count)
+                            ipu_areas.append(enriched)
 
                 return {
                     "status": "genome_info",
                     "opu_areas": opu_areas,
                     "ipu_areas": ipu_areas,
-                    "message": "Embodiment status endpoint unavailable, showing genome I/O config",
+                    "message": (
+                        "Embodiment status endpoint unavailable, "
+                        "showing genome I/O config with semantic metadata"
+                    ),
                 }
 
             return {"error": "Could not retrieve embodiment status"}
@@ -428,6 +763,19 @@ class FeagiClient:
         except Exception as e:
             logger.error(f"list_opu_areas failed: {e}")
             return []
+    
+    async def list_opu_areas_with_metadata(self) -> list[dict[str, Any]]:
+        """List all OPU areas with semantic metadata about their type and capabilities.
+        
+        Returns:
+            List of dictionaries with ID, type, purpose, capabilities, and usage info
+        """
+        try:
+            areas = await self.list_opu_areas()
+            return enrich_area_list(areas)
+        except Exception as e:
+            logger.error(f"list_opu_areas_with_metadata failed: {e}")
+            return []
 
     async def list_ipu_areas(self) -> list[str]:
         """List all IPU cortical area IDs."""
@@ -439,6 +787,19 @@ class FeagiClient:
         except Exception as e:
             logger.error(f"list_ipu_areas failed: {e}")
             return []
+    
+    async def list_ipu_areas_with_metadata(self) -> list[dict[str, Any]]:
+        """List all IPU areas with semantic metadata about their type and capabilities.
+        
+        Returns:
+            List of dictionaries with ID, type, purpose, capabilities, and usage info
+        """
+        try:
+            areas = await self.list_ipu_areas()
+            return enrich_area_list(areas)
+        except Exception as e:
+            logger.error(f"list_ipu_areas_with_metadata failed: {e}")
+            return []
 
     async def create_cortical_area(
         self,
@@ -449,28 +810,65 @@ class FeagiClient:
         neurons_per_voxel: int = 1,
         device_count: int = 1,
         properties: dict[str, Any] | None = None,
+        cortical_id: str | None = None,
+        group_id: int = 0,
+        data_type_configs_by_subunit: dict[str, int] | None = None,
+        per_device_dimensions: list[int] | None = None,
     ) -> dict[str, Any]:
-        """Create a new cortical area."""
+        """Create a new cortical area.
+        
+        Args:
+            name: Human-readable name
+            cortical_type: "OPU", "IPU", "CUSTOM", or "MEMORY"
+            dimensions: [width, height, depth] in voxels (for CUSTOM/MEMORY only)
+            position: [x, y, z] 3D coordinates
+            neurons_per_voxel: Number of neurons per voxel (default: 1)
+            device_count: Number of devices for IPU/OPU (default: 1)
+            properties: Optional additional properties
+            cortical_id: For OPU/IPU: type key like "opse", "isvi" (required for OPU/IPU)
+            group_id: For OPU/IPU: group identifier 0-255 (default: 0)
+            data_type_configs_by_subunit: For OPU/IPU: map of subunit index to config
+                e.g. {"0": 256, "1": 256, "2": 256} for 3-subunit servo with absolute+linear
+            per_device_dimensions: For OPU/IPU: override per-device dimensions [x,y,z]
+                e.g. [1, 1, 32] for single-joint servo with 32-angle resolution
+                Total X = per_device_dimensions[0] * device_count
+        
+        Returns:
+            Created area info with cortical_id(s)
+        """
         try:
-            request_data = {
-                "cortical_name": name,
-                "cortical_type": cortical_type,
-                "cortical_dimensions": dimensions,
-                "coordinates_3d": position,
-            }
-
-            if properties:
-                request_data.update(properties)
-
             if cortical_type in ["OPU", "IPU"]:
-                request_data["device_count"] = device_count
-                request_data["neurons_per_voxel"] = neurons_per_voxel
+                if not cortical_id:
+                    return {"error": "cortical_id required for OPU/IPU (e.g. 'opse', 'isvi')"}
+                if data_type_configs_by_subunit is None:
+                    return {"error": "data_type_configs_by_subunit required for OPU/IPU"}
+                
+                request_data = {
+                    "cortical_id": cortical_id,
+                    "cortical_type": cortical_type,
+                    "group_id": group_id,
+                    "device_count": device_count,
+                    "coordinates_3d": position,
+                    "neurons_per_voxel": neurons_per_voxel,
+                    "data_type_configs_by_subunit": data_type_configs_by_subunit,
+                }
+                if per_device_dimensions is not None:
+                    request_data["per_device_dimensions"] = per_device_dimensions
+                    
                 response = await self._client.post(
                     f"{self.base_url}/v1/cortical_area/cortical_area",
                     json=request_data,
                 )
             else:
-                request_data["cortical_dimensions"] = dimensions
+                request_data = {
+                    "cortical_name": name,
+                    "cortical_type": cortical_type,
+                    "cortical_dimensions": dimensions,
+                    "coordinates_3d": position,
+                }
+                if properties:
+                    request_data.update(properties)
+                    
                 response = await self._client.post(
                     f"{self.base_url}/v1/cortical_area/custom_cortical_area",
                     json=request_data,
@@ -507,7 +905,7 @@ class FeagiClient:
         try:
             response = await self._client.delete(
                 f"{self.base_url}/v1/cortical_area/cortical_area",
-                json={"cortical_id": cortical_id},
+                params={"cortical_id": cortical_id},
             )
             if response.status_code == 200:
                 return response.json()
@@ -555,11 +953,38 @@ class FeagiClient:
         try:
             response = await self._client.delete(
                 f"{self.base_url}/v1/cortical_mapping/mapping",
-                json={"src_cortical_area": src_area, "dst_cortical_area": dst_area},
+                params={"src_cortical_area": src_area, "dst_cortical_area": dst_area},
             )
             if response.status_code == 200:
                 return response.json()
             return {"error": f"HTTP {response.status_code}", "message": response.text}
         except Exception as e:
             logger.error(f"delete_cortical_mapping failed: {e}")
+            return {"error": str(e)}
+    
+    async def get_area_semantic_info(self, area_id: str) -> dict[str, Any]:
+        """Get semantic information about a cortical area.
+        
+        Args:
+            area_id: Encoded cortical ID
+            
+        Returns:
+            Dictionary with semantic metadata including type, purpose, capabilities, usage
+        """
+        try:
+            info = get_semantic_info(area_id)
+            
+            genome = await self.download_genome()
+            if "error" not in genome:
+                blueprint = genome.get("blueprint", {})
+                for key, value in blueprint.items():
+                    if area_id in key and "__name-t" in key:
+                        info["name"] = value
+                        device_count_key = key.replace("__name-t", "devcnt-i")
+                        info["device_count"] = blueprint.get(device_count_key, 0)
+                        break
+            
+            return info
+        except Exception as e:
+            logger.error(f"get_area_semantic_info failed: {e}")
             return {"error": str(e)}

@@ -140,6 +140,40 @@ async def list_cortical_areas() -> list[dict[str, Any]]:
 
 
 @mcp.tool()
+async def list_cortical_area_names() -> list[str]:
+    """Get a simple list of all cortical area names.
+
+    Returns only the human-readable names of cortical areas without additional
+    metadata. Use this for quick reference or when you just need area names.
+
+    Returns:
+        List of cortical area names (strings)
+    """
+    result = await feagi.list_cortical_area_names()
+    return result
+
+
+@mcp.tool()
+async def list_morphologies() -> dict[str, Any]:
+    """Get all morphology definitions and connectivity rules.
+
+    Returns complete morphology catalog including:
+    - vectors: Precise coordinate-based connections
+    - patterns: Pattern-based connectivity rules
+    - functions: Function-based connections (memory, projection, etc.)
+    - composite: Multi-morphology compositions
+
+    Each morphology defines how neurons connect between cortical areas.
+    Use this to understand available connection patterns and design circuits.
+
+    Returns:
+        Dictionary mapping morphology names to their definitions
+    """
+    result = await feagi.list_morphologies()
+    return result
+
+
+@mcp.tool()
 async def get_genome_info() -> dict[str, Any]:
     """Get metadata about the currently loaded genome.
 
@@ -188,6 +222,77 @@ async def upload_genome(genome_json: str) -> dict[str, Any]:
         return result
     except json.JSONDecodeError as e:
         return {"success": False, "error": "invalid_json", "message": str(e)}
+
+
+@mcp.tool()
+async def load_barebones_genome() -> dict[str, Any]:
+    """Load the barebones genome (minimal FEAGI core areas only).
+    
+    Resets FEAGI to a clean state with only Brain_Power and Death areas.
+    Use this as a starting point to build custom networks programmatically.
+    
+    Returns:
+        Load result with success status and cortical area count
+    """
+    result = await feagi.load_barebones_genome()
+    return result
+
+
+@mcp.tool()
+async def create_morphology(
+    morphology_name: str,
+    morphology_type: str,
+    morphology_parameters: dict[str, Any],
+) -> dict[str, Any]:
+    """Create a custom morphology for precise neuron-to-neuron connectivity.
+    
+    Morphologies define connection patterns between cortical areas.
+    Use "vectors" type for precise coordinate-based mappings (e.g., joint control).
+    
+    Args:
+        morphology_name: Unique name for this morphology (e.g., "to_joint_0")
+        morphology_type: Type of morphology ("vectors", "patterns", "functions", "composite")
+        morphology_parameters: Type-specific parameters:
+            - For "vectors": {"vectors": [[dx, dy, dz], ...]}
+              Each vector [dx,dy,dz] creates synapse from [x,y,z] to [x+dx,y+dy,z+dz]
+            - For "patterns": {"patterns": [[pattern_x, pattern_y, pattern_z]]}
+            - For "functions": {} (function-based connections)
+    
+    Returns:
+        Status of morphology creation
+    
+    Examples:
+        Identity mapping (preserves coordinates):
+          {"vectors": [[0, 0, 0]]}
+        
+        X-axis lateral connection:
+          {"vectors": [[1, 0, 0]]}
+        
+        Multi-directional:
+          {"vectors": [[1, 0, 0], [0, 1, 0], [0, 0, 1]]}
+    """
+    result = await feagi.create_morphology(
+        morphology_name, morphology_type, morphology_parameters
+    )
+    return result
+
+
+@mcp.tool()
+async def get_cortical_area_geometry() -> dict[str, Any]:
+    """Get full geometry info for all cortical areas including dimensions and positions.
+    
+    Returns detailed structure for each area:
+    - cortical_dimensions: [x, y, z] voxel dimensions
+    - position: [x, y, z] 3D coordinates
+    - cortical_neuron_per_vox_count: neurons per voxel
+    
+    Use this to debug morphology connections and understand area structure.
+    
+    Returns:
+        Dictionary mapping cortical_id to geometry properties
+    """
+    result = await feagi.get_cortical_area_geometry()
+    return result
 
 
 @mcp.tool()
@@ -428,6 +533,29 @@ async def list_opu_areas() -> list[str]:
 
 
 @mcp.tool()
+async def list_opu_areas_with_metadata() -> list[dict[str, Any]]:
+    """List all OPU areas with detailed semantic information.
+    
+    Returns comprehensive metadata for each output area including:
+    - area_type: Technical identifier (e.g., "omot", "ogaz")
+    - category: High-level category (motor_control, vision_control, language, etc.)
+    - purpose: What the area controls or outputs
+    - capabilities: List of specific capabilities
+    - supported_devices: Types of hardware this area can control
+    - data_format: Format of data this area outputs
+    - typical_use: Common use cases and applications
+    
+    Use this instead of list_opu_areas when you need to understand what each
+    output area does and what it can control.
+    
+    Returns:
+        List of OPU areas with semantic metadata
+    """
+    result = await feagi.list_opu_areas_with_metadata()
+    return result
+
+
+@mcp.tool()
 async def list_ipu_areas() -> list[str]:
     """List all IPU (Input Processing Unit) cortical area IDs.
 
@@ -441,6 +569,57 @@ async def list_ipu_areas() -> list[str]:
 
 
 @mcp.tool()
+async def list_ipu_areas_with_metadata() -> list[dict[str, Any]]:
+    """List all IPU areas with detailed semantic information.
+    
+    Returns comprehensive metadata for each input area including:
+    - area_type: Technical identifier (e.g., "isvi", "iten")
+    - category: High-level category (vision_input, language_input, etc.)
+    - purpose: What the area processes or receives
+    - capabilities: List of specific capabilities
+    - supported_devices: Types of sensors this area can receive from
+    - data_format: Format of data this area expects
+    - typical_use: Common use cases and applications
+    
+    Use this instead of list_ipu_areas when you need to understand what each
+    input area processes and what sensors it supports.
+    
+    Returns:
+        List of IPU areas with semantic metadata
+    """
+    result = await feagi.list_ipu_areas_with_metadata()
+    return result
+
+
+@mcp.tool()
+async def get_area_semantic_info(area_id: str) -> dict[str, Any]:
+    """Get detailed semantic information about a specific cortical area.
+    
+    Returns comprehensive metadata including:
+    - area_type: Technical identifier (e.g., "omot", "isvi", "ogaz")
+    - category: High-level category (motor_control, vision_input, language, etc.)
+    - purpose: Detailed description of what the area does
+    - capabilities: List of specific capabilities
+    - supported_devices: Types of hardware/sensors this area works with
+    - data_format: Format of data the area uses
+    - typical_use: Common use cases and application examples
+    - name: Human-readable name from genome (if available)
+    - device_count: Number of connected devices (if available)
+    
+    Use this when you need to understand what a specific cortical area does,
+    what it can control, or what devices it supports.
+    
+    Args:
+        area_id: Cortical area identifier (e.g., "b21vdAUAAAA=")
+    
+    Returns:
+        Semantic metadata about the area
+    """
+    result = await feagi.get_area_semantic_info(area_id)
+    return result
+
+
+@mcp.tool()
 async def create_cortical_area(
     name: str,
     cortical_type: str,
@@ -449,6 +628,10 @@ async def create_cortical_area(
     neurons_per_voxel: int = 1,
     device_count: int = 1,
     properties: dict[str, Any] | None = None,
+    cortical_id: str | None = None,
+    group_id: int = 0,
+    data_type_configs_by_subunit: dict[str, int] | None = None,
+    per_device_dimensions: list[int] | None = None,
 ) -> dict[str, Any]:
     """Create a new cortical area programmatically.
 
@@ -458,17 +641,25 @@ async def create_cortical_area(
     Args:
         name: Human-readable name
         cortical_type: "OPU", "IPU", "CUSTOM", or "MEMORY"
-        dimensions: [width, height, depth] in voxels
+        dimensions: [width, height, depth] in voxels (for CUSTOM/MEMORY only)
         position: [x, y, z] 3D coordinates
         neurons_per_voxel: Number of neurons per voxel (default: 1)
         device_count: Number of devices for IPU/OPU (default: 1)
         properties: Optional additional properties (parent_region_id, grp_id, etc.)
+        cortical_id: For OPU/IPU: type key like "opse", "isvi" (required for OPU/IPU)
+        group_id: For OPU/IPU: group identifier 0-255 (default: 0)
+        data_type_configs_by_subunit: For OPU/IPU: map of subunit index to config
+            e.g. {"0": 256, "1": 256, "2": 256} for 3-subunit servo with absolute+linear
+        per_device_dimensions: For OPU/IPU: override per-device dimensions [x,y,z]
+            e.g. [1, 1, 32] for single-joint servo with 32-angle resolution
+            Total X = per_device_dimensions[0] * device_count
 
     Returns:
         Created area info with cortical_id
     """
     result = await feagi.create_cortical_area(
-        name, cortical_type, dimensions, position, neurons_per_voxel, device_count, properties
+        name, cortical_type, dimensions, position, neurons_per_voxel, device_count, properties,
+        cortical_id, group_id, data_type_configs_by_subunit, per_device_dimensions
     )
     return result
 
@@ -553,6 +744,140 @@ async def delete_cortical_mapping(src_area: str, dst_area: str) -> dict[str, Any
         Deletion result with success status
     """
     result = await feagi.delete_cortical_mapping(src_area, dst_area)
+    return result
+
+
+@mcp.tool()
+async def resolve_cortical_area_by_name(
+    display_name: str,
+    match_mode: str = "exact",
+) -> dict[str, Any]:
+    """Resolve a genome display name to base64 cortical_id (Brain Visualizer uses names; APIs use IDs).
+
+    Natural language: call this when the user names an area (e.g. \"Object Segmentation-0-0\")
+    before update_cortical_area, reset_cortical_neural_state, or clone_cortical_area.
+
+    Args:
+        display_name: Human-readable cortical name from the genome.
+        match_mode: \"exact\" (default), \"substring\", or \"icase\" (case-insensitive exact).
+
+    Returns:
+        matches list, and resolved_cortical_id when exactly one match exists.
+    """
+    result = await feagi.resolve_cortical_display_name(display_name, match_mode)
+    return result
+
+
+@mcp.tool()
+async def get_cortical_id_name_mapping() -> dict[str, Any]:
+    """Return {cortical_id: cortical_name} for all areas (GET cortical_id_name_mapping).
+
+    Natural language: use to translate IDs to names or search names without guessing.
+    """
+    result = await feagi.get_cortical_id_name_mapping()
+    return result
+
+
+@mcp.tool()
+async def get_cortical_map_detailed() -> dict[str, Any]:
+    """Outgoing connectivity map per area (GET cortical_map_detailed).
+
+    Same data Brain Visualizer loads when refreshing mappings. Natural language: use for
+    \"what connects to what\" at the mapping-destination level.
+    """
+    result = await feagi.get_cortical_map_detailed()
+    return result
+
+
+@mcp.tool()
+async def get_brain_regions() -> dict[str, Any]:
+    """List brain regions and member cortical areas (GET region/regions_members).
+
+    Natural language: \"which region is this area in?\", region hierarchy, relocate context.
+    """
+    result = await feagi.get_regions_members()
+    return result
+
+
+@mcp.tool()
+async def get_genome_file_name() -> dict[str, Any]:
+    """Current genome file label (GET genome/file_name)."""
+    result = await feagi.get_genome_file_name()
+    return result
+
+
+@mcp.tool()
+async def save_genome_to_filesystem(
+    file_path: str | None = None,
+    genome_id: str | None = None,
+    genome_title: str | None = None,
+) -> dict[str, Any]:
+    """Save the running genome to disk (POST genome/save), same as Brain Visualizer save.
+
+    Natural language: \"export genome\", \"save genome to file\". Optional absolute file_path;
+    if omitted, FEAGI picks a default under its configured genome directory.
+    """
+    result = await feagi.save_genome_to_filesystem(file_path, genome_id, genome_title)
+    return result
+
+
+@mcp.tool()
+async def inspect_cortical_area(cortical_id: str) -> dict[str, Any]:
+    """Full cortical area record from connectome (POST cortical_area/cortical_area_properties).
+
+    Natural language: prefer this over get_area_parameters when you need the same fields as
+    Brain Visualizer's cortical inspector (dimensions, types, neural params from services).
+    """
+    result = await feagi.fetch_cortical_area_properties(cortical_id)
+    return result
+
+
+@mcp.tool()
+async def inspect_cortical_areas_batch(cortical_ids: list[str]) -> dict[str, Any]:
+    """Batch cortical area properties (POST multi/cortical_area_properties)."""
+    result = await feagi.fetch_multi_cortical_area_properties(cortical_ids)
+    return result
+
+
+@mcp.tool()
+async def reset_cortical_neural_state(cortical_ids: list[str]) -> dict[str, Any]:
+    """Reset runtime neural state for areas without changing genome (PUT cortical_area/reset).
+
+    Natural language: \"clear membrane potentials\", \"reset neurons\" for named areas —
+    resolve names with resolve_cortical_area_by_name first.
+    """
+    result = await feagi.reset_cortical_neural_state(cortical_ids)
+    return result
+
+
+@mcp.tool()
+async def clone_cortical_area(
+    source_area_id: str,
+    new_name: str,
+    coordinates_3d: list[int],
+    coordinates_2d: list[int],
+    clone_cortical_mapping: bool = True,
+    parent_region_id: str | None = None,
+) -> dict[str, Any]:
+    """Clone a custom (c*) or memory (m*) cortical area (POST cortical_area/clone).
+
+    Natural language: \"duplicate area\". Only custom/memory areas are supported by the API.
+    """
+    result = await feagi.clone_cortical_area_via_api(
+        source_area_id,
+        new_name,
+        coordinates_3d,
+        coordinates_2d,
+        clone_cortical_mapping,
+        parent_region_id,
+    )
+    return result
+
+
+@mcp.tool()
+async def get_cortical_template() -> dict[str, Any]:
+    """IPU/OPU cortical templates (GET genome/cortical_template), as in BV template picker."""
+    result = await feagi.get_cortical_template()
     return result
 
 

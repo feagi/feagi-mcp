@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (2026-03-30)
+- **Semantic Metadata System**:
+  - `area_metadata.py` - Comprehensive metadata for all cortical area types
+  - `get_area_semantic_info` - Get detailed semantic info for any cortical area
+  - `list_opu_areas_with_metadata` - List OPU areas with type, purpose, capabilities, devices
+  - `list_ipu_areas_with_metadata` - List IPU areas with type, purpose, capabilities, devices
+  - Enhanced `get_embodiment_status` to include semantic metadata in responses
+- **Documentation**:
+  - `docs/SEMANTIC_METADATA_ENHANCEMENT.md` - Complete enhancement guide
+- **Test Coverage**:
+  - `tests/test_area_metadata.py` - 6 new tests for metadata system
+  - All metadata tests pass (6/6)
+
 ### Added (2026-03-29)
 - **Agent Introspection Tools** (11 new tools total):
   - `get_agent_properties` - Get agent type, capabilities, version, connection info

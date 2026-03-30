@@ -251,3 +251,51 @@ class TestFilteredLists:
         mock_client._client.get.assert_called_once_with(
             "http://localhost:8000/v1/cortical_area/ipu"
         )
+
+
+class TestBrainVisualizerParity:
+    """Endpoints aligned with Brain Visualizer (FEAGIHTTPAddressList / FEAGIRequests)."""
+
+    @pytest.mark.asyncio
+    async def test_get_cortical_area_geometry_uses_bv_path(self, mock_client):
+        """Geometry must use /cortical_area/geometry (not cortical_area_geometry)."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"abc": {"position": [0, 0, 0]}}
+        mock_client._client.get.return_value = mock_response
+
+        await mock_client.get_cortical_area_geometry()
+
+        mock_client._client.get.assert_called_once_with(
+            "http://localhost:8000/v1/cortical_area/cortical_area/geometry"
+        )
+
+    @pytest.mark.asyncio
+    async def test_resolve_cortical_display_name_exact(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"Y2lk": "Area One", "Y2lkMg": "Area Two"}
+        mock_client._client.get.return_value = mock_response
+
+        result = await mock_client.resolve_cortical_display_name("Area One", "exact")
+
+        assert result["resolved_cortical_id"] == "Y2lk"
+        assert result["match_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_save_genome_to_filesystem(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "message": "Genome saved successfully",
+            "file_path": "/tmp/out.json",
+        }
+        mock_client._client.post.return_value = mock_response
+
+        result = await mock_client.save_genome_to_filesystem(file_path="/tmp/out.json")
+
+        assert result["file_path"] == "/tmp/out.json"
+        mock_client._client.post.assert_called_once_with(
+            "http://localhost:8000/v1/genome/save",
+            json={"file_path": "/tmp/out.json"},
+        )

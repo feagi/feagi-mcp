@@ -87,6 +87,9 @@ Add to your Cursor MCP settings (`~/.cursor/mcp.json`):
 - `delete_cortical_area` - Remove cortical areas
 - `list_opu_areas` - List only motor output areas
 - `list_ipu_areas` - List only sensory input areas
+- `list_opu_areas_with_metadata` - List OPU areas with semantic type/purpose/capabilities info
+- `list_ipu_areas_with_metadata` - List IPU areas with semantic type/purpose/capabilities info
+- `get_area_semantic_info` - Get detailed semantic information about any cortical area
 
 ### Connection Management (NEW)
 - `get_cortical_mapping` - Get connection configuration between two areas
