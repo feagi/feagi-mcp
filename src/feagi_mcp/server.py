@@ -320,6 +320,242 @@ async def health_check() -> dict[str, Any]:
     return result
 
 
+@mcp.tool()
+async def get_burst_engine_status() -> dict[str, Any]:
+    """Get burst engine runtime status.
+
+    Returns current state: active, paused, frequency, burst count.
+    Use this to verify FEAGI is running and check simulation speed.
+
+    Returns:
+        Burst engine status with active state, frequency, and burst count
+    """
+    result = await feagi.get_burst_engine_status()
+    return result
+
+
+@mcp.tool()
+async def get_runtime_metrics() -> dict[str, Any]:
+    """Get comprehensive runtime metrics.
+
+    Returns neuron counts, cortical area counts, burst statistics, and brain readiness.
+    Use this to understand overall system state and resource usage.
+
+    Returns:
+        Runtime metrics including neuron_count, cortical_area_count, burst_count, frequency
+    """
+    result = await feagi.get_runtime_metrics()
+    return result
+
+
+@mcp.tool()
+async def get_cortical_synapse_counts(area_id: str) -> dict[str, Any]:
+    """Get incoming and outgoing synapse counts for a cortical area.
+
+    Use this to verify connections exist and diagnose signal propagation issues.
+
+    Args:
+        area_id: Cortical area identifier (e.g., "Y0NQR2FfX18=")
+
+    Returns:
+        Synapse counts: incoming, outgoing, and connection summary
+    """
+    result = await feagi.get_cortical_synapse_counts(area_id)
+    return result
+
+
+@mcp.tool()
+async def get_registered_agents() -> dict[str, Any]:
+    """Get list of all registered agents and their subscriptions.
+
+    Use this to verify controllers are connected and subscribed to motor outputs.
+
+    Returns:
+        List of registered agents with their capabilities, subscriptions, and status
+    """
+    result = await feagi.get_registered_agents()
+    return result
+
+
+@mcp.tool()
+async def get_agent_properties(agent_id: str) -> dict[str, Any]:
+    """Get detailed properties for a specific registered agent.
+
+    Shows agent type, capabilities, version info, and connection details.
+
+    Args:
+        agent_id: Agent identifier (from get_registered_agents)
+
+    Returns:
+        Agent properties including type, capabilities, IP, port, version
+    """
+    result = await feagi.get_agent_properties(agent_id)
+    return result
+
+
+@mcp.tool()
+async def get_agent_device_registrations(agent_id: str) -> dict[str, Any]:
+    """Get device registrations for an agent showing motor/sensor structure.
+
+    Critical for understanding:
+    - Motor types (ServoMotor, RotaryMotor)
+    - Control modes (absolute vs incremental)
+    - Group IDs and limb mappings
+    - Joint names and actuator details
+    - Expected OPU cortical area IDs
+
+    Args:
+        agent_id: Agent identifier (from get_registered_agents)
+
+    Returns:
+        Device registrations with input_units, output_units, and metadata
+    """
+    result = await feagi.get_agent_device_registrations(agent_id)
+    return result
+
+
+@mcp.tool()
+async def list_opu_areas() -> list[str]:
+    """List all OPU (Output Processing Unit) cortical area IDs.
+
+    Filters only motor output areas. Use to find which motor areas exist.
+
+    Returns:
+        List of OPU cortical area IDs
+    """
+    result = await feagi.list_opu_areas()
+    return result
+
+
+@mcp.tool()
+async def list_ipu_areas() -> list[str]:
+    """List all IPU (Input Processing Unit) cortical area IDs.
+
+    Filters only sensory input areas. Use to find which sensor areas exist.
+
+    Returns:
+        List of IPU cortical area IDs
+    """
+    result = await feagi.list_ipu_areas()
+    return result
+
+
+@mcp.tool()
+async def create_cortical_area(
+    name: str,
+    cortical_type: str,
+    dimensions: list[int],
+    position: list[int],
+    neurons_per_voxel: int = 1,
+    device_count: int = 1,
+    properties: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Create a new cortical area programmatically.
+
+    Use this to add OPU areas, IPU areas, or custom processing areas to the genome
+    without manual JSON editing.
+
+    Args:
+        name: Human-readable name
+        cortical_type: "OPU", "IPU", "CUSTOM", or "MEMORY"
+        dimensions: [width, height, depth] in voxels
+        position: [x, y, z] 3D coordinates
+        neurons_per_voxel: Number of neurons per voxel (default: 1)
+        device_count: Number of devices for IPU/OPU (default: 1)
+        properties: Optional additional properties (parent_region_id, grp_id, etc.)
+
+    Returns:
+        Created area info with cortical_id
+    """
+    result = await feagi.create_cortical_area(
+        name, cortical_type, dimensions, position, neurons_per_voxel, device_count, properties
+    )
+    return result
+
+
+@mcp.tool()
+async def update_cortical_area(cortical_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+    """Update properties of an existing cortical area.
+
+    Modify neural parameters, position, dimensions, or other properties.
+
+    Args:
+        cortical_id: Cortical area ID to update
+        updates: Dictionary of property updates
+
+    Returns:
+        Update result with success status
+    """
+    result = await feagi.update_cortical_area(cortical_id, updates)
+    return result
+
+
+@mcp.tool()
+async def delete_cortical_area(cortical_id: str) -> dict[str, Any]:
+    """Delete a cortical area and all its neurons/synapses.
+
+    Args:
+        cortical_id: Cortical area ID to delete
+
+    Returns:
+        Deletion result with success status
+    """
+    result = await feagi.delete_cortical_area(cortical_id)
+    return result
+
+
+@mcp.tool()
+async def get_cortical_mapping(src_area: str, dst_area: str) -> dict[str, Any]:
+    """Get detailed cortical mapping configuration between two areas.
+
+    Shows morphology rules, synaptic weights, plasticity settings.
+
+    Args:
+        src_area: Source cortical area ID
+        dst_area: Destination cortical area ID
+
+    Returns:
+        Mapping configuration with morphology and synapse parameters
+    """
+    result = await feagi.get_cortical_mapping(src_area, dst_area)
+    return result
+
+
+@mcp.tool()
+async def update_cortical_mapping(
+    src_area: str, dst_area: str, mapping_rules: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Create or update connections between two cortical areas.
+
+    Each mapping rule defines morphology, synaptic strength, and plasticity.
+
+    Args:
+        src_area: Source cortical area ID
+        dst_area: Destination cortical area ID
+        mapping_rules: List of connection rules with morphology_id, psc_multiplier, etc.
+
+    Returns:
+        Update result with synapse count and success status
+    """
+    result = await feagi.update_cortical_mapping(src_area, dst_area, mapping_rules)
+    return result
+
+
+@mcp.tool()
+async def delete_cortical_mapping(src_area: str, dst_area: str) -> dict[str, Any]:
+    """Delete all connections between two cortical areas.
+
+    Args:
+        src_area: Source cortical area ID
+        dst_area: Destination cortical area ID
+
+    Returns:
+        Deletion result with success status
+    """
+    result = await feagi.delete_cortical_mapping(src_area, dst_area)
+    return result
+
+
 def main() -> None:
     """Run the FEAGI MCP server."""
     logger.info("Starting FEAGI MCP Server...")

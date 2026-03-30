@@ -48,7 +48,7 @@ class FeagiClient:
         """
         try:
             response = await self._client.get(
-                f"{self.base_url}/v1/monitor/cortical_activity",
+                f"{self.base_url}/v1/monitoring/cortical_activity",
                 params={"area": area_id, "duration": duration_ms / 1000.0},
             )
             if response.status_code == 200:
@@ -213,8 +213,8 @@ class FeagiClient:
         self,
         area_id: str,
         coordinates: list[int],
-        potential: float,
-        duration_ms: int = 100,
+        _potential: float,
+        _duration_ms: int = 100,
     ) -> dict[str, Any]:
         """Stimulate a cortical area with a specific potential.
 
@@ -222,23 +222,27 @@ class FeagiClient:
             area_id: Cortical area identifier
             coordinates: [x, y, z] coordinates within the area
             potential: Stimulation potential value
-            duration_ms: Duration of stimulation in milliseconds
+            duration_ms: Duration of stimulation in milliseconds (currently unused by API)
 
         Returns:
             Stimulation result
         """
         try:
             response = await self._client.post(
-                f"{self.base_url}/v1/stimulate",
+                f"{self.base_url}/v1/agent/manual_stimulation",
                 json={
-                    "area_id": area_id,
-                    "coordinates": coordinates,
-                    "potential": potential,
-                    "duration_ms": duration_ms,
+                    "stimulation_payload": {area_id: [coordinates]},
+                    "mode": "force_fire",
                 },
             )
             if response.status_code == 200:
-                return {"success": True, "message": "Stimulation sent"}
+                result = response.json()
+                return {
+                    "success": result.get("success", False),
+                    "neurons_stimulated": result.get("unique_neuron_ids", 0),
+                    "matched_coordinates": result.get("matched_coordinates", 0),
+                    "mode": result.get("mode", "unknown"),
+                }
             return {
                 "success": False,
                 "error": f"HTTP {response.status_code}",
@@ -298,4 +302,264 @@ class FeagiClient:
             return {"error": "Could not retrieve embodiment status"}
         except Exception as e:
             logger.error(f"get_embodiment_status failed: {e}")
+            return {"error": str(e)}
+
+    async def get_burst_engine_status(self) -> dict[str, Any]:
+        """Get burst engine runtime status."""
+        try:
+            response = await self._client.get(f"{self.base_url}/v1/burst_engine/status")
+            if response.status_code == 200:
+                return response.json()
+            return {"error": f"HTTP {response.status_code}", "message": response.text}
+        except Exception as e:
+            logger.error(f"get_burst_engine_status failed: {e}")
+            return {"error": str(e)}
+
+    async def get_runtime_metrics(self) -> dict[str, Any]:
+        """Get comprehensive runtime metrics."""
+        try:
+            response = await self._client.get(f"{self.base_url}/v1/monitoring/metrics")
+            if response.status_code == 200:
+                return response.json()
+            return {"error": f"HTTP {response.status_code}", "message": response.text}
+        except Exception as e:
+            logger.error(f"get_runtime_metrics failed: {e}")
+            return {"error": str(e)}
+
+    async def get_cortical_synapse_counts(self, area_id: str) -> dict[str, Any]:
+        """Get synapse counts for a cortical area."""
+        try:
+            incoming_response = await self._client.get(
+                f"{self.base_url}/v1/cortical_area/{area_id}/incoming_count"
+            )
+            outgoing_response = await self._client.get(
+                f"{self.base_url}/v1/cortical_area/{area_id}/outgoing_count"
+            )
+
+            result = {"area_id": area_id}
+
+            if incoming_response.status_code == 200:
+                result["incoming_synapses"] = incoming_response.json()
+            else:
+                result["incoming_synapses"] = {
+                    "error": f"HTTP {incoming_response.status_code}",
+                    "message": incoming_response.text,
+                }
+
+            if outgoing_response.status_code == 200:
+                result["outgoing_synapses"] = outgoing_response.json()
+            else:
+                result["outgoing_synapses"] = {
+                    "error": f"HTTP {outgoing_response.status_code}",
+                    "message": outgoing_response.text,
+                }
+
+            return result
+        except Exception as e:
+            logger.error(f"get_cortical_synapse_counts failed: {e}")
+            return {"error": str(e), "area_id": area_id}
+
+    async def get_registered_agents(self) -> dict[str, Any]:
+        """Get list of registered agents."""
+        try:
+            response = await self._client.get(f"{self.base_url}/v1/agent/list")
+            if response.status_code == 200:
+                agent_ids = response.json()
+                if isinstance(agent_ids, list):
+                    return {"agent_ids": agent_ids, "count": len(agent_ids)}
+                return agent_ids
+            return {"error": f"HTTP {response.status_code}", "message": response.text}
+        except Exception as e:
+            logger.error(f"get_registered_agents failed: {e}")
+            return {"error": str(e)}
+
+    async def get_agent_properties(self, agent_id: str) -> dict[str, Any]:
+        """Get properties for a specific agent."""
+        try:
+            response = await self._client.get(
+                f"{self.base_url}/v1/agent/capabilities/all",
+                params={"include_device_registrations": "false"},
+            )
+            if response.status_code == 200:
+                all_agents = response.json()
+                if agent_id in all_agents:
+                    return {
+                        "agent_id": agent_id,
+                        **all_agents[agent_id],
+                    }
+                return {"error": f"Agent {agent_id} not found"}
+            return {"error": f"HTTP {response.status_code}", "message": response.text}
+        except Exception as e:
+            logger.error(f"get_agent_properties failed: {e}")
+            return {"error": str(e)}
+
+    async def get_agent_device_registrations(self, agent_id: str) -> dict[str, Any]:
+        """Get device registrations for an agent."""
+        try:
+            response = await self._client.get(
+                f"{self.base_url}/v1/agent/capabilities/all",
+                params={"include_device_registrations": "true"},
+            )
+            if response.status_code == 200:
+                all_agents = response.json()
+                if agent_id in all_agents:
+                    agent_data = all_agents[agent_id]
+                    return {
+                        "agent_id": agent_id,
+                        "agent_name": agent_data.get("agent_name", "unknown"),
+                        "capabilities": agent_data.get("capabilities", {}),
+                        "device_registrations": agent_data.get("capabilities", {}).get(
+                            "device_registrations", {}
+                        ),
+                    }
+                return {"error": f"Agent {agent_id} not found in capabilities"}
+            return {"error": f"HTTP {response.status_code}", "message": response.text}
+        except Exception as e:
+            logger.error(f"get_agent_device_registrations failed: {e}")
+            return {"error": str(e)}
+
+    async def list_opu_areas(self) -> list[str]:
+        """List all OPU cortical area IDs."""
+        try:
+            response = await self._client.get(f"{self.base_url}/v1/cortical_area/opu")
+            if response.status_code == 200:
+                return response.json()
+            return []
+        except Exception as e:
+            logger.error(f"list_opu_areas failed: {e}")
+            return []
+
+    async def list_ipu_areas(self) -> list[str]:
+        """List all IPU cortical area IDs."""
+        try:
+            response = await self._client.get(f"{self.base_url}/v1/cortical_area/ipu")
+            if response.status_code == 200:
+                return response.json()
+            return []
+        except Exception as e:
+            logger.error(f"list_ipu_areas failed: {e}")
+            return []
+
+    async def create_cortical_area(
+        self,
+        name: str,
+        cortical_type: str,
+        dimensions: list[int],
+        position: list[int],
+        neurons_per_voxel: int = 1,
+        device_count: int = 1,
+        properties: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Create a new cortical area."""
+        try:
+            request_data = {
+                "cortical_name": name,
+                "cortical_type": cortical_type,
+                "cortical_dimensions": dimensions,
+                "coordinates_3d": position,
+            }
+
+            if properties:
+                request_data.update(properties)
+
+            if cortical_type in ["OPU", "IPU"]:
+                request_data["device_count"] = device_count
+                request_data["neurons_per_voxel"] = neurons_per_voxel
+                response = await self._client.post(
+                    f"{self.base_url}/v1/cortical_area/cortical_area",
+                    json=request_data,
+                )
+            else:
+                request_data["cortical_dimensions"] = dimensions
+                response = await self._client.post(
+                    f"{self.base_url}/v1/cortical_area/custom_cortical_area",
+                    json=request_data,
+                )
+
+            if response.status_code == 200:
+                return response.json()
+            return {"error": f"HTTP {response.status_code}", "message": response.text}
+        except Exception as e:
+            logger.error(f"create_cortical_area failed: {e}")
+            return {"error": str(e)}
+
+    async def update_cortical_area(
+        self, cortical_id: str, updates: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Update properties of an existing cortical area."""
+        try:
+            request_data = {"cortical_id": cortical_id}
+            request_data.update(updates)
+
+            response = await self._client.put(
+                f"{self.base_url}/v1/cortical_area/cortical_area",
+                json=request_data,
+            )
+            if response.status_code == 200:
+                return response.json()
+            return {"error": f"HTTP {response.status_code}", "message": response.text}
+        except Exception as e:
+            logger.error(f"update_cortical_area failed: {e}")
+            return {"error": str(e)}
+
+    async def delete_cortical_area(self, cortical_id: str) -> dict[str, Any]:
+        """Delete a cortical area."""
+        try:
+            response = await self._client.delete(
+                f"{self.base_url}/v1/cortical_area/cortical_area",
+                json={"cortical_id": cortical_id},
+            )
+            if response.status_code == 200:
+                return response.json()
+            return {"error": f"HTTP {response.status_code}", "message": response.text}
+        except Exception as e:
+            logger.error(f"delete_cortical_area failed: {e}")
+            return {"error": str(e)}
+
+    async def get_cortical_mapping(self, src_area: str, dst_area: str) -> dict[str, Any]:
+        """Get cortical mapping configuration between two areas."""
+        try:
+            response = await self._client.post(
+                f"{self.base_url}/v1/cortical_mapping/mapping_properties",
+                json={"src_cortical_area": src_area, "dst_cortical_area": dst_area},
+            )
+            if response.status_code == 200:
+                return {"src_area": src_area, "dst_area": dst_area, "rules": response.json()}
+            return {"error": f"HTTP {response.status_code}", "message": response.text}
+        except Exception as e:
+            logger.error(f"get_cortical_mapping failed: {e}")
+            return {"error": str(e)}
+
+    async def update_cortical_mapping(
+        self, src_area: str, dst_area: str, mapping_rules: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """Create or update connections between two cortical areas."""
+        try:
+            response = await self._client.put(
+                f"{self.base_url}/v1/cortical_mapping/mapping_properties",
+                json={
+                    "src_cortical_area": src_area,
+                    "dst_cortical_area": dst_area,
+                    "mapping_string": mapping_rules,
+                },
+            )
+            if response.status_code == 200:
+                return response.json()
+            return {"error": f"HTTP {response.status_code}", "message": response.text}
+        except Exception as e:
+            logger.error(f"update_cortical_mapping failed: {e}")
+            return {"error": str(e)}
+
+    async def delete_cortical_mapping(self, src_area: str, dst_area: str) -> dict[str, Any]:
+        """Delete connections between two cortical areas."""
+        try:
+            response = await self._client.delete(
+                f"{self.base_url}/v1/cortical_mapping/mapping",
+                json={"src_cortical_area": src_area, "dst_cortical_area": dst_area},
+            )
+            if response.status_code == 200:
+                return response.json()
+            return {"error": f"HTTP {response.status_code}", "message": response.text}
+        except Exception as e:
+            logger.error(f"delete_cortical_mapping failed: {e}")
             return {"error": str(e)}

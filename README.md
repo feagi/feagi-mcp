@@ -68,12 +68,30 @@ Add to your Cursor MCP settings (`~/.cursor/mcp.json`):
 
 ## Available Tools
 
+### Agent Introspection
+- `get_registered_agents` - List all connected agents (controllers, embodiments)
+- `get_agent_properties` - Get agent type, capabilities, version, connection info
+- `get_agent_device_registrations` - Inspect motor/sensor structure, group_ids, control modes
+
 ### Monitoring
 - `monitor_activity` - Get real-time firing rates for a cortical area
 - `get_connectivity` - Inspect synaptic connections between areas
 - `trace_signal_path` - Verify signal propagation paths
 - `get_embodiment_status` - Check controller connections and mappings
 - `get_area_parameters` - Inspect neuron properties
+- `get_cortical_synapse_counts` - Get incoming/outgoing synapse counts
+
+### Genome Editing (NEW)
+- `create_cortical_area` - Add OPU/IPU/CUSTOM/MEMORY areas programmatically
+- `update_cortical_area` - Modify cortical area properties
+- `delete_cortical_area` - Remove cortical areas
+- `list_opu_areas` - List only motor output areas
+- `list_ipu_areas` - List only sensory input areas
+
+### Connection Management (NEW)
+- `get_cortical_mapping` - Get connection configuration between two areas
+- `update_cortical_mapping` - Create/update connections with morphology rules
+- `delete_cortical_mapping` - Remove connections between areas
 
 ### Control
 - `stimulate_area` - Trigger neurons for testing
@@ -84,6 +102,8 @@ Add to your Cursor MCP settings (`~/.cursor/mcp.json`):
 - `list_cortical_areas` - Enumerate all brain regions
 - `get_genome_info` - Get metadata about current genome
 - `validate_genome` - Check genome structure for issues
+- `get_burst_engine_status` - Check burst engine state
+- `get_runtime_metrics` - Get comprehensive runtime metrics
 
 ## Example: LLM-Assisted Circuit Design
 

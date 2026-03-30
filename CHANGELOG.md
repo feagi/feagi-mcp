@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (2026-03-29)
+- **Agent Introspection Tools** (11 new tools total):
+  - `get_agent_properties` - Get agent type, capabilities, version, connection info
+  - `get_agent_device_registrations` - Inspect motor/sensor structure, group_ids, control modes
+  - `list_opu_areas` - Filter only motor output areas
+  - `list_ipu_areas` - Filter only sensory input areas
+  - `get_registered_agents` - List all connected agents
+- **Genome Editing Tools**:
+  - `create_cortical_area` - Add OPU/IPU/CUSTOM/MEMORY areas programmatically
+  - `update_cortical_area` - Modify cortical area properties
+  - `delete_cortical_area` - Remove cortical areas
+- **Connection Management Tools**:
+  - `get_cortical_mapping` - Get connection configuration between two areas
+  - `update_cortical_mapping` - Create/update connections with morphology rules
+  - `delete_cortical_mapping` - Remove connections between areas
+- **Documentation**:
+  - `docs/NEW_TOOLS.md` - Comprehensive guide to new capabilities
+  - `examples/fix_spot_walking_example.py` - Real-world usage example
+- **Test Coverage**:
+  - `tests/test_new_tools.py` - 11 new unit tests for all new tools
+  - All tests pass (16/16)
+
+### Changed
+- Fixed unused argument warnings in `stimulate_area` (ruff ARG002)
+- Formatted code with ruff for consistency
+
+## [Unreleased] (Previous)
+
 ### Added
 - Initial MCP server implementation with FastMCP
 - Core monitoring tools:
