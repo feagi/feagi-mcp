@@ -82,7 +82,7 @@ Add to your Cursor MCP settings (`~/.cursor/mcp.json`):
 - `get_cortical_synapse_counts` - Get incoming/outgoing synapse counts
 
 ### Genome Editing (NEW)
-- `create_cortical_area` - Add OPU/IPU/CUSTOM/MEMORY areas programmatically
+- `create_cortical_area` - Add OPU/IPU/CUSTOM/MEMORY areas programmatically (CUSTOM/MEMORY require `brain_region_id` / circuit parent)
 - `update_cortical_area` - Modify cortical area properties
 - `delete_cortical_area` - Remove cortical areas
 - `list_opu_areas` - List only motor output areas
@@ -95,6 +95,10 @@ Add to your Cursor MCP settings (`~/.cursor/mcp.json`):
 - `get_cortical_mapping` - Get connection configuration between two areas
 - `update_cortical_mapping` - Create/update connections with morphology rules
 - `delete_cortical_mapping` - Remove connections between areas
+
+### Brain Visualizer parity (full REST router)
+- `list_brain_visualizer_operations` - Index of every supported `operation_id` with HTTP method and path (same surface as `FEAGIHTTPAddressList.gd`)
+- `brain_visualizer_api` - Call any whitelisted operation: genome (save, amalgamation, circuits), cortical areas (geometry, properties, multi-put, reset, clone), regions (CRUD, relocate, clone), morphologies (CRUD, rename, usage), cortical mappings (afferents, efferents, batch), burst engine, system visualization tuning, neuroplasticity, insight/monitoring, agents (register, heartbeat, stimulation, device registrations), network, vision input. Use `path_params` for `{agent_id}` / `{region_id}` routes; for amalgamation-by-upload use `post_genome_amalgamation_by_upload_multipart` with `json_body: {\"genome_json\": \"...\"}`.
 
 ### Control
 - `stimulate_area` - Trigger neurons for testing

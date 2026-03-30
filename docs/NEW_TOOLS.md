@@ -68,7 +68,8 @@ Added 11 new diagnostic and genome editing tools to enable programmatic genome m
 - `position`: [x, y, z] coordinates
 - `neurons_per_voxel`: Neurons per voxel (default: 1)
 - `device_count`: Number of devices for IPU/OPU
-- `properties`: Optional dict (parent_region_id, grp_id, etc.)
+- `brain_region_id`: **Required for CUSTOM and MEMORY** — parent brain region (circuit) UUID. Call `get_brain_regions` to list regions. Same as REST `brain_region_id` on `custom_cortical_area`. You may pass this inside `properties["brain_region_id"]` instead of the top-level argument.
+- `properties`: Optional dict (e.g. `grp_id`; for CUSTOM/MEMORY include `brain_region_id` here if not using the dedicated parameter)
 
 **Use case**: Instead of manually editing genome JSON, programmatically add the 4 per-limb OPU areas:
 ```python
@@ -79,6 +80,18 @@ mcp.create_cortical_area(
     position=[800, 400, -30],
     device_count=3,
     properties={"grp_id": 0}
+)
+```
+
+**CUSTOM / MEMORY** (must supply a non-root circuit region):
+
+```python
+mcp.create_cortical_area(
+    name="MyCircuit",
+    cortical_type="CUSTOM",
+    dimensions=[10, 10, 1],
+    position=[0, 0, 0],
+    brain_region_id="<uuid-from-get_brain_regions>",
 )
 ```
 

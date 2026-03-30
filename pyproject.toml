@@ -58,6 +58,9 @@ packages = ["src/feagi_mcp"]
 line-length = 100
 target-version = "py310"
 
+[tool.ruff.lint.per-file-ignores]
+"src/feagi_mcp/bv_operations.py" = ["E501"]
+
 [tool.ruff.lint]
 select = [
     "E",      # pycodestyle errors

@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from feagi_mcp.area_metadata import enrich_area_list, enrich_area_with_name, get_semantic_info
+from feagi_mcp.bv_operations import BV_OPERATION_BY_ID, resolve_path
 
 logger = logging.getLogger(__name__)
 
@@ -364,7 +365,7 @@ class FeagiClient:
             return {"error": str(e)}
 
     async def fetch_cortical_area_properties(self, cortical_id: str) -> dict[str, Any]:
-        """POST /v1/cortical_area/cortical_area_properties — full connectome area record (BV inspector)."""
+        """POST cortical_area_properties: full connectome area record (BV inspector)."""
         try:
             response = await self._client.post(
                 f"{self.base_url}/v1/cortical_area/cortical_area_properties",
@@ -594,6 +595,47 @@ class FeagiClient:
             logger.error(f"stimulate_area failed: {e}")
             return {"success": False, "error": str(e)}
 
+    async def stimulate_areas(
+        self,
+        stimulation_payload: dict[str, list[list[int]]],
+        mode: str = "force_fire",
+    ) -> dict[str, Any]:
+        """Stimulate multiple cortical areas in one request (same burst / tick).
+
+        Use this when several inputs must fire together (e.g. logic AND demos).
+
+        Args:
+            stimulation_payload: Map cortical_id -> list of [x, y, z] coordinate lists
+            mode: Stimulation mode (default ``force_fire``)
+
+        Returns:
+            Same shape as :meth:`stimulate_area` (success, neuron counts, etc.)
+        """
+        try:
+            response = await self._client.post(
+                f"{self.base_url}/v1/agent/manual_stimulation",
+                json={
+                    "stimulation_payload": stimulation_payload,
+                    "mode": mode,
+                },
+            )
+            if response.status_code == 200:
+                result = response.json()
+                return {
+                    "success": result.get("success", False),
+                    "neurons_stimulated": result.get("unique_neuron_ids", 0),
+                    "matched_coordinates": result.get("matched_coordinates", 0),
+                    "mode": result.get("mode", "unknown"),
+                }
+            return {
+                "success": False,
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error(f"stimulate_areas failed: {e}")
+            return {"success": False, "error": str(e)}
+
     async def get_embodiment_status(self) -> dict[str, Any]:
         """Get status of connected embodiment controllers."""
         try:
@@ -814,6 +856,7 @@ class FeagiClient:
         group_id: int = 0,
         data_type_configs_by_subunit: dict[str, int] | None = None,
         per_device_dimensions: list[int] | None = None,
+        brain_region_id: str | None = None,
     ) -> dict[str, Any]:
         """Create a new cortical area.
         
@@ -825,6 +868,8 @@ class FeagiClient:
             neurons_per_voxel: Number of neurons per voxel (default: 1)
             device_count: Number of devices for IPU/OPU (default: 1)
             properties: Optional additional properties
+            brain_region_id: Required for CUSTOM/MEMORY (parent brain region / circuit UUID).
+                May be omitted if ``properties`` includes ``brain_region_id``.
             cortical_id: For OPU/IPU: type key like "opse", "isvi" (required for OPU/IPU)
             group_id: For OPU/IPU: group identifier 0-255 (default: 0)
             data_type_configs_by_subunit: For OPU/IPU: map of subunit index to config
@@ -868,7 +913,17 @@ class FeagiClient:
                 }
                 if properties:
                     request_data.update(properties)
-                    
+                resolved_region = brain_region_id
+                if not resolved_region:
+                    br = request_data.get("brain_region_id")
+                    if isinstance(br, str):
+                        resolved_region = br.strip() or None
+                if not resolved_region:
+                    return {
+                        "error": "brain_region_id is required for CUSTOM and MEMORY cortical areas",
+                    }
+                request_data["brain_region_id"] = resolved_region
+
                 response = await self._client.post(
                     f"{self.base_url}/v1/cortical_area/custom_cortical_area",
                     json=request_data,
@@ -903,9 +958,10 @@ class FeagiClient:
     async def delete_cortical_area(self, cortical_id: str) -> dict[str, Any]:
         """Delete a cortical area."""
         try:
-            response = await self._client.delete(
+            response = await self._client.request(
+                "DELETE",
                 f"{self.base_url}/v1/cortical_area/cortical_area",
-                params={"cortical_id": cortical_id},
+                json={"cortical_id": cortical_id},
             )
             if response.status_code == 200:
                 return response.json()
@@ -988,3 +1044,100 @@ class FeagiClient:
         except Exception as e:
             logger.error(f"get_area_semantic_info failed: {e}")
             return {"error": str(e)}
+
+    @staticmethod
+    def _stringify_query(query: dict[str, Any] | None) -> dict[str, str] | None:
+        if not query:
+            return None
+        return {str(k): str(v) for k, v in query.items()}
+
+    def _response_to_payload(self, response: httpx.Response) -> dict[str, Any] | list[Any] | Any:
+        if not (200 <= response.status_code < 300):
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        if response.status_code == 204 or not response.content:
+            return {"status": "success", "http_status": response.status_code}
+        ct = response.headers.get("content-type", "")
+        if "json" in ct:
+            try:
+                return response.json()
+            except Exception:
+                return {"raw": response.text}
+        return {"text": response.text}
+
+    async def brain_visualizer_operation(
+        self,
+        operation_id: str,
+        *,
+        path_params: dict[str, str] | None = None,
+        query: dict[str, Any] | None = None,
+        json_body: Any | None = None,
+    ) -> dict[str, Any] | list[Any] | Any:
+        """Run any Brain Visualizer whitelisted REST operation (see bv_operations.BV_OPERATIONS).
+
+        This is the comprehensive escape hatch matching FEAGIHTTPAddressList routes.
+
+        Args:
+            operation_id: e.g. get_system_health_check, put_cortical_area, post_mapping_afferents
+            path_params: For paths containing {region_id}, {agent_id}, etc.
+            query: URL query parameters
+            json_body: JSON body for POST/PUT/PATCH, or for multipart upload op:
+                post_genome_amalgamation_by_upload_multipart: {\"genome_json\": \"...\"} (string)
+        """
+        spec = BV_OPERATION_BY_ID.get(operation_id)
+        if spec is None:
+            return {
+                "error": "unknown_operation_id",
+                "operation_id": operation_id,
+                "hint": "Use list_brain_visualizer_operations to list valid operation_id values",
+            }
+
+        try:
+            path = resolve_path(spec.path_template, path_params)
+        except ValueError as e:
+            return {"error": "invalid_path", "message": str(e)}
+
+        url = f"{self.base_url}{path}"
+        q = self._stringify_query(query)
+
+        try:
+            if operation_id == "post_genome_amalgamation_by_upload_multipart":
+                if not isinstance(json_body, dict) or "genome_json" not in json_body:
+                    return {
+                        "error": "invalid_body",
+                        "message": "json_body must be {\"genome_json\": \"<utf-8 json string>\"}",
+                    }
+                payload = str(json_body["genome_json"])
+                files = {
+                    "file": (
+                        "genome.json",
+                        payload.encode("utf-8"),
+                        "application/json",
+                    ),
+                }
+                response = await self._client.post(url, files=files)
+                return self._response_to_payload(response)
+
+            kwargs: dict[str, Any] = {}
+            if q is not None:
+                kwargs["params"] = q
+
+            if spec.method == "GET":
+                response = await self._client.get(url, **kwargs)
+            elif spec.method == "POST":
+                response = await self._client.post(url, json=json_body, **kwargs)
+            elif spec.method == "PUT":
+                response = await self._client.put(url, json=json_body, **kwargs)
+            elif spec.method == "DELETE":
+                response = await self._client.request(
+                    "DELETE", url, json=json_body, **kwargs
+                )
+            else:
+                return {"error": "unsupported_method", "method": spec.method}
+
+            return self._response_to_payload(response)
+        except Exception as e:
+            logger.error("brain_visualizer_operation failed: %s", e)
+            return {"error": "request_failed", "message": str(e)}

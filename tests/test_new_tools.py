@@ -99,6 +99,8 @@ class TestGenomeEditing:
             position=[800, 400, -30],
             device_count=3,
             properties={"grp_id": 0},
+            cortical_id="omot",
+            data_type_configs_by_subunit={"0": 256},
         )
 
         assert result["message"] == "Created 1 cortical areas"
@@ -120,9 +122,22 @@ class TestGenomeEditing:
             cortical_type="CUSTOM",
             dimensions=[5, 5, 5],
             position=[0, 0, 0],
+            brain_region_id="00000000-0000-0000-0000-000000000001",
         )
 
         assert "cortical_id" in result
+
+    @pytest.mark.asyncio
+    async def test_create_cortical_area_custom_requires_brain_region_id(self, mock_client):
+        """CUSTOM/MEMORY require brain_region_id (API + client guard)."""
+        result = await mock_client.create_cortical_area(
+            name="TestArea",
+            cortical_type="CUSTOM",
+            dimensions=[5, 5, 5],
+            position=[0, 0, 0],
+        )
+        assert result.get("error")
+        assert "brain_region_id" in result["error"]
 
     @pytest.mark.asyncio
     async def test_update_cortical_area(self, mock_client):
@@ -147,11 +162,15 @@ class TestGenomeEditing:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"message": "Cortical area deleted"}
-        mock_client._client.delete.return_value = mock_response
+        mock_client._client.request.return_value = mock_response
 
         result = await mock_client.delete_cortical_area("test_id")
 
         assert result["message"] == "Cortical area deleted"
+        mock_client._client.request.assert_called_once()
+        call_kw = mock_client._client.request.call_args
+        assert call_kw[0][0] == "DELETE"
+        assert "cortical_area/cortical_area" in str(call_kw[0][1])
 
 
 class TestConnectionManagement:
@@ -298,4 +317,60 @@ class TestBrainVisualizerParity:
         mock_client._client.post.assert_called_once_with(
             "http://localhost:8000/v1/genome/save",
             json={"file_path": "/tmp/out.json"},
+        )
+
+
+class TestStimulation:
+    """Manual stimulation API."""
+
+    @pytest.mark.asyncio
+    async def test_stimulate_areas_posts_combined_payload(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "success": True,
+            "unique_neuron_ids": 2,
+            "matched_coordinates": 2,
+            "mode": "force_fire",
+        }
+        mock_client._client.post.return_value = mock_response
+
+        result = await mock_client.stimulate_areas(
+            {"areaA": [[0, 0, 0]], "areaB": [[0, 0, 0]]},
+        )
+
+        assert result["success"] is True
+        mock_client._client.post.assert_called_once_with(
+            "http://localhost:8000/v1/agent/manual_stimulation",
+            json={
+                "stimulation_payload": {
+                    "areaA": [[0, 0, 0]],
+                    "areaB": [[0, 0, 0]],
+                },
+                "mode": "force_fire",
+            },
+        )
+
+
+class TestBrainVisualizerRouter:
+    """Unified BV API router."""
+
+    @pytest.mark.asyncio
+    async def test_brain_visualizer_operation_unknown_id(self, mock_client):
+        result = await mock_client.brain_visualizer_operation("not_a_real_op")
+        assert result.get("error") == "unknown_operation_id"
+
+    @pytest.mark.asyncio
+    async def test_brain_visualizer_operation_get_health(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {"content-type": "application/json"}
+        mock_response.content = b'{"ok":true}'
+        mock_response.json.return_value = {"ok": True}
+        mock_client._client.get.return_value = mock_response
+
+        result = await mock_client.brain_visualizer_operation("get_system_health_check")
+        assert result == {"ok": True}
+        mock_client._client.get.assert_called_once_with(
+            "http://localhost:8000/v1/system/health_check",
         )

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **`create_cortical_area`**: Added `brain_region_id` for CUSTOM/MEMORY areas (required by FEAGI `custom_cortical_area` API). The client returns a clear error if it is missing; may be supplied via `properties["brain_region_id"]` instead.
+
 ### Added (2026-03-30)
 - **Semantic Metadata System**:
   - `area_metadata.py` - Comprehensive metadata for all cortical area types

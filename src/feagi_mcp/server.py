@@ -7,6 +7,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from feagi_mcp.bv_operations import list_operation_summaries
 from feagi_mcp.config import load_config
 from feagi_mcp.feagi_client import FeagiClient
 
@@ -632,6 +633,7 @@ async def create_cortical_area(
     group_id: int = 0,
     data_type_configs_by_subunit: dict[str, int] | None = None,
     per_device_dimensions: list[int] | None = None,
+    brain_region_id: str | None = None,
 ) -> dict[str, Any]:
     """Create a new cortical area programmatically.
 
@@ -645,7 +647,9 @@ async def create_cortical_area(
         position: [x, y, z] 3D coordinates
         neurons_per_voxel: Number of neurons per voxel (default: 1)
         device_count: Number of devices for IPU/OPU (default: 1)
-        properties: Optional additional properties (parent_region_id, grp_id, etc.)
+        properties: Optional additional properties (grp_id, etc.)
+        brain_region_id: Parent brain region UUID for CUSTOM/MEMORY (required by API; may use
+            properties[\"brain_region_id\"] instead)
         cortical_id: For OPU/IPU: type key like "opse", "isvi" (required for OPU/IPU)
         group_id: For OPU/IPU: group identifier 0-255 (default: 0)
         data_type_configs_by_subunit: For OPU/IPU: map of subunit index to config
@@ -658,8 +662,18 @@ async def create_cortical_area(
         Created area info with cortical_id
     """
     result = await feagi.create_cortical_area(
-        name, cortical_type, dimensions, position, neurons_per_voxel, device_count, properties,
-        cortical_id, group_id, data_type_configs_by_subunit, per_device_dimensions
+        name,
+        cortical_type,
+        dimensions,
+        position,
+        neurons_per_voxel,
+        device_count,
+        properties,
+        cortical_id,
+        group_id,
+        data_type_configs_by_subunit,
+        per_device_dimensions,
+        brain_region_id,
     )
     return result
 
@@ -752,9 +766,9 @@ async def resolve_cortical_area_by_name(
     display_name: str,
     match_mode: str = "exact",
 ) -> dict[str, Any]:
-    """Resolve a genome display name to base64 cortical_id (Brain Visualizer uses names; APIs use IDs).
+    """Resolve a display name to base64 cortical_id (BV uses names; APIs use IDs).
 
-    Natural language: call this when the user names an area (e.g. \"Object Segmentation-0-0\")
+    Natural language: call when the user names an area (e.g. \"Object Segmentation-0-0\")
     before update_cortical_area, reset_cortical_neural_state, or clone_cortical_area.
 
     Args:
@@ -879,6 +893,49 @@ async def get_cortical_template() -> dict[str, Any]:
     """IPU/OPU cortical templates (GET genome/cortical_template), as in BV template picker."""
     result = await feagi.get_cortical_template()
     return result
+
+
+@mcp.tool()
+async def list_brain_visualizer_operations() -> list[dict[str, str]]:
+    """List every Brain Visualizer REST operation (operation_id, method, path, description).
+
+    Brain Visualizer routes are defined in FEAGIHTTPAddressList.gd; this is the MCP index used
+    to call the same endpoints via brain_visualizer_api. Call this first when you need an
+    operation that has no dedicated named tool.
+    """
+    return list_operation_summaries()
+
+
+@mcp.tool()
+async def brain_visualizer_api(
+    operation_id: str,
+    path_params: dict[str, str] | None = None,
+    query: dict[str, Any] | None = None,
+    json_body: Any | None = None,
+) -> Any:
+    """Invoke any whitelisted Brain Visualizer FEAGI API operation.
+
+    Covers the same HTTP surface as brain-visualizer (FEAGIHTTPAddressList): genome, cortical
+    areas, regions, morphologies, mappings, burst, system visualization tuning, neuroplasticity,
+    insight/monitoring, agents, network, and vision input.
+
+    Args:
+        operation_id: From list_brain_visualizer_operations (e.g. get_system_health_check,
+            put_cortical_area, post_mapping_afferents, put_region_relocate_members).
+        path_params: Path placeholders, e.g. region_id, agent_id.
+        query: URL query params (amalgamation_id, circuit_origin_*, etc.).
+        json_body: JSON body. For post_genome_amalgamation_by_upload_multipart pass
+            {\"genome_json\": \"<full genome json string>\"}.
+
+    Returns:
+        Parsed JSON response, or an error object with HTTP status details.
+    """
+    return await feagi.brain_visualizer_operation(
+        operation_id,
+        path_params=path_params,
+        query=query,
+        json_body=json_body,
+    )
 
 
 def main() -> None:
