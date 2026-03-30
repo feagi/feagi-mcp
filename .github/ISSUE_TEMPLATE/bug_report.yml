@@ -1,0 +1,101 @@
+name: Bug Report
+description: Report a bug or unexpected behavior
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this bug!
+
+  - type: input
+    id: version
+    attributes:
+      label: FEAGI MCP Version
+      description: What version of feagi-mcp are you using?
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: python-version
+    attributes:
+      label: Python Version
+      description: What version of Python are you using?
+      placeholder: "3.11.2"
+    validations:
+      required: true
+
+  - type: input
+    id: feagi-version
+    attributes:
+      label: FEAGI Version
+      description: What version of FEAGI are you running?
+      placeholder: "2.1.0"
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear description of what the bug is
+      placeholder: Tell us what went wrong
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Steps to reproduce the behavior
+      placeholder: |
+        1. Call tool X with parameter Y
+        2. Observe error Z
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and Error Messages
+      description: Relevant logs, error messages, or stack traces
+      render: shell
+
+  - type: dropdown
+    id: tool
+    attributes:
+      label: Which tool is affected?
+      multiple: true
+      options:
+        - monitor_activity
+        - get_connectivity
+        - trace_signal_path
+        - get_area_parameters
+        - get_embodiment_status
+        - stimulate_area
+        - upload_genome
+        - download_genome
+        - validate_genome
+        - list_cortical_areas
+        - health_check
+        - Other
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: I have checked existing issues for duplicates
+          required: true
+        - label: I have included reproduction steps
+          required: true
+        - label: I have included relevant logs
+          required: false

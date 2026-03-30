@@ -1,0 +1,4 @@
+name: Feature Request
+description: Suggest a new tool or capability
+template: feature_request.yml
+about: Propose a new tool, API endpoint, or enhancement

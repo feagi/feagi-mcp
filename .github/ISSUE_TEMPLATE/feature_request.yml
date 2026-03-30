@@ -1,0 +1,80 @@
+name: Feature Request
+description: Suggest a new tool or enhancement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for suggesting an improvement!
+
+  - type: dropdown
+    id: feature-type
+    attributes:
+      label: Feature Type
+      options:
+        - New tool
+        - Enhancement to existing tool
+        - New API endpoint support
+        - Documentation improvement
+        - Performance optimization
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Feature Description
+      description: Describe the feature you'd like to see
+      placeholder: What should this feature do?
+    validations:
+      required: true
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use Case
+      description: What problem does this solve?
+      placeholder: |
+        Example: "When designing CPG circuits, I need to see..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-api
+    attributes:
+      label: Proposed API (Optional)
+      description: If you have ideas about the tool signature
+      placeholder: |
+        @mcp.tool()
+        async def my_tool(param: str) -> dict:
+            """Tool description."""
+            ...
+      render: python
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: What workarounds or alternatives did you consider?
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - Low - Nice to have
+        - Medium - Would improve workflow
+        - High - Blocking important use case
+        - Critical - Cannot work without it
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I'm willing to implement this feature
+        - label: I'm willing to help test this feature

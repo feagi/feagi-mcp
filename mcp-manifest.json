@@ -1,0 +1,99 @@
+{
+  "name": "feagi",
+  "displayName": "FEAGI Neural Monitor",
+  "description": "Observe and control FEAGI neural systems for LLM-assisted circuit design",
+  "version": "0.1.0",
+  "publisher": "neuraville",
+  "categories": ["AI", "Robotics", "Science"],
+  "keywords": ["feagi", "neural", "brain", "robotics", "mcp", "ai"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Neuraville/feagi-mcp"
+  },
+  "bugs": {
+    "url": "https://github.com/Neuraville/feagi-mcp/issues"
+  },
+  "homepage": "https://feagi.org",
+  "license": "Apache-2.0",
+  "author": {
+    "name": "Neuraville Inc.",
+    "email": "feagi@neuraville.com"
+  },
+  "mcp": {
+    "server": {
+      "command": "python",
+      "args": ["-m", "feagi_mcp.server"],
+      "env": {
+        "FEAGI_HOST": "localhost",
+        "FEAGI_PORT": "8000"
+      }
+    },
+    "capabilities": {
+      "tools": true,
+      "resources": false,
+      "prompts": false
+    }
+  },
+  "tools": [
+    {
+      "name": "health_check",
+      "category": "monitoring",
+      "description": "Check FEAGI server health and connectivity"
+    },
+    {
+      "name": "monitor_activity",
+      "category": "monitoring",
+      "description": "Monitor real-time neural activity in cortical areas"
+    },
+    {
+      "name": "get_connectivity",
+      "category": "inspection",
+      "description": "Inspect synaptic connections between areas"
+    },
+    {
+      "name": "trace_signal_path",
+      "category": "inspection",
+      "description": "Find propagation paths through neural circuits"
+    },
+    {
+      "name": "get_area_parameters",
+      "category": "inspection",
+      "description": "Get neuron properties and configuration"
+    },
+    {
+      "name": "get_embodiment_status",
+      "category": "monitoring",
+      "description": "Check robot controller connections and I/O mappings"
+    },
+    {
+      "name": "list_cortical_areas",
+      "category": "inspection",
+      "description": "List all brain regions in current genome"
+    },
+    {
+      "name": "get_genome_info",
+      "category": "genome",
+      "description": "Get metadata about current neural architecture"
+    },
+    {
+      "name": "download_genome",
+      "category": "genome",
+      "description": "Download complete genome configuration"
+    },
+    {
+      "name": "upload_genome",
+      "category": "genome",
+      "description": "Upload new neural architecture to FEAGI"
+    },
+    {
+      "name": "validate_genome",
+      "category": "genome",
+      "description": "Validate genome structure before upload"
+    },
+    {
+      "name": "stimulate_area",
+      "category": "control",
+      "description": "Stimulate neurons for testing circuits"
+    }
+  ]
+}

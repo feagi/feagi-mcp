@@ -1,0 +1,81 @@
+[project]
+name = "feagi-mcp"
+version = "0.1.0"
+description = "MCP server for FEAGI neural monitoring and control"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "Neuraville Inc.", email = "feagi@neuraville.com" }
+]
+keywords = ["mcp", "feagi", "neural", "robotics", "brain", "monitoring"]
+license = { text = "Apache-2.0" }
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "mcp>=1.0.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.8.0",
+    "mypy>=1.8.0",
+]
+
+[project.scripts]
+feagi-mcp = "feagi_mcp.server:main"
+
+[project.urls]
+Homepage = "https://github.com/Neuraville/feagi-mcp"
+Repository = "https://github.com/Neuraville/feagi-mcp"
+Issues = "https://github.com/Neuraville/feagi-mcp/issues"
+Documentation = "https://feagi.org"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/feagi_mcp"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "F",      # pyflakes
+    "I",      # isort
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "ARG",    # flake8-unused-arguments
+    "SIM",    # flake8-simplify
+]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

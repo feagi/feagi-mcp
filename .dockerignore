@@ -1,0 +1,14 @@
+# feagi-mcp
+
+*.pyc
+__pycache__/
+*.egg-info/
+dist/
+build/
+venv/
+.env
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+.DS_Store
