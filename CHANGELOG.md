@@ -51,6 +51,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed unused argument warnings in `stimulate_area` (ruff ARG002)
 - Formatted code with ruff for consistency
 
+## [0.0.1] - 2026-03-31
+
+### Added
+- PyPI publication via GitHub Actions (`.github/workflows/publish_pypi_feagi_mcp.yml`), triggered when a **GitHub Release** is published (same pattern as `feagi-python-sdk`).
+- Initial **0.0.1** release on PyPI.
+
+### Changed
+- **License**: Apache License 2.0 full text in `LICENSE`, aligned with `feagi-python-sdk`; `license-files` includes `LICENSE` in distributions.
+
 ## [Unreleased] (Previous)
 
 ### Added

@@ -1,6 +1,6 @@
 """FEAGI MCP Server - Neural monitoring and control for LLMs."""
 
-__version__ = "0.1.0"
+__version__ = "0.0.1"
 __author__ = "Neuraville Inc."
 __email__ = "feagi@neuraville.com"
 

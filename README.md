@@ -23,7 +23,10 @@ Model Context Protocol (MCP) server for FEAGI neural monitoring and control. Ena
 ## Installation
 
 ```bash
-# Install from source
+# From PyPI
+pip install feagi-mcp
+
+# Or install from a source checkout (editable)
 cd feagi-mcp
 pip install -e .
 

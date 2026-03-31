@@ -163,23 +163,20 @@ asyncio.run(test())
    mypy src/
    ```
 
-## Release Process
+## Release Process (PyPI)
+
+Publishing matches **feagi-python-sdk**: create a **GitHub Release** (with a tag such as `v0.0.2`). The workflow `.github/workflows/publish_pypi_feagi_mcp.yml` runs on `release: published`, sets the version from the tag (PEP 440, strip leading `v`), runs tests, builds, and uploads to PyPI.
+
+**Repository settings:** configure a `pypi` environment and the `PYPI_PASSWORD_TOKEN` secret (same pattern as the Python SDK). Optional: **Trusted Publishing** on PyPI for this project; the workflow includes `id-token: write` for OIDC if you switch the publish action later.
 
 ```bash
-# 1. Update version in pyproject.toml
-# 2. Run tests
+# Local sanity check (optional)
 pytest
-
-# 3. Build package
 python -m build
-
-# 4. Tag release
-git tag v0.1.0
-git push --tags
-
-# 5. Publish (future)
-# python -m twine upload dist/*
+python -m twine check --strict dist/*
 ```
+
+**Manual workflow run:** Actions → “Publish to PyPI - FEAGI MCP” → Run workflow → set `version` (e.g. `0.0.2`) and optional `dry_run`.
 
 ## Roadmap
 

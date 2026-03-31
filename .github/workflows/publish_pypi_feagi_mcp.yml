@@ -1,0 +1,124 @@
+name: Publish to PyPI - FEAGI MCP
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (e.g., 0.0.1 or 0.1.0b1)"
+        required: true
+        type: string
+      dry_run:
+        description: "Dry run (build only, do not publish)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Build and publish to PyPI
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/feagi-mcp/
+
+    steps:
+      - name: Determine version and ref
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+            VERSION="${TAG#v}"
+            REF="${{ github.event.release.tag_name }}"
+            IS_PRERELEASE="${{ github.event.release.prerelease }}"
+          else
+            VERSION="${{ github.event.inputs.version }}"
+            REF="${GITHUB_REF}"
+            if [[ "$VERSION" =~ (a|b|rc)[0-9]+ ]]; then
+              IS_PRERELEASE="true"
+            else
+              IS_PRERELEASE="false"
+            fi
+          fi
+
+          echo "Validating version format: $VERSION"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(a[0-9]+|b[0-9]+|rc[0-9]+)?(\.post[0-9]+)?(\.dev[0-9]+)?$ ]]; then
+            echo "ERROR: Version '$VERSION' does not comply with PEP 440"
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "ref=$REF" >> $GITHUB_OUTPUT
+          echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
+
+          echo "Publishing feagi-mcp version=$VERSION ref=$REF prerelease=$IS_PRERELEASE"
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.version.outputs.ref }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Sync version into pyproject and package
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          echo "Setting version to: $VERSION"
+          sed -i "s/^version = .*/version = \"$VERSION\"/" pyproject.toml
+          sed -i "s/^__version__ = .*/__version__ = \"$VERSION\"/" src/feagi_mcp/__init__.py
+          grep "^version = " pyproject.toml
+          grep "^__version__ = " src/feagi_mcp/__init__.py
+
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+
+      - name: Run tests
+        run: |
+          pip install -e ".[dev]"
+          ruff check .
+          ruff format --check .
+          mypy src/
+          pytest
+
+      - name: Build package
+        run: |
+          python -m build
+          ls -la dist/
+
+      - name: Check distribution
+        run: |
+          python -m twine check --strict dist/*
+
+      - name: Publish to PyPI
+        if: ${{ !(github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run == 'true') }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_PASSWORD_TOKEN }}
+          packages-dir: dist/
+          verbose: true
+
+      - name: Summary
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          DRY="false"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            DRY="true"
+          fi
+          if [ "$DRY" = "true" ]; then
+            echo "## feagi-mcp (dry run)" >> "$GITHUB_STEP_SUMMARY"
+            echo "Built version **$VERSION**; not published." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## feagi-mcp published" >> "$GITHUB_STEP_SUMMARY"
+            echo "Version **$VERSION** — https://pypi.org/project/feagi-mcp/$VERSION/" >> "$GITHUB_STEP_SUMMARY"
+          fi
