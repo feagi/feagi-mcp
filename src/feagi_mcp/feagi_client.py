@@ -467,9 +467,7 @@ class FeagiClient:
             logger.error(f"fetch_cortical_area_properties failed: {e}")
             return {"error": str(e)}
 
-    async def fetch_multi_cortical_area_properties(
-        self, cortical_ids: list[str]
-    ) -> dict[str, Any]:
+    async def fetch_multi_cortical_area_properties(self, cortical_ids: list[str]) -> dict[str, Any]:
         """POST /v1/cortical_area/multi/cortical_area_properties — batch properties (BV)."""
         try:
             response = await self._client.post(
@@ -891,10 +889,10 @@ class FeagiClient:
         except Exception as e:
             logger.error(f"list_opu_areas failed: {e}")
             return []
-    
+
     async def list_opu_areas_with_metadata(self) -> list[dict[str, Any]]:
         """List all OPU areas with semantic metadata about their type and capabilities.
-        
+
         Returns:
             List of dictionaries with ID, type, purpose, capabilities, and usage info
         """
@@ -915,10 +913,10 @@ class FeagiClient:
         except Exception as e:
             logger.error(f"list_ipu_areas failed: {e}")
             return []
-    
+
     async def list_ipu_areas_with_metadata(self) -> list[dict[str, Any]]:
         """List all IPU areas with semantic metadata about their type and capabilities.
-        
+
         Returns:
             List of dictionaries with ID, type, purpose, capabilities, and usage info
         """
@@ -946,7 +944,7 @@ class FeagiClient:
         skip_placement_validation: bool = False,
     ) -> dict[str, Any]:
         """Create a new cortical area.
-        
+
         Args:
             name: Human-readable name (shown in BV; use role/circuit-based names, never
                 prefix with ``Mcp``/``MCP`` — see feagi-mcp docs ``Cortical area naming policy``)
@@ -967,7 +965,7 @@ class FeagiClient:
             per_device_dimensions: For OPU/IPU: override per-device dimensions [x,y,z]
                 e.g. [1, 1, 32] for single-joint servo with 32-angle resolution
                 Total X = per_device_dimensions[0] * device_count
-        
+
         Returns:
             Created area info with cortical_id(s)
         """
@@ -977,7 +975,7 @@ class FeagiClient:
                     return {"error": "cortical_id required for OPU/IPU (e.g. 'opse', 'isvi')"}
                 if data_type_configs_by_subunit is None:
                     return {"error": "data_type_configs_by_subunit required for OPU/IPU"}
-                
+
                 request_data = {
                     "cortical_id": cortical_id,
                     "cortical_type": cortical_type,
@@ -989,7 +987,7 @@ class FeagiClient:
                 }
                 if per_device_dimensions is not None:
                     request_data["per_device_dimensions"] = per_device_dimensions
-                    
+
                 response = await self._client.post(
                     f"{self.base_url}/v1/cortical_area/cortical_area",
                     json=request_data,
@@ -1118,19 +1116,19 @@ class FeagiClient:
         except Exception as e:
             logger.error(f"delete_cortical_mapping failed: {e}")
             return {"error": str(e)}
-    
+
     async def get_area_semantic_info(self, area_id: str) -> dict[str, Any]:
         """Get semantic information about a cortical area.
-        
+
         Args:
             area_id: Encoded cortical ID
-            
+
         Returns:
             Dictionary with semantic metadata including type, purpose, capabilities, usage
         """
         try:
             info = get_semantic_info(area_id)
-            
+
             genome = await self.download_genome()
             if "error" not in genome:
                 blueprint = genome.get("blueprint", {})
@@ -1140,7 +1138,7 @@ class FeagiClient:
                         device_count_key = key.replace("__name-t", "devcnt-i")
                         info["device_count"] = blueprint.get(device_count_key, 0)
                         break
-            
+
             return info
         except Exception as e:
             logger.error(f"get_area_semantic_info failed: {e}")
@@ -1208,7 +1206,7 @@ class FeagiClient:
                 if not isinstance(json_body, dict) or "genome_json" not in json_body:
                     return {
                         "error": "invalid_body",
-                        "message": "json_body must be {\"genome_json\": \"<utf-8 json string>\"}",
+                        "message": 'json_body must be {"genome_json": "<utf-8 json string>"}',
                     }
                 payload = str(json_body["genome_json"])
                 files = {
@@ -1232,9 +1230,7 @@ class FeagiClient:
             elif spec.method == "PUT":
                 response = await self._client.put(url, json=json_body, **kwargs)
             elif spec.method == "DELETE":
-                response = await self._client.request(
-                    "DELETE", url, json=json_body, **kwargs
-                )
+                response = await self._client.request("DELETE", url, json=json_body, **kwargs)
             else:
                 return {"error": "unsupported_method", "method": spec.method}
 

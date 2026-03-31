@@ -151,9 +151,7 @@ class TestGenomeEditing:
         }
         mock_client._client.put.return_value = mock_response
 
-        result = await mock_client.update_cortical_area(
-            "test_id", {"neuron_fire_threshold": 50.0}
-        )
+        result = await mock_client.update_cortical_area("test_id", {"neuron_fire_threshold": 50.0})
 
         assert result["message"] == "Cortical area updated"
 
@@ -220,9 +218,7 @@ class TestConnectionManagement:
             }
         ]
 
-        result = await mock_client.update_cortical_mapping(
-            "cHipFL", "opose1", mapping_rules
-        )
+        result = await mock_client.update_cortical_mapping("cHipFL", "opose1", mapping_rules)
 
         assert "synapse_count" in result
 

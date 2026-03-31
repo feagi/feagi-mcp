@@ -140,21 +140,13 @@ connection_rule = [
     }
 ]
 
-await update_cortical_mapping(
-    src_area="cHipFL", dst_area="opose1", mapping_rules=connection_rule
-)
+await update_cortical_mapping(src_area="cHipFL", dst_area="opose1", mapping_rules=connection_rule)
 
-await update_cortical_mapping(
-    src_area="cHipFR", dst_area="opose2", mapping_rules=connection_rule
-)
+await update_cortical_mapping(src_area="cHipFR", dst_area="opose2", mapping_rules=connection_rule)
 
-await update_cortical_mapping(
-    src_area="cHipRL", dst_area="opose3", mapping_rules=connection_rule
-)
+await update_cortical_mapping(src_area="cHipRL", dst_area="opose3", mapping_rules=connection_rule)
 
-await update_cortical_mapping(
-    src_area="cHipRR", dst_area="opose4", mapping_rules=connection_rule
-)
+await update_cortical_mapping(src_area="cHipRR", dst_area="opose4", mapping_rules=connection_rule)
 
 
 # STEP 6: Verify the wiring worked

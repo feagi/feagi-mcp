@@ -50,9 +50,7 @@ LAYOUT_TEMPORAL_Z = "temporal_z"
 
 
 def _euclidean(a: tuple[int, int, int], b: tuple[int, int, int]) -> float:
-    return math.sqrt(
-        float((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2)
-    )
+    return math.sqrt(float((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2))
 
 
 def check_origin_exclusion(

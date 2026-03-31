@@ -98,16 +98,17 @@ CORTICAL_TYPE_METADATA = {
 
 def get_area_type_from_id(cortical_id: str) -> str:
     """Extract the area type prefix from a cortical ID.
-    
+
     Args:
         cortical_id: Encoded cortical ID (e.g., "b21vdAUAAAA=")
-        
+
     Returns:
         Area type prefix (e.g., "omot", "isvi")
     """
     try:
         import base64
-        decoded = base64.b64decode(cortical_id).decode('utf-8', errors='ignore')
+
+        decoded = base64.b64decode(cortical_id).decode("utf-8", errors="ignore")
         for area_type in CORTICAL_TYPE_METADATA:
             if decoded.startswith(area_type):
                 return area_type
@@ -118,15 +119,15 @@ def get_area_type_from_id(cortical_id: str) -> str:
 
 def get_semantic_info(cortical_id: str) -> dict[str, Any]:
     """Get semantic information about a cortical area from its ID.
-    
+
     Args:
         cortical_id: Encoded cortical ID
-        
+
     Returns:
         Dictionary with semantic information including type, purpose, capabilities
     """
     area_type = get_area_type_from_id(cortical_id)
-    
+
     if area_type == "unknown":
         return {
             "area_type": "unknown",
@@ -137,7 +138,7 @@ def get_semantic_info(cortical_id: str) -> dict[str, Any]:
             "data_format": "unknown",
             "typical_use": "No metadata available",
         }
-    
+
     metadata = CORTICAL_TYPE_METADATA[area_type].copy()
     metadata["area_type"] = area_type
     return metadata
@@ -145,10 +146,10 @@ def get_semantic_info(cortical_id: str) -> dict[str, Any]:
 
 def enrich_area_list(areas: list[str]) -> list[dict[str, Any]]:
     """Enrich a list of cortical area IDs with semantic metadata.
-    
+
     Args:
         areas: List of encoded cortical IDs
-        
+
     Returns:
         List of dictionaries with ID and semantic information
     """
@@ -162,12 +163,12 @@ def enrich_area_list(areas: list[str]) -> list[dict[str, Any]]:
 
 def enrich_area_with_name(area_id: str, area_name: str, device_count: int = 0) -> dict[str, Any]:
     """Enrich a cortical area with its name, device count, and semantic metadata.
-    
+
     Args:
         area_id: Encoded cortical ID
         area_name: Human-readable area name
         device_count: Number of connected devices
-        
+
     Returns:
         Dictionary with complete area information
     """

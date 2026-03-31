@@ -76,7 +76,7 @@ def main() -> int:
     checks_total += 1
     try:
         from feagi_mcp import server
-        
+
         tool_functions = [
             "monitor_activity",
             "get_connectivity",
@@ -91,7 +91,7 @@ def main() -> int:
             "trace_signal_path",
             "health_check",
         ]
-        
+
         found_tools = [name for name in tool_functions if hasattr(server, name)]
         print(f"✓ {len(found_tools)}/12 expected tool functions found")
         if len(found_tools) >= 10:

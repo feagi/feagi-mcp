@@ -51,9 +51,13 @@ BV_OPERATIONS: Final[tuple[BvOperation, ...]] = (
     ),
     # --- Cortical area (read) ---
     BvOperation("get_cortical_area_ipu", "GET", "/v1/cortical_area/ipu", "List IPU area IDs"),
-    BvOperation("get_cortical_area_ipu_types", "GET", "/v1/cortical_area/ipu/types", "IPU type metadata"),
+    BvOperation(
+        "get_cortical_area_ipu_types", "GET", "/v1/cortical_area/ipu/types", "IPU type metadata"
+    ),
     BvOperation("get_cortical_area_opu", "GET", "/v1/cortical_area/opu", "List OPU area IDs"),
-    BvOperation("get_cortical_area_opu_types", "GET", "/v1/cortical_area/opu/types", "OPU type metadata"),
+    BvOperation(
+        "get_cortical_area_opu_types", "GET", "/v1/cortical_area/opu/types", "OPU type metadata"
+    ),
     BvOperation(
         "get_cortical_area_id_list",
         "GET",
@@ -108,14 +112,18 @@ BV_OPERATIONS: Final[tuple[BvOperation, ...]] = (
         "/v1/connectome/memory_neuron",
         "Memory neuron details (query)",
     ),
-    BvOperation("get_cortical_types", "GET", "/v1/cortical_area/cortical_types", "High-level types"),
+    BvOperation(
+        "get_cortical_types", "GET", "/v1/cortical_area/cortical_types", "High-level types"
+    ),
     BvOperation(
         "get_cortical_visibility",
         "GET",
         "/v1/cortical_area/cortical_visibility",
         "Visibility flags",
     ),
-    BvOperation("get_genome_cortical_template", "GET", "/v1/genome/cortical_template", "IPU/OPU templates"),
+    BvOperation(
+        "get_genome_cortical_template", "GET", "/v1/genome/cortical_template", "IPU/OPU templates"
+    ),
     BvOperation(
         "get_connectome_properties_dimensions",
         "GET",
@@ -141,16 +149,27 @@ BV_OPERATIONS: Final[tuple[BvOperation, ...]] = (
         "List cortical areas (Rust API; legacy /v1/cortical_area/list in feagi-mcp fallback)",
     ),
     # --- Cortical area (write) ---
-    BvOperation("post_cortical_area", "POST", "/v1/cortical_area/cortical_area", "Create IO cortical area"),
+    BvOperation(
+        "post_cortical_area", "POST", "/v1/cortical_area/cortical_area", "Create IO cortical area"
+    ),
     BvOperation(
         "post_custom_cortical_area",
         "POST",
         "/v1/cortical_area/custom_cortical_area",
         "Create custom cortical area",
     ),
-    BvOperation("post_cortical_area_clone", "POST", "/v1/cortical_area/clone", "Clone custom/memory area"),
-    BvOperation("put_cortical_area", "PUT", "/v1/cortical_area/cortical_area", "Update cortical area"),
-    BvOperation("delete_cortical_area", "DELETE", "/v1/cortical_area/cortical_area", "Delete area (query/body)"),
+    BvOperation(
+        "post_cortical_area_clone", "POST", "/v1/cortical_area/clone", "Clone custom/memory area"
+    ),
+    BvOperation(
+        "put_cortical_area", "PUT", "/v1/cortical_area/cortical_area", "Update cortical area"
+    ),
+    BvOperation(
+        "delete_cortical_area",
+        "DELETE",
+        "/v1/cortical_area/cortical_area",
+        "Delete area (query/body)",
+    ),
     BvOperation(
         "put_cortical_area_multi",
         "PUT",
@@ -181,7 +200,9 @@ BV_OPERATIONS: Final[tuple[BvOperation, ...]] = (
         "/v1/cortical_area/cortical_name_location",
         "Name/location lookup",
     ),
-    BvOperation("put_cortical_area_coord_2d", "PUT", "/v1/cortical_area/coord_2d", "Update 2D coords"),
+    BvOperation(
+        "put_cortical_area_coord_2d", "PUT", "/v1/cortical_area/coord_2d", "Update 2D coords"
+    ),
     BvOperation("put_cortical_area_reset", "PUT", "/v1/cortical_area/reset", "Reset neural state"),
     BvOperation(
         "put_suppress_cortical_visibility",
@@ -190,10 +211,27 @@ BV_OPERATIONS: Final[tuple[BvOperation, ...]] = (
         "Hide/show areas in visualization",
     ),
     # --- Morphology ---
-    BvOperation("get_morphology_morphology_list", "GET", "/v1/morphology/morphology_list", "Morphology name list"),
-    BvOperation("get_morphology_morphology_types", "GET", "/v1/morphology/morphology_types", "Morphology type enum"),
-    BvOperation("get_morphology_list_types", "GET", "/v1/morphology/list/types", "List morphology types"),
-    BvOperation("get_morphology_morphologies", "GET", "/v1/morphology/morphologies", "Full morphology definitions"),
+    BvOperation(
+        "get_morphology_morphology_list",
+        "GET",
+        "/v1/morphology/morphology_list",
+        "Morphology name list",
+    ),
+    BvOperation(
+        "get_morphology_morphology_types",
+        "GET",
+        "/v1/morphology/morphology_types",
+        "Morphology type enum",
+    ),
+    BvOperation(
+        "get_morphology_list_types", "GET", "/v1/morphology/list/types", "List morphology types"
+    ),
+    BvOperation(
+        "get_morphology_morphologies",
+        "GET",
+        "/v1/morphology/morphologies",
+        "Full morphology definitions",
+    ),
     BvOperation("post_morphology", "POST", "/v1/morphology/morphology", "Create morphology"),
     BvOperation("put_morphology", "PUT", "/v1/morphology/morphology", "Update morphology"),
     BvOperation("put_morphology_rename", "PUT", "/v1/morphology/rename", "Rename morphology"),
@@ -204,10 +242,16 @@ BV_OPERATIONS: Final[tuple[BvOperation, ...]] = (
         "/v1/morphology/morphology_properties",
         "Morphology property query",
     ),
-    BvOperation("post_morphology_usage", "POST", "/v1/morphology/morphology_usage", "Morphology usage"),
+    BvOperation(
+        "post_morphology_usage", "POST", "/v1/morphology/morphology_usage", "Morphology usage"
+    ),
     # --- Cortical mapping ---
-    BvOperation("post_mapping_afferents", "POST", "/v1/cortical_mapping/afferents", "Incoming mappings"),
-    BvOperation("post_mapping_efferents", "POST", "/v1/cortical_mapping/efferents", "Outgoing mappings"),
+    BvOperation(
+        "post_mapping_afferents", "POST", "/v1/cortical_mapping/afferents", "Incoming mappings"
+    ),
+    BvOperation(
+        "post_mapping_efferents", "POST", "/v1/cortical_mapping/efferents", "Outgoing mappings"
+    ),
     BvOperation(
         "post_mapping_properties",
         "POST",
@@ -221,7 +265,9 @@ BV_OPERATIONS: Final[tuple[BvOperation, ...]] = (
         "Update mapping properties",
     ),
     BvOperation("get_mapping", "GET", "/v1/cortical_mapping/mapping", "Get mapping (query)"),
-    BvOperation("delete_mapping", "DELETE", "/v1/cortical_mapping/mapping", "Delete mapping (query)"),
+    BvOperation(
+        "delete_mapping", "DELETE", "/v1/cortical_mapping/mapping", "Delete mapping (query)"
+    ),
     BvOperation("get_mapping_list", "GET", "/v1/cortical_mapping/mapping_list", "List mappings"),
     BvOperation(
         "post_mapping_batch_update",
@@ -232,7 +278,9 @@ BV_OPERATIONS: Final[tuple[BvOperation, ...]] = (
     BvOperation("post_mapping", "POST", "/v1/cortical_mapping/mapping", "Create mapping"),
     BvOperation("put_mapping", "PUT", "/v1/cortical_mapping/mapping", "Update mapping"),
     # --- Region ---
-    BvOperation("get_region_regions_members", "GET", "/v1/region/regions_members", "Brain regions tree"),
+    BvOperation(
+        "get_region_regions_members", "GET", "/v1/region/regions_members", "Brain regions tree"
+    ),
     BvOperation("get_region_regions", "GET", "/v1/region/regions", "List regions"),
     BvOperation("get_region_region_titles", "GET", "/v1/region/region_titles", "Region titles"),
     BvOperation(
@@ -250,7 +298,12 @@ BV_OPERATIONS: Final[tuple[BvOperation, ...]] = (
         "/v1/region/region_and_members",
         "Delete region and members",
     ),
-    BvOperation("put_region_relocate_members", "PUT", "/v1/region/relocate_members", "Relocate cortical members"),
+    BvOperation(
+        "put_region_relocate_members",
+        "PUT",
+        "/v1/region/relocate_members",
+        "Relocate cortical members",
+    ),
     BvOperation("post_region_clone", "POST", "/v1/region/clone", "Clone region"),
     BvOperation(
         "put_change_region_parent",
@@ -354,7 +407,12 @@ BV_OPERATIONS: Final[tuple[BvOperation, ...]] = (
     BvOperation("get_agent_shared_mem", "GET", "/v1/agent/shared_mem", "Shared memory block"),
     BvOperation("post_agent_register", "POST", "/v1/agent/register", "Register agent"),
     BvOperation("post_agent_heartbeat", "POST", "/v1/agent/heartbeat", "Agent heartbeat"),
-    BvOperation("post_agent_manual_stimulation", "POST", "/v1/agent/manual_stimulation", "Manual stimulation"),
+    BvOperation(
+        "post_agent_manual_stimulation",
+        "POST",
+        "/v1/agent/manual_stimulation",
+        "Manual stimulation",
+    ),
     BvOperation(
         "post_agent_device_registrations",
         "POST",
@@ -362,7 +420,12 @@ BV_OPERATIONS: Final[tuple[BvOperation, ...]] = (
         "Device registrations (path: agent_id)",
     ),
     # --- Network / input ---
-    BvOperation("get_network_connection_info", "GET", "/v1/network/connection_info", "Network connection info"),
+    BvOperation(
+        "get_network_connection_info",
+        "GET",
+        "/v1/network/connection_info",
+        "Network connection info",
+    ),
     BvOperation("get_input_vision", "GET", "/v1/input/vision", "Vision input config/state"),
     BvOperation("post_input_vision", "POST", "/v1/input/vision", "Configure vision input"),
     # --- Genome download/upload (API) ---
