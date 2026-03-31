@@ -1,7 +1,7 @@
 """HTTP client for FEAGI REST API."""
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -13,6 +13,20 @@ from feagi_mcp.placement_policy import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _as_json_dict(data: Any) -> dict[str, Any]:
+    """Narrow ``response.json()`` / API payloads to ``dict`` for strict typing."""
+    if isinstance(data, dict):
+        return cast(dict[str, Any], data)
+    return {}
+
+
+def _as_json_list_str(data: Any) -> list[str]:
+    """Narrow JSON list payloads to ``list[str]`` (OPU/IPU id lists, etc.)."""
+    if isinstance(data, list):
+        return [str(x) for x in data]
+    return []
 
 
 def _normalize_cortical_area_list_payload(data: Any) -> list[dict[str, Any]]:
@@ -80,7 +94,7 @@ class FeagiClient:
                 params={"area": area_id, "duration": duration_ms / 1000.0},
             )
             if response.status_code == 200:
-                return response.json()
+                return _as_json_dict(response.json())
             return {
                 "error": f"HTTP {response.status_code}",
                 "message": response.text,
@@ -123,7 +137,11 @@ class FeagiClient:
             response = await self._client.get(url)
             if response.status_code == 200:
                 data = response.json()
-                return data.get("cortical_area_name_list", [])
+                if isinstance(data, dict):
+                    raw = data.get("cortical_area_name_list", [])
+                    if isinstance(raw, list):
+                        return [str(x) for x in raw]
+                return []
             logger.error(f"list_cortical_area_names failed: HTTP {response.status_code}")
             return []
         except Exception as e:
@@ -135,7 +153,7 @@ class FeagiClient:
         try:
             response = await self._client.get(f"{self.base_url}/v1/morphology/morphologies")
             if response.status_code == 200:
-                return response.json()
+                return _as_json_dict(response.json())
             logger.error(f"list_morphologies failed: HTTP {response.status_code}")
             return {}
         except Exception as e:
@@ -146,7 +164,11 @@ class FeagiClient:
         """Get current genome metadata."""
         try:
             name_response = await self._client.get(f"{self.base_url}/v1/genome/name")
-            genome_name = name_response.json() if name_response.status_code == 200 else "unknown"
+            if name_response.status_code == 200:
+                gn: Any = name_response.json()
+                genome_name: str = gn if isinstance(gn, str) else str(gn)
+            else:
+                genome_name = "unknown"
 
             return {
                 "genome_name": genome_name,
@@ -161,7 +183,7 @@ class FeagiClient:
         try:
             response = await self._client.get(f"{self.base_url}/v1/genome/download")
             if response.status_code == 200:
-                return response.json()
+                return _as_json_dict(response.json())
             return {
                 "error": f"HTTP {response.status_code}",
                 "message": response.text,
@@ -185,7 +207,7 @@ class FeagiClient:
                 json=genome_data,
             )
             if response.status_code == 200:
-                return response.json()
+                return _as_json_dict(response.json())
             return {
                 "error": f"HTTP {response.status_code}",
                 "message": response.text,
@@ -206,7 +228,7 @@ class FeagiClient:
                 f"{self.base_url}/v1/genome/upload/barebones",
             )
             if response.status_code == 200:
-                return response.json()
+                return _as_json_dict(response.json())
             return {
                 "error": f"HTTP {response.status_code}",
                 "message": response.text,
@@ -242,7 +264,7 @@ class FeagiClient:
                 f"{self.base_url}/v1/morphology/morphology", json=payload
             )
             if response.status_code == 200:
-                return response.json()
+                return _as_json_dict(response.json())
             return {
                 "error": f"HTTP {response.status_code}",
                 "message": response.text,
@@ -265,7 +287,7 @@ class FeagiClient:
                 f"{self.base_url}/v1/cortical_area/cortical_area/geometry"
             )
             if response.status_code == 200:
-                return response.json()
+                return _as_json_dict(response.json())
             return {
                 "error": f"HTTP {response.status_code}",
                 "message": response.text,
@@ -281,7 +303,7 @@ class FeagiClient:
                 f"{self.base_url}/v1/cortical_area/cortical_id_name_mapping"
             )
             if response.status_code == 200:
-                return response.json()
+                return _as_json_dict(response.json())
             return {
                 "error": f"HTTP {response.status_code}",
                 "message": response.text,
@@ -338,7 +360,7 @@ class FeagiClient:
                 f"{self.base_url}/v1/cortical_area/cortical_map_detailed"
             )
             if response.status_code == 200:
-                return response.json()
+                return _as_json_dict(response.json())
             return {
                 "error": f"HTTP {response.status_code}",
                 "message": response.text,
@@ -352,7 +374,7 @@ class FeagiClient:
         try:
             response = await self._client.get(f"{self.base_url}/v1/region/regions_members")
             if response.status_code == 200:
-                return response.json()
+                return _as_json_dict(response.json())
             return {
                 "error": f"HTTP {response.status_code}",
                 "message": response.text,
@@ -398,7 +420,7 @@ class FeagiClient:
                 json=body,
             )
             if response.status_code == 200:
-                return response.json()
+                return _as_json_dict(response.json())
             return {
                 "error": f"HTTP {response.status_code}",
                 "message": response.text,
@@ -412,7 +434,7 @@ class FeagiClient:
         try:
             response = await self._client.get(f"{self.base_url}/v1/genome/file_name")
             if response.status_code == 200:
-                return response.json()
+                return _as_json_dict(response.json())
             return {
                 "error": f"HTTP {response.status_code}",
                 "message": response.text,
@@ -441,7 +463,7 @@ class FeagiClient:
                 json=body,
             )
             if response.status_code == 200:
-                return response.json()
+                return _as_json_dict(response.json())
             return {
                 "error": f"HTTP {response.status_code}",
                 "message": response.text,
@@ -458,7 +480,7 @@ class FeagiClient:
                 json={"cortical_id": cortical_id},
             )
             if response.status_code == 200:
-                return response.json()
+                return _as_json_dict(response.json())
             return {
                 "error": f"HTTP {response.status_code}",
                 "message": response.text,
@@ -475,7 +497,7 @@ class FeagiClient:
                 json=cortical_ids,
             )
             if response.status_code == 200:
-                return response.json()
+                return _as_json_dict(response.json())
             return {
                 "error": f"HTTP {response.status_code}",
                 "message": response.text,
@@ -492,7 +514,7 @@ class FeagiClient:
                 json={"area_list": area_ids},
             )
             if response.status_code == 200:
-                return response.json()
+                return _as_json_dict(response.json())
             return {
                 "error": f"HTTP {response.status_code}",
                 "message": response.text,
@@ -530,7 +552,7 @@ class FeagiClient:
                 json=payload,
             )
             if response.status_code == 200:
-                return response.json()
+                return _as_json_dict(response.json())
             return {
                 "error": f"HTTP {response.status_code}",
                 "message": response.text,
@@ -544,7 +566,7 @@ class FeagiClient:
         try:
             response = await self._client.get(f"{self.base_url}/v1/genome/cortical_template")
             if response.status_code == 200:
-                return response.json()
+                return _as_json_dict(response.json())
             return {
                 "error": f"HTTP {response.status_code}",
                 "message": response.text,
@@ -663,7 +685,7 @@ class FeagiClient:
                 },
             )
             if response.status_code == 200:
-                result = response.json()
+                result = _as_json_dict(response.json())
                 return {
                     "success": result.get("success", False),
                     "neurons_stimulated": result.get("unique_neuron_ids", 0),
@@ -704,7 +726,7 @@ class FeagiClient:
                 },
             )
             if response.status_code == 200:
-                result = response.json()
+                result = _as_json_dict(response.json())
                 return {
                     "success": result.get("success", False),
                     "neurons_stimulated": result.get("unique_neuron_ids", 0),
@@ -725,7 +747,7 @@ class FeagiClient:
         try:
             response = await self._client.get(f"{self.base_url}/v1/embodiment/status")
             if response.status_code == 200:
-                return response.json()
+                return _as_json_dict(response.json())
 
             genome = await self.download_genome()
             if "error" not in genome:
@@ -770,7 +792,7 @@ class FeagiClient:
         try:
             response = await self._client.get(f"{self.base_url}/v1/burst_engine/status")
             if response.status_code == 200:
-                return response.json()
+                return _as_json_dict(response.json())
             return {"error": f"HTTP {response.status_code}", "message": response.text}
         except Exception as e:
             logger.error(f"get_burst_engine_status failed: {e}")
@@ -781,7 +803,7 @@ class FeagiClient:
         try:
             response = await self._client.get(f"{self.base_url}/v1/monitoring/metrics")
             if response.status_code == 200:
-                return response.json()
+                return _as_json_dict(response.json())
             return {"error": f"HTTP {response.status_code}", "message": response.text}
         except Exception as e:
             logger.error(f"get_runtime_metrics failed: {e}")
@@ -797,7 +819,7 @@ class FeagiClient:
                 f"{self.base_url}/v1/cortical_area/{area_id}/outgoing_count"
             )
 
-            result = {"area_id": area_id}
+            result: dict[str, Any] = {"area_id": area_id}
 
             if incoming_response.status_code == 200:
                 result["incoming_synapses"] = incoming_response.json()
@@ -827,8 +849,11 @@ class FeagiClient:
             if response.status_code == 200:
                 agent_ids = response.json()
                 if isinstance(agent_ids, list):
-                    return {"agent_ids": agent_ids, "count": len(agent_ids)}
-                return agent_ids
+                    ids = _as_json_list_str(agent_ids)
+                    return {"agent_ids": ids, "count": len(ids)}
+                if isinstance(agent_ids, dict):
+                    return _as_json_dict(agent_ids)
+                return {"error": "unexpected_response", "raw": agent_ids}
             return {"error": f"HTTP {response.status_code}", "message": response.text}
         except Exception as e:
             logger.error(f"get_registered_agents failed: {e}")
@@ -842,12 +867,14 @@ class FeagiClient:
                 params={"include_device_registrations": "false"},
             )
             if response.status_code == 200:
-                all_agents = response.json()
+                all_agents = _as_json_dict(response.json())
                 if agent_id in all_agents:
-                    return {
-                        "agent_id": agent_id,
-                        **all_agents[agent_id],
-                    }
+                    raw_agent = all_agents[agent_id]
+                    if isinstance(raw_agent, dict):
+                        return {
+                            "agent_id": agent_id,
+                            **cast(dict[str, Any], raw_agent),
+                        }
                 return {"error": f"Agent {agent_id} not found"}
             return {"error": f"HTTP {response.status_code}", "message": response.text}
         except Exception as e:
@@ -862,17 +889,20 @@ class FeagiClient:
                 params={"include_device_registrations": "true"},
             )
             if response.status_code == 200:
-                all_agents = response.json()
+                all_agents = _as_json_dict(response.json())
                 if agent_id in all_agents:
                     agent_data = all_agents[agent_id]
-                    return {
-                        "agent_id": agent_id,
-                        "agent_name": agent_data.get("agent_name", "unknown"),
-                        "capabilities": agent_data.get("capabilities", {}),
-                        "device_registrations": agent_data.get("capabilities", {}).get(
-                            "device_registrations", {}
-                        ),
-                    }
+                    if isinstance(agent_data, dict):
+                        caps = agent_data.get("capabilities", {})
+                        dev_reg: Any = {}
+                        if isinstance(caps, dict):
+                            dev_reg = caps.get("device_registrations", {})
+                        return {
+                            "agent_id": agent_id,
+                            "agent_name": agent_data.get("agent_name", "unknown"),
+                            "capabilities": caps if isinstance(caps, dict) else {},
+                            "device_registrations": dev_reg,
+                        }
                 return {"error": f"Agent {agent_id} not found in capabilities"}
             return {"error": f"HTTP {response.status_code}", "message": response.text}
         except Exception as e:
@@ -884,7 +914,7 @@ class FeagiClient:
         try:
             response = await self._client.get(f"{self.base_url}/v1/cortical_area/opu")
             if response.status_code == 200:
-                return response.json()
+                return _as_json_list_str(response.json())
             return []
         except Exception as e:
             logger.error(f"list_opu_areas failed: {e}")
@@ -908,7 +938,7 @@ class FeagiClient:
         try:
             response = await self._client.get(f"{self.base_url}/v1/cortical_area/ipu")
             if response.status_code == 200:
-                return response.json()
+                return _as_json_list_str(response.json())
             return []
         except Exception as e:
             logger.error(f"list_ipu_areas failed: {e}")
@@ -1029,7 +1059,7 @@ class FeagiClient:
                 )
 
             if response.status_code == 200:
-                return response.json()
+                return _as_json_dict(response.json())
             return {"error": f"HTTP {response.status_code}", "message": response.text}
         except Exception as e:
             logger.error(f"create_cortical_area failed: {e}")
@@ -1048,7 +1078,7 @@ class FeagiClient:
                 json=request_data,
             )
             if response.status_code == 200:
-                return response.json()
+                return _as_json_dict(response.json())
             return {"error": f"HTTP {response.status_code}", "message": response.text}
         except Exception as e:
             logger.error(f"update_cortical_area failed: {e}")
@@ -1063,7 +1093,7 @@ class FeagiClient:
                 json={"cortical_id": cortical_id},
             )
             if response.status_code == 200:
-                return response.json()
+                return _as_json_dict(response.json())
             return {"error": f"HTTP {response.status_code}", "message": response.text}
         except Exception as e:
             logger.error(f"delete_cortical_area failed: {e}")
@@ -1077,7 +1107,12 @@ class FeagiClient:
                 json={"src_cortical_area": src_area, "dst_cortical_area": dst_area},
             )
             if response.status_code == 200:
-                return {"src_area": src_area, "dst_area": dst_area, "rules": response.json()}
+                # Rules may be a JSON list or object depending on FEAGI version.
+                return {
+                    "src_area": src_area,
+                    "dst_area": dst_area,
+                    "rules": response.json(),
+                }
             return {"error": f"HTTP {response.status_code}", "message": response.text}
         except Exception as e:
             logger.error(f"get_cortical_mapping failed: {e}")
@@ -1097,7 +1132,7 @@ class FeagiClient:
                 },
             )
             if response.status_code == 200:
-                return response.json()
+                return _as_json_dict(response.json())
             return {"error": f"HTTP {response.status_code}", "message": response.text}
         except Exception as e:
             logger.error(f"update_cortical_mapping failed: {e}")
@@ -1111,7 +1146,7 @@ class FeagiClient:
                 params={"src_cortical_area": src_area, "dst_cortical_area": dst_area},
             )
             if response.status_code == 200:
-                return response.json()
+                return _as_json_dict(response.json())
             return {"error": f"HTTP {response.status_code}", "message": response.text}
         except Exception as e:
             logger.error(f"delete_cortical_mapping failed: {e}")
@@ -1161,7 +1196,12 @@ class FeagiClient:
         ct = response.headers.get("content-type", "")
         if "json" in ct:
             try:
-                return response.json()
+                data = response.json()
+                if isinstance(data, dict):
+                    return cast(dict[str, Any], data)
+                if isinstance(data, list):
+                    return data
+                return cast(dict[str, Any] | list[Any] | Any, data)
             except Exception:
                 return {"raw": response.text}
         return {"text": response.text}
