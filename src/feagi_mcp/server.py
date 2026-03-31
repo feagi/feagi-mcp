@@ -10,6 +10,12 @@ from mcp.server.fastmcp import FastMCP
 from feagi_mcp.bv_operations import list_operation_summaries
 from feagi_mcp.config import load_config
 from feagi_mcp.feagi_client import FeagiClient
+from feagi_mcp.placement_policy import (
+    LAYOUT_XY_PLANE,
+    MIN_ANCHOR_SEPARATION_VOXELS,
+    parse_region_coordinate_3d,
+    suggest_anchor_positions,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -634,14 +640,20 @@ async def create_cortical_area(
     data_type_configs_by_subunit: dict[str, int] | None = None,
     per_device_dimensions: list[int] | None = None,
     brain_region_id: str | None = None,
+    skip_placement_validation: bool = False,
 ) -> dict[str, Any]:
     """Create a new cortical area programmatically.
 
     Use this to add OPU areas, IPU areas, or custom processing areas to the genome
     without manual JSON editing.
 
+    If the user asked for a "new circuit" as a named container in the brain map with no voxel
+    geometry, they likely mean a brain region — use create_brain_region instead.
+
     Args:
-        name: Human-readable name
+        name: Human-readable name (persisted in genome / BV). Use clear role- or circuit-based
+            names (e.g. OrGate_Input_A); do not prefix with Mcp/MCP (see docs NEW_TOOLS naming
+            policy).
         cortical_type: "OPU", "IPU", "CUSTOM", or "MEMORY"
         dimensions: [width, height, depth] in voxels (for CUSTOM/MEMORY only)
         position: [x, y, z] 3D coordinates
@@ -650,6 +662,9 @@ async def create_cortical_area(
         properties: Optional additional properties (grp_id, etc.)
         brain_region_id: Parent brain region UUID for CUSTOM/MEMORY (required by API; may use
             properties[\"brain_region_id\"] instead)
+        skip_placement_validation: Set True only to bypass MCP checks: (1) anchors must be
+            at least 20 voxels from world origin (BV axis visibility), (2) anchors must be at
+            least 32 voxels from any existing area (label overlap in BV).
         cortical_id: For OPU/IPU: type key like "opse", "isvi" (required for OPU/IPU)
         group_id: For OPU/IPU: group identifier 0-255 (default: 0)
         data_type_configs_by_subunit: For OPU/IPU: map of subunit index to config
@@ -674,6 +689,7 @@ async def create_cortical_area(
         data_type_configs_by_subunit,
         per_device_dimensions,
         brain_region_id,
+        skip_placement_validation,
     )
     return result
 
@@ -811,6 +827,116 @@ async def get_brain_regions() -> dict[str, Any]:
     """
     result = await feagi.get_regions_members()
     return result
+
+
+@mcp.tool()
+async def create_brain_region(
+    title: str,
+    coordinates_2d: list[int],
+    coordinates_3d: list[int],
+    parent_region_id: str | None = None,
+    region_type: str = "Undefined",
+    region_id: str | None = None,
+) -> dict[str, Any]:
+    """Create a brain region (connectome hierarchy node; Brain Visualizer regional group).
+
+    In FEAGI, users often say \"circuit\" when they mean this — a named region that can hold
+    cortical areas — not an IPU/OPU/CUSTOM voxel block. For voxel areas use create_cortical_area.
+
+    Args:
+        title: Display name for the new region (e.g. user-supplied label).
+        coordinates_2d: Brain-map 2D position [x, y] (API-required).
+        coordinates_3d: Layout 3D anchor [x, y, z] (API-required).
+        parent_region_id: Optional parent region UUID. If omitted, FEAGI attaches the new region
+            under the existing root (single-root tree); only the first region in an empty genome
+            becomes root without a parent.
+        region_type: Region classification string (default \"Undefined\").
+        region_id: Optional fixed UUID; if omitted the server assigns one.
+
+    Returns:
+        Created region record including region_id.
+    """
+    result = await feagi.create_brain_region(
+        title,
+        coordinates_2d,
+        coordinates_3d,
+        parent_region_id=parent_region_id,
+        region_type=region_type,
+        region_id=region_id,
+    )
+    return result
+
+
+@mcp.tool()
+async def suggest_cortical_anchor_positions(
+    count: int = 1,
+    parent_region_id: str | None = None,
+    spacing_voxels: int = MIN_ANCHOR_SEPARATION_VOXELS,
+    layout: str = LAYOUT_XY_PLANE,
+    axis: str | None = None,
+) -> dict[str, Any]:
+    """Suggest 3D anchors for new CUSTOM/MEMORY cortical areas using BV placement rules.
+
+    Call **before** ``create_cortical_area`` when adding several areas (e.g. AND gate inputs).
+    Uses live ``get_cortical_area_geometry`` so suggestions avoid the origin gizmo and stay
+    separated from existing areas. If ``parent_region_id`` is set, biases the chain near that
+    region's ``coordinate_3d`` from ``get_brain_regions`` instead of arbitrary large coords.
+
+    **Layout (BV camera looks toward +Z; prefer XY for visibility):**
+    - ``xy_plane`` / ``co_occurring_inputs`` — same Y and Z, spread along +X (default).
+    - ``hierarchy_y`` — shallow hierarchy steps along +Y (small circuits).
+    - ``temporal_z`` — stages along +Z (time / deep feedforward).
+
+    Args:
+        count: Number of ``[x, y, z]`` anchors to return.
+        parent_region_id: Optional brain region UUID to align the layout with (e.g. your circuit).
+        spacing_voxels: Step between consecutive anchors on the primary layout axis (>= 32).
+        layout: See strings above; default keeps the circuit in the XY plane for visibility.
+        axis: Optional legacy override: ``x``, ``y``, or ``z`` only (prefer ``layout``).
+
+    Returns:
+        ``positions``, ``base_hint_source`` (``parent_region`` or ``default``), spacing, and layout.
+    """
+    geom = await feagi.get_cortical_area_geometry()
+    if not isinstance(geom, dict):
+        return {"error": "invalid_geometry_response"}
+    if geom.get("error"):
+        return geom
+
+    base_hint = None
+    base_source = "default"
+    parent_c3: list[int] | None = None
+    pr = parent_region_id.strip() if isinstance(parent_region_id, str) else None
+    if pr:
+        rm = await feagi.get_regions_members()
+        if not isinstance(rm, dict):
+            return {"error": "invalid_regions_response"}
+        if rm.get("error"):
+            return rm
+        parsed = parse_region_coordinate_3d(rm, pr)
+        if parsed is not None:
+            base_hint = parsed
+            base_source = "parent_region"
+            parent_c3 = [parsed[0], parsed[1], parsed[2]]
+
+    spacing = max(int(spacing_voxels), MIN_ANCHOR_SEPARATION_VOXELS)
+    layout_key = layout if isinstance(layout, str) and layout.strip() else LAYOUT_XY_PLANE
+    positions = suggest_anchor_positions(
+        int(count),
+        geom,
+        base_hint=base_hint,
+        spacing=spacing,
+        layout=layout_key.strip(),
+        axis=axis.strip() if isinstance(axis, str) and axis.strip() else None,
+    )
+    return {
+        "positions": positions,
+        "base_hint_source": base_source,
+        "parent_region_coordinate_3d": parent_c3,
+        "spacing_voxels": spacing,
+        "layout": layout_key.strip(),
+        "axis": axis,
+    }
 
 
 @mcp.tool()

@@ -134,7 +134,12 @@ BV_OPERATIONS: Final[tuple[BvOperation, ...]] = (
         "/v1/connectome/cortical_areas/list/detailed",
         "Detailed cortical list",
     ),
-    BvOperation("get_cortical_area_list", "GET", "/v1/cortical_area/list", "List cortical areas (API)"),
+    BvOperation(
+        "get_cortical_area_list",
+        "GET",
+        "/v1/connectome/cortical_areas/list/detailed",
+        "List cortical areas (Rust API; legacy /v1/cortical_area/list in feagi-mcp fallback)",
+    ),
     # --- Cortical area (write) ---
     BvOperation("post_cortical_area", "POST", "/v1/cortical_area/cortical_area", "Create IO cortical area"),
     BvOperation(

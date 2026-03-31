@@ -17,6 +17,8 @@ Welcome to FEAGI MCP documentation!
 ## Reference
 
 3. **[API Reference](API_REFERENCE.md)** - Complete tool documentation
+
+   Cortical **naming** when using `create_cortical_area`: see **[NEW_TOOLS.md — Cortical area naming policy](NEW_TOOLS.md#cortical-area-naming-policy-mcp)** (no `Mcp` prefix; intuitive role names).
    - All tool signatures
    - Parameter descriptions
    - Return value formats

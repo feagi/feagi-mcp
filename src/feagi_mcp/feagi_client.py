@@ -7,8 +7,33 @@ import httpx
 
 from feagi_mcp.area_metadata import enrich_area_list, enrich_area_with_name, get_semantic_info
 from feagi_mcp.bv_operations import BV_OPERATION_BY_ID, resolve_path
+from feagi_mcp.placement_policy import (
+    check_min_separation_to_existing,
+    check_origin_exclusion,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_cortical_area_list_payload(data: Any) -> list[dict[str, Any]]:
+    """Turn API JSON into a list of area dicts.
+
+    Rust feagi-api returns ``{ "area_id": { ... } }`` from connectome detailed list;
+    older Python FEAGI may return a JSON array.
+    """
+    if isinstance(data, list):
+        return [x for x in data if isinstance(x, dict)]
+    if isinstance(data, dict):
+        out: list[dict[str, Any]] = []
+        for cortical_id, val in data.items():
+            if isinstance(val, dict):
+                merged = dict(val)
+                merged.setdefault("cortical_id", cortical_id)
+                out.append(merged)
+            else:
+                out.append({"cortical_id": cortical_id, "data": val})
+        return out
+    return []
 
 
 class FeagiClient:
@@ -66,11 +91,26 @@ class FeagiClient:
 
     async def list_cortical_areas(self) -> list[dict[str, Any]]:
         """List all cortical areas in the current genome."""
+        detailed = f"{self.base_url}/v1/connectome/cortical_areas/list/detailed"
+        legacy = f"{self.base_url}/v1/cortical_area/list"
         try:
-            response = await self._client.get(f"{self.base_url}/v1/cortical_area/list")
+            response = await self._client.get(detailed)
             if response.status_code == 200:
-                return response.json()
-            logger.error(f"list_cortical_areas failed: HTTP {response.status_code}")
+                return _normalize_cortical_area_list_payload(response.json())
+            logger.warning(
+                "list_cortical_areas: GET %s returned HTTP %s; trying legacy %s",
+                detailed,
+                response.status_code,
+                legacy,
+            )
+            response = await self._client.get(legacy)
+            if response.status_code == 200:
+                return _normalize_cortical_area_list_payload(response.json())
+            logger.error(
+                "list_cortical_areas failed: HTTP %s body=%s",
+                response.status_code,
+                (response.text or "")[:800],
+            )
             return []
         except Exception as e:
             logger.error(f"list_cortical_areas failed: {e}")
@@ -319,6 +359,52 @@ class FeagiClient:
             }
         except Exception as e:
             logger.error(f"get_regions_members failed: {e}")
+            return {"error": str(e)}
+
+    async def create_brain_region(
+        self,
+        title: str,
+        coordinates_2d: list[int],
+        coordinates_3d: list[int],
+        parent_region_id: str | None = None,
+        region_type: str = "Undefined",
+        region_id: str | None = None,
+    ) -> dict[str, Any]:
+        """POST /v1/region/region — create a brain region (hierarchy node; BV \"circuit\").
+
+        Omitted parent_region_id: FEAGI resolves to the existing root so new regions are not
+        siblings of root (matches BV single-root expectation).
+        """
+        try:
+            trimmed = title.strip()
+            if not trimmed:
+                return {"error": "title must be non-empty"}
+            if len(coordinates_2d) != 2:
+                return {"error": "coordinates_2d must have exactly 2 integers"}
+            if len(coordinates_3d) != 3:
+                return {"error": "coordinates_3d must have exactly 3 integers"}
+            body: dict[str, Any] = {
+                "title": trimmed,
+                "coordinates_2d": coordinates_2d,
+                "coordinates_3d": coordinates_3d,
+                "region_type": region_type,
+            }
+            if parent_region_id is not None and str(parent_region_id).strip():
+                body["parent_region_id"] = str(parent_region_id).strip()
+            if region_id is not None and str(region_id).strip():
+                body["region_id"] = str(region_id).strip()
+            response = await self._client.post(
+                f"{self.base_url}/v1/region/region",
+                json=body,
+            )
+            if response.status_code == 200:
+                return response.json()
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error(f"create_brain_region failed: {e}")
             return {"error": str(e)}
 
     async def get_genome_file_name(self) -> dict[str, Any]:
@@ -857,11 +943,13 @@ class FeagiClient:
         data_type_configs_by_subunit: dict[str, int] | None = None,
         per_device_dimensions: list[int] | None = None,
         brain_region_id: str | None = None,
+        skip_placement_validation: bool = False,
     ) -> dict[str, Any]:
         """Create a new cortical area.
         
         Args:
-            name: Human-readable name
+            name: Human-readable name (shown in BV; use role/circuit-based names, never
+                prefix with ``Mcp``/``MCP`` — see feagi-mcp docs ``Cortical area naming policy``)
             cortical_type: "OPU", "IPU", "CUSTOM", or "MEMORY"
             dimensions: [width, height, depth] in voxels (for CUSTOM/MEMORY only)
             position: [x, y, z] 3D coordinates
@@ -870,6 +958,8 @@ class FeagiClient:
             properties: Optional additional properties
             brain_region_id: Required for CUSTOM/MEMORY (parent brain region / circuit UUID).
                 May be omitted if ``properties`` includes ``brain_region_id``.
+            skip_placement_validation: If True, skip MCP placement checks (origin exclusion
+                and spacing vs existing areas). Use only when necessary.
             cortical_id: For OPU/IPU: type key like "opse", "isvi" (required for OPU/IPU)
             group_id: For OPU/IPU: group identifier 0-255 (default: 0)
             data_type_configs_by_subunit: For OPU/IPU: map of subunit index to config
@@ -923,6 +1013,17 @@ class FeagiClient:
                         "error": "brain_region_id is required for CUSTOM and MEMORY cortical areas",
                     }
                 request_data["brain_region_id"] = resolved_region
+
+                if not skip_placement_validation:
+                    if origin_err := check_origin_exclusion(position):
+                        return {"error": origin_err}
+                    geom = await self.get_cortical_area_geometry()
+                    if (
+                        isinstance(geom, dict)
+                        and "error" not in geom
+                        and (sep_err := check_min_separation_to_existing(position, geom))
+                    ):
+                        return {"error": sep_err}
 
                 response = await self._client.post(
                     f"{self.base_url}/v1/cortical_area/custom_cortical_area",

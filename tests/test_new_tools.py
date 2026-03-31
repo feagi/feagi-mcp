@@ -116,12 +116,13 @@ class TestGenomeEditing:
             "cortical_id": "Y0hpcEZM",
         }
         mock_client._client.post.return_value = mock_response
+        mock_client.get_cortical_area_geometry = AsyncMock(return_value={})
 
         result = await mock_client.create_cortical_area(
             name="TestArea",
             cortical_type="CUSTOM",
             dimensions=[5, 5, 5],
-            position=[0, 0, 0],
+            position=[50, 50, 0],
             brain_region_id="00000000-0000-0000-0000-000000000001",
         )
 
@@ -350,6 +351,58 @@ class TestStimulation:
                 "mode": "force_fire",
             },
         )
+
+
+class TestCreateBrainRegion:
+    """POST /v1/region/region via FeagiClient.create_brain_region."""
+
+    @pytest.mark.asyncio
+    async def test_create_brain_region_success(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "region_id": "abc-uuid",
+            "title": "Mohammad",
+            "parent_region_id": None,
+            "coordinate_2d": [10, 20],
+            "coordinate_3d": [0, 0, 0],
+            "areas": [],
+            "regions": [],
+        }
+        mock_client._client.post.return_value = mock_response
+
+        result = await mock_client.create_brain_region(
+            "Mohammad",
+            [10, 20],
+            [0, 0, 0],
+            parent_region_id=None,
+        )
+
+        assert result["title"] == "Mohammad"
+        assert result["region_id"] == "abc-uuid"
+        mock_client._client.post.assert_called_once()
+        call_kw = mock_client._client.post.call_args
+        assert call_kw[0][0].endswith("/v1/region/region")
+        body = call_kw[1]["json"]
+        assert body["title"] == "Mohammad"
+        assert body["coordinates_2d"] == [10, 20]
+        assert body["coordinates_3d"] == [0, 0, 0]
+
+    @pytest.mark.asyncio
+    async def test_create_brain_region_rejects_empty_title(self, mock_client):
+        result = await mock_client.create_brain_region(
+            "   ",
+            [0, 0],
+            [0, 0, 0],
+        )
+        assert "error" in result
+
+    @pytest.mark.asyncio
+    async def test_create_brain_region_rejects_bad_dimensions(self, mock_client):
+        r1 = await mock_client.create_brain_region("X", [0], [0, 0, 0])
+        assert "error" in r1
+        r2 = await mock_client.create_brain_region("X", [0, 0], [0, 0])
+        assert "error" in r2
 
 
 class TestBrainVisualizerRouter:

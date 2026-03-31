@@ -55,6 +55,18 @@ Added 11 new diagnostic and genome editing tools to enable programmatic genome m
 
 ## Genome Editing Tools
 
+### Cortical area naming policy (MCP)
+
+Names are persisted in the genome and shown in Brain Visualizer. **Do not** prefix with `Mcp`, `MCP`, `FEAGI`, or the client/tool name.
+
+| Do | Avoid |
+|----|--------|
+| Role-first, human-readable: `OrGate_Input_A`, `CPG_Rhythm_Core`, `Motor_FL_Hip` | Generic: `Custom1`, `Area_A`, `Test` |
+| Circuit or subsystem prefix + role: `Demo_OR_InputA`, `Walk_CPG_Hip_FL` | Implementation noise: `McpOrInput`, `NewArea_2026` |
+| One consistent style per project (`PascalCase` or `snake_case`; underscores between role facets) | Mixed random casing |
+
+Keep labels **short but unambiguous** (aim under ~40 characters). Prefer names that answer: *what circuit* and *what role* (input, output, interneuron, memory bank, etc.).
+
 ### 5. `create_cortical_area`
 **Purpose**: Add new cortical areas programmatically  
 **Endpoints**: 
@@ -62,7 +74,7 @@ Added 11 new diagnostic and genome editing tools to enable programmatic genome m
 - `/v1/cortical_area/custom_cortical_area` (for CUSTOM/MEMORY)
 
 **Parameters**:
-- `name`: Human-readable name
+- `name`: Human-readable name (follow [Cortical area naming policy](#cortical-area-naming-policy-mcp) above; never use an `Mcp` prefix)
 - `cortical_type`: "OPU", "IPU", "CUSTOM", or "MEMORY"
 - `dimensions`: [width, height, depth]
 - `position`: [x, y, z] coordinates
@@ -90,10 +102,17 @@ mcp.create_cortical_area(
     name="MyCircuit",
     cortical_type="CUSTOM",
     dimensions=[10, 10, 1],
-    position=[0, 0, 0],
+    position=[50, 50, 0],
     brain_region_id="<uuid-from-get_brain_regions>",
 )
 ```
+
+**Placement (MCP enforced for CUSTOM/MEMORY)** — before calling the API, the client checks:
+
+- **Origin clearance**: anchor must be **≥ 20 voxels** (Euclidean) from `(0,0,0)` so areas stay visible next to the BV axis helper.
+- **Label spacing**: anchor must be **≥ 32 voxels** (Euclidean) from every existing area anchor (from `get_cortical_area_geometry`) to reduce overlapping names in 3D.
+
+Set `skip_placement_validation=True` only if you must bypass these checks.
 
 ### 6. `update_cortical_area`
 **Purpose**: Modify existing cortical area properties  

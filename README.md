@@ -82,7 +82,7 @@ Add to your Cursor MCP settings (`~/.cursor/mcp.json`):
 - `get_cortical_synapse_counts` - Get incoming/outgoing synapse counts
 
 ### Genome Editing (NEW)
-- `create_cortical_area` - Add OPU/IPU/CUSTOM/MEMORY areas programmatically (CUSTOM/MEMORY require `brain_region_id` / circuit parent)
+- `create_cortical_area` - Add OPU/IPU/CUSTOM/MEMORY areas programmatically (CUSTOM/MEMORY require `brain_region_id`; MCP enforces origin/label spacing unless skipped). **Naming:** use intuitive role/circuit names; never prefix with `Mcp` — see `docs/NEW_TOOLS.md` (Cortical area naming policy).
 - `update_cortical_area` - Modify cortical area properties
 - `delete_cortical_area` - Remove cortical areas
 - `list_opu_areas` - List only motor output areas
