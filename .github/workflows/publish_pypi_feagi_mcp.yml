@@ -15,9 +15,11 @@ on:
         type: boolean
         default: false
 
+# Token auth only (same as feagi-python-sdk). Do not set id-token: write here unless you
+# configure Trusted Publishing for feagi-mcp on PyPI; otherwise the action may try OIDC first
+# and fail with invalid-publisher when PYPI_PASSWORD_TOKEN is missing or empty.
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   publish:
