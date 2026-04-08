@@ -1218,8 +1218,13 @@ class FeagiClient:
 
         This is the comprehensive escape hatch matching FEAGIHTTPAddressList routes.
 
+        Voxel/neuron inspection: use ``get_cortical_area_voxel_neurons`` with query
+        ``cortical_id``, ``x``, ``y``, ``z``, optional ``synapse_page`` (GET
+        ``/v1/cortical_area/voxel_neurons``).
+
         Args:
-            operation_id: e.g. get_system_health_check, put_cortical_area, post_mapping_afferents
+            operation_id: e.g. get_system_health_check, get_cortical_area_voxel_neurons,
+                put_cortical_area, post_mapping_afferents
             path_params: For paths containing {region_id}, {agent_id}, etc.
             query: URL query parameters
             json_body: JSON body for POST/PUT/PATCH, or for multipart upload op:

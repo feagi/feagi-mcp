@@ -102,6 +102,7 @@ Add to your Cursor MCP settings (`~/.cursor/mcp.json`):
 ### Brain Visualizer parity (full REST router)
 - `list_brain_visualizer_operations` - Index of every supported `operation_id` with HTTP method and path (same surface as `FEAGIHTTPAddressList.gd`)
 - `brain_visualizer_api` - Call any whitelisted operation: genome (save, amalgamation, circuits), cortical areas (geometry, properties, multi-put, reset, clone), regions (CRUD, relocate, clone), morphologies (CRUD, rename, usage), cortical mappings (afferents, efferents, batch), burst engine, system visualization tuning, neuroplasticity, insight/monitoring, agents (register, heartbeat, stimulation, device registrations), network, vision input. Use `path_params` for `{agent_id}` / `{region_id}` routes; for amalgamation-by-upload use `post_genome_amalgamation_by_upload_multipart` with `json_body: {\"genome_json\": \"...\"}`.
+- **Voxel / neuron inspection:** For a specific cortical area and voxel `(x,y,z)`—neuron details, incoming/outgoing synapses at that voxel, or debugging—use `operation_id` **`get_cortical_area_voxel_neurons`** (GET `/v1/cortical_area/voxel_neurons`) with `query`: `cortical_id`, `x`, `y`, `z`, optional `synapse_page`.
 
 ### Control
 - `stimulate_area` - Trigger neurons for testing

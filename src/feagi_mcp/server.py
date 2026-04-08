@@ -1026,6 +1026,13 @@ async def list_brain_visualizer_operations() -> list[dict[str, str]]:
     Brain Visualizer routes are defined in FEAGIHTTPAddressList.gd; this is the MCP index used
     to call the same endpoints via brain_visualizer_api. Call this first when you need an
     operation that has no dedicated named tool.
+
+    **Voxel / neuron inspection:** For questions about a specific voxel or neuron inside a
+    cortical area (actual neuron IDs, per-neuron properties, incoming/outgoing synapses at that
+    voxel, or debugging connectivity at a coordinate), use operation_id
+    ``get_cortical_area_voxel_neurons`` (GET ``/v1/cortical_area/voxel_neurons``) via
+    ``brain_visualizer_api`` with query ``cortical_id``, ``x``, ``y``, ``z``, and optional
+    ``synapse_page`` for paginated synapse lists.
     """
     return list_operation_summaries()
 
@@ -1043,11 +1050,20 @@ async def brain_visualizer_api(
     areas, regions, morphologies, mappings, burst, system visualization tuning, neuroplasticity,
     insight/monitoring, agents, network, and vision input.
 
+    **Voxel/neuron inspection:** When the user asks to inspect a particular voxel or neuron
+    within a cortical area, or to debug synapses at a coordinate, call
+    ``operation_id=\"get_cortical_area_voxel_neurons\"`` with ``query`` containing
+    ``cortical_id`` (base64 cortical ID), ``x``, ``y``, ``z`` (voxel indices), and optional
+    ``synapse_page`` (0-based) for paginated incoming/outgoing synapse detail. This maps to
+    GET ``/v1/cortical_area/voxel_neurons``.
+
     Args:
         operation_id: From list_brain_visualizer_operations (e.g. get_system_health_check,
-            put_cortical_area, post_mapping_afferents, put_region_relocate_members).
+            get_cortical_area_voxel_neurons, put_cortical_area, post_mapping_afferents,
+            put_region_relocate_members).
         path_params: Path placeholders, e.g. region_id, agent_id.
-        query: URL query params (amalgamation_id, circuit_origin_*, etc.).
+        query: URL query params (amalgamation_id, circuit_origin_*, cortical_id/x/y/z for voxel
+            neurons, etc.).
         json_body: JSON body. For post_genome_amalgamation_by_upload_multipart pass
             {\"genome_json\": \"<full genome json string>\"}.
 

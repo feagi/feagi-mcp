@@ -98,7 +98,10 @@ BV_OPERATIONS: Final[tuple[BvOperation, ...]] = (
         "get_cortical_area_voxel_neurons",
         "GET",
         "/v1/cortical_area/voxel_neurons",
-        "Neurons in voxel (query: cortical_id, x, y, z, synapse_page?)",
+        "Voxel neuron inspection: neurons at (x,y,z) in a cortical area with live properties "
+        "and paginated incoming/outgoing synapse details. Use when the user names a cortical "
+        "area and voxel coordinates and wants neuron-level detail, connectivity at that voxel, "
+        "or debugging (query: cortical_id, x, y, z; optional synapse_page for synapse lists).",
     ),
     BvOperation(
         "get_cortical_area_memory",

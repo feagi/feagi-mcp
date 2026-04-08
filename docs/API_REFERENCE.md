@@ -461,6 +461,31 @@ result = await validate_genome(genome_json)
 
 ---
 
+## Voxel and neuron inspection (`GET /v1/cortical_area/voxel_neurons`)
+
+Use **`brain_visualizer_api`** when the user asks to inspect a **specific voxel** or **neuron(s)** inside a **cortical area**, including:
+
+- Neuron-level properties at that coordinate (same live snapshot style as connectome neuron views)
+- **Incoming and outgoing synapse** detail for neurons in that voxel (paginated)
+- **Debugging** connectivity or behavior at a given `(x, y, z)` in an area
+
+**Parameters (query string):**
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `cortical_id` | Yes | Cortical area ID (base64 string from genome / `list_cortical_areas`) |
+| `x`, `y`, `z` | Yes | Voxel indices within that area |
+| `synapse_page` | No | 0-based page index for synapse detail lists (incoming and outgoing per page) |
+
+**MCP call:**
+
+- `operation_id`: `get_cortical_area_voxel_neurons`
+- `query`: `{ "cortical_id": "<id>", "x": 0, "y": 0, "z": 0, "synapse_page": 0 }`
+
+Resolve the cortical ID with **`list_cortical_areas`** (or genome tools) if the user gave a name instead of an ID.
+
+---
+
 ## Error Handling
 
 All tools return dictionaries that may include an `"error"` key:
