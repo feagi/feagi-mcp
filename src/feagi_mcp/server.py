@@ -421,10 +421,16 @@ async def validate_genome(genome_json: str) -> dict[str, Any]:
 
 @mcp.tool()
 async def health_check() -> dict[str, Any]:
-    """Check FEAGI server connectivity and health.
+    """Check FEAGI server connectivity and system health (GET /v1/system/health_check).
+
+    Includes ``amalgamation_pending`` when a merge is queued (``amalgamation_id``,
+    ``genome_title``, ``circuit_size``), ``brain_regions_root`` for choosing a parent
+    region when calling ``confirm_amalgamation_destination``, and usual counters
+    (``brain_readiness``, ``cortical_area_count``, etc.). Falls back to a minimal
+    payload if the system endpoint is unavailable.
 
     Returns:
-        Health status including reachability and current genome name
+        Full health_check JSON or a minimal ``status`` / ``genome_name`` object.
     """
     result = await feagi.health_check()
     return result
@@ -1075,6 +1081,58 @@ async def brain_visualizer_api(
         path_params=path_params,
         query=query,
         json_body=json_body,
+    )
+
+
+@mcp.tool()
+async def queue_amalgamation_by_payload(genome_json: str) -> Any:
+    """Queue an incoming genome for amalgamation (POST /v1/genome/amalgamation_by_payload).
+
+    ``genome_json`` must be a UTF-8 JSON string of the **full** genome document (same as
+    ``POST /v1/genome/upload``), not a wrapped object. After success, poll
+    ``health_check`` for ``amalgamation_pending``, then call
+    ``confirm_amalgamation_destination`` with the returned ``amalgamation_id`` and a
+    parent ``brain_region_id`` (typically ``brain_regions_root`` from health_check).
+
+    Returns:
+        API response, usually ``message`` and ``amalgamation_id``.
+    """
+    body = json.loads(genome_json)
+    return await feagi.brain_visualizer_operation(
+        "post_genome_amalgamation_by_payload",
+        json_body=body,
+    )
+
+
+@mcp.tool()
+async def confirm_amalgamation_destination(
+    amalgamation_id: str,
+    circuit_origin_x: int,
+    circuit_origin_y: int,
+    circuit_origin_z: int,
+    brain_region_id: str,
+    rewire_mode: str = "rewire_all",
+) -> Any:
+    """Complete a pending amalgamation (POST /v1/genome/amalgamation_destination).
+
+    Query parameters match Brain Visualizer: origin offsets and ``rewire_mode``.
+    JSON body must include ``brain_region_id`` (UUID of the parent region, usually root).
+
+    Returns:
+        API response including ``skipped_existing_areas`` (cortical IDs not created
+        because they already existed in the host genome — expected when importing a
+        genome that shares standard area IDs with the base brain).
+    """
+    return await feagi.brain_visualizer_operation(
+        "post_genome_amalgamation_destination",
+        query={
+            "amalgamation_id": amalgamation_id,
+            "circuit_origin_x": circuit_origin_x,
+            "circuit_origin_y": circuit_origin_y,
+            "circuit_origin_z": circuit_origin_z,
+            "rewire_mode": rewire_mode,
+        },
+        json_body={"brain_region_id": brain_region_id},
     )
 
 

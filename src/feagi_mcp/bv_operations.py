@@ -44,6 +44,12 @@ BV_OPERATIONS: Final[tuple[BvOperation, ...]] = (
         "Multipart amalgamation upload (use multipart helper)",
     ),
     BvOperation(
+        "post_genome_amalgamation_by_payload",
+        "POST",
+        "/v1/genome/amalgamation_by_payload",
+        "Queue amalgamation: JSON body is the full genome document (same shape as upload)",
+    ),
+    BvOperation(
         "delete_genome_amalgamation_cancellation",
         "DELETE",
         "/v1/genome/amalgamation_cancellation",

@@ -70,10 +70,34 @@ class FeagiClient:
         await self._client.aclose()
 
     async def health_check(self) -> dict[str, Any]:
-        """Check if FEAGI is reachable."""
+        """Check FEAGI reachability and full system health (incl. amalgamation_pending).
+
+        Uses GET /v1/system/health_check so callers can see pending amalgamation state
+        (``amalgamation_pending``) and ``brain_regions_root`` for placement. Falls back to
+        GET /v1/genome/name if the system endpoint is unavailable.
+        """
+        try:
+            response = await self._client.get(f"{self.base_url}/v1/system/health_check")
+            if response.status_code == 200:
+                data = _as_json_dict(response.json())
+                data.setdefault("status", "ok")
+                return data
+            logger.warning(
+                "health_check: GET /v1/system/health_check returned HTTP %s; falling back",
+                response.status_code,
+            )
+        except Exception as e:
+            logger.warning("health_check: system health_check failed (%s); falling back", e)
+
         try:
             response = await self._client.get(f"{self.base_url}/v1/genome/name")
-            return {"status": "ok", "genome_name": response.json()}
+            if response.status_code == 200:
+                return {"status": "ok", "genome_name": response.json()}
+            return {
+                "status": "error",
+                "message": response.text,
+                "http_status": response.status_code,
+            }
         except Exception as e:
             logger.error(f"Health check failed: {e}")
             return {"status": "error", "message": str(e)}
