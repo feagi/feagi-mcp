@@ -1307,3 +1307,963 @@ class FeagiClient:
         except Exception as e:
             logger.error("brain_visualizer_operation failed: %s", e)
             return {"error": "request_failed", "message": str(e)}
+
+    # ------------------------------------------------------------------
+    # Runtime taps & log surface (server-side endpoints added to feagi-core
+    # to address MCP debugging gaps #4 motor-output tap, #5 sensor read,
+    # #8 log tail).
+    # ------------------------------------------------------------------
+
+    async def get_motor_snapshot_last(
+        self, agent_id: str | None = None
+    ) -> dict[str, Any]:
+        """GET /v1/output/motor_snapshot/last - latest motor output captured by the burst loop.
+
+        Args:
+            agent_id: Optional agent filter applied to the per-agent publish stats.
+
+        Returns:
+            Dict with ``burst_num``, ``timestamp_ms``, ``has_data``, ``total_areas``,
+            ``total_neurons``, ``areas`` (per-cortical-area firing samples), and
+            ``agents`` (per-agent publish stats including ``published`` and ``last_error``).
+        """
+        try:
+            params: dict[str, str] = {}
+            if isinstance(agent_id, str) and agent_id.strip():
+                params["agent_id"] = agent_id.strip()
+            response = await self._client.get(
+                f"{self.base_url}/v1/output/motor_snapshot/last",
+                params=params or None,
+            )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error("get_motor_snapshot_last failed: %s", e)
+            return {"error": str(e)}
+
+    async def get_sensor_snapshot_last(
+        self, cortical_id: str | None = None
+    ) -> dict[str, Any]:
+        """GET /v1/input/sensor_snapshot/last - latest sensory input decoded this burst.
+
+        Args:
+            cortical_id: Optional base64 cortical id filter.
+
+        Returns:
+            Dict with ``burst_num``, ``timestamp_ms``, ``has_data``, ``total_areas``,
+            ``total_neurons``, and ``areas`` (per-cortical-area decoded XYZP samples).
+        """
+        try:
+            params: dict[str, str] = {}
+            if isinstance(cortical_id, str) and cortical_id.strip():
+                params["cortical_id"] = cortical_id.strip()
+            response = await self._client.get(
+                f"{self.base_url}/v1/input/sensor_snapshot/last",
+                params=params or None,
+            )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error("get_sensor_snapshot_last failed: %s", e)
+            return {"error": str(e)}
+
+    async def get_log_tail(
+        self,
+        level: str | None = None,
+        target_prefix: str | None = None,
+        since_ts_ms: int | None = None,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        """GET /v1/system/log_tail - recent log records from the in-process tracing ring buffer.
+
+        Args:
+            level: Minimum severity (TRACE/DEBUG/INFO/WARN/ERROR).
+            target_prefix: Restrict to tracing targets starting with this prefix.
+            since_ts_ms: Only return records emitted at or after this Unix timestamp (ms).
+            limit: Maximum records to return.
+
+        Returns:
+            Dict with ``enabled`` (False if FEAGI_LOG_RING_BUFFER_CAPACITY=0),
+            ``capacity``, ``returned``, and ``records`` (oldest-first list of
+            ``timestamp_ms``/``level``/``target``/``file``/``line``/``message``/``fields``).
+        """
+        try:
+            params: dict[str, str] = {}
+            if isinstance(level, str) and level.strip():
+                params["level"] = level.strip()
+            if isinstance(target_prefix, str) and target_prefix.strip():
+                params["target_prefix"] = target_prefix.strip()
+            if isinstance(since_ts_ms, int):
+                params["since_ts_ms"] = str(int(since_ts_ms))
+            if isinstance(limit, int) and limit > 0:
+                params["limit"] = str(int(limit))
+            response = await self._client.get(
+                f"{self.base_url}/v1/system/log_tail",
+                params=params or None,
+            )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error("get_log_tail failed: %s", e)
+            return {"error": str(e)}
+
+    # ------------------------------------------------------------------
+    # Burst engine control & state inspection (deficiency #9 -
+    # deterministic step-debug). These thin wrappers expose burst control
+    # to the LLM without forcing it through the BV escape hatch.
+    # ------------------------------------------------------------------
+
+    async def get_burst_counter(self) -> dict[str, Any]:
+        """GET /v1/burst_engine/burst_counter - current burst index."""
+        try:
+            response = await self._client.get(
+                f"{self.base_url}/v1/burst_engine/burst_counter"
+            )
+            if response.status_code == 200:
+                return {"burst_counter": int(response.json())}
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error("get_burst_counter failed: %s", e)
+            return {"error": str(e)}
+
+    async def get_burst_engine_config(self) -> dict[str, Any]:
+        """GET /v1/burst_engine/config - frequency, run/pause flags, interval."""
+        try:
+            response = await self._client.get(
+                f"{self.base_url}/v1/burst_engine/config"
+            )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error("get_burst_engine_config failed: %s", e)
+            return {"error": str(e)}
+
+    async def set_burst_engine_frequency(self, frequency_hz: float) -> dict[str, Any]:
+        """PUT /v1/burst_engine/config - set burst frequency in Hz.
+
+        Slowing the engine (e.g. 1-5 Hz) makes circuit debugging deterministic by
+        giving the LLM time to inspect state between bursts.
+        """
+        try:
+            if not isinstance(frequency_hz, (int, float)) or frequency_hz <= 0:
+                return {"error": "frequency_hz must be positive"}
+            response = await self._client.put(
+                f"{self.base_url}/v1/burst_engine/config",
+                json={"burst_frequency_hz": float(frequency_hz)},
+            )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error("set_burst_engine_frequency failed: %s", e)
+            return {"error": str(e)}
+
+    async def control_burst_engine(self, action: str) -> dict[str, Any]:
+        """POST /v1/burst_engine/control - start/pause/stop the burst engine.
+
+        Args:
+            action: One of ``start``, ``resume``, ``pause``, or ``stop``.
+        """
+        normalized = action.strip().lower() if isinstance(action, str) else ""
+        valid_actions = {"start", "resume", "pause", "stop"}
+        if normalized not in valid_actions:
+            return {
+                "error": "invalid_action",
+                "message": f"action must be one of {sorted(valid_actions)}",
+            }
+        try:
+            response = await self._client.post(
+                f"{self.base_url}/v1/burst_engine/control",
+                json={"action": normalized},
+            )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error("control_burst_engine failed: %s", e)
+            return {"error": str(e)}
+
+    async def pause_burst_engine(self) -> dict[str, Any]:
+        """POST /v1/burst_engine/hold - explicit hold endpoint (LLM-friendly alias)."""
+        try:
+            response = await self._client.post(
+                f"{self.base_url}/v1/burst_engine/hold"
+            )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error("pause_burst_engine failed: %s", e)
+            return {"error": str(e)}
+
+    async def resume_burst_engine(self) -> dict[str, Any]:
+        """POST /v1/burst_engine/resume - resume after a hold."""
+        try:
+            response = await self._client.post(
+                f"{self.base_url}/v1/burst_engine/resume"
+            )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error("resume_burst_engine failed: %s", e)
+            return {"error": str(e)}
+
+    # ------------------------------------------------------------------
+    # Neuron / synapse runtime inspection (deficiencies #1 inspect_neuron_state,
+    # #2 list placed synapses, plus bonus voxel/neuron-id tools).
+    # ------------------------------------------------------------------
+
+    async def inspect_neuron_state_at(
+        self,
+        cortical_id: str,
+        x: int,
+        y: int,
+        z: int,
+    ) -> dict[str, Any]:
+        """GET /v1/connectome/neuron_properties_at - neuron runtime properties at a voxel.
+
+        Returns neuron-level state (membrane potential, threshold, refractory,
+        last_input, etc.) for the neuron at the given coordinate.
+        """
+        try:
+            response = await self._client.get(
+                f"{self.base_url}/v1/connectome/neuron_properties_at",
+                params={
+                    "cortical_id": str(cortical_id),
+                    "x": str(int(x)),
+                    "y": str(int(y)),
+                    "z": str(int(z)),
+                },
+            )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error("inspect_neuron_state_at failed: %s", e)
+            return {"error": str(e)}
+
+    async def get_neuron_state_by_id(self, neuron_id: str) -> dict[str, Any]:
+        """GET /v1/connectome/neuron/{neuron_id}/properties - neuron state by stable id."""
+        nid = str(neuron_id).strip()
+        if not nid:
+            return {"error": "neuron_id must be non-empty"}
+        try:
+            response = await self._client.get(
+                f"{self.base_url}/v1/connectome/neuron/{nid}/properties"
+            )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error("get_neuron_state_by_id failed: %s", e)
+            return {"error": str(e)}
+
+    async def get_voxel_neurons(
+        self,
+        cortical_id: str,
+        x: int,
+        y: int,
+        z: int,
+        synapse_page: int | None = None,
+    ) -> dict[str, Any]:
+        """GET /v1/cortical_area/voxel_neurons - all neurons + synapses at a voxel.
+
+        Same payload Brain Visualizer uses for its voxel inspector. ``synapse_page``
+        (0-based) requests a paginated incoming/outgoing synapse list.
+        """
+        try:
+            params: dict[str, str] = {
+                "cortical_id": str(cortical_id),
+                "x": str(int(x)),
+                "y": str(int(y)),
+                "z": str(int(z)),
+            }
+            if isinstance(synapse_page, int) and synapse_page >= 0:
+                params["synapse_page"] = str(int(synapse_page))
+            response = await self._client.get(
+                f"{self.base_url}/v1/cortical_area/voxel_neurons",
+                params=params,
+            )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error("get_voxel_neurons failed: %s", e)
+            return {"error": str(e)}
+
+    async def list_area_synapses(self, cortical_area_id: str) -> dict[str, Any]:
+        """GET /v1/connectome/{cortical_area_id}/synapses - placed synapses for one area.
+
+        Returns the actual realized per-synapse list (source/target neuron ids,
+        weights, postsynaptic potentials, type) - not just morphology rules.
+        """
+        area = str(cortical_area_id).strip()
+        if not area:
+            return {"error": "cortical_area_id must be non-empty"}
+        try:
+            response = await self._client.get(
+                f"{self.base_url}/v1/connectome/{area}/synapses"
+            )
+            if response.status_code == 200:
+                payload = response.json()
+                if isinstance(payload, list):
+                    return {
+                        "cortical_area_id": area,
+                        "synapse_count": len(payload),
+                        "synapses": payload,
+                    }
+                return _as_json_dict(payload)
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error("list_area_synapses failed: %s", e)
+            return {"error": str(e)}
+
+    # ------------------------------------------------------------------
+    # Agent / monitoring helpers (#3 capabilities diagnostic, #7 batched
+    # monitoring).
+    # ------------------------------------------------------------------
+
+    async def list_agent_capabilities_all(
+        self, include_device_registrations: bool = True
+    ) -> dict[str, Any]:
+        """GET /v1/agent/capabilities/all - raw multi-agent capabilities payload.
+
+        Diagnostic for cases where ``get_agent_device_registrations`` returns empty
+        but devices are clearly active. Returns the full FEAGI response unmodified.
+        """
+        try:
+            params = {
+                "include_device_registrations": (
+                    "true" if include_device_registrations else "false"
+                )
+            }
+            response = await self._client.get(
+                f"{self.base_url}/v1/agent/capabilities/all",
+                params=params,
+            )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error("list_agent_capabilities_all failed: %s", e)
+            return {"error": str(e)}
+
+    async def monitor_activity_batch(
+        self,
+        area_ids: list[str],
+        duration_ms: int = 1000,
+    ) -> dict[str, Any]:
+        """Fan out :meth:`monitor_activity` over multiple areas in parallel.
+
+        Composes the existing ``GET /v1/monitoring/cortical_activity`` endpoint
+        (no new server route) but issues all requests concurrently so a typical
+        4-6 area inspection completes in roughly the duration of a single call.
+
+        Returns:
+            Dict mapping ``area_id`` -> per-area activity payload (or error dict).
+        """
+        import asyncio
+
+        if not isinstance(area_ids, list) or not area_ids:
+            return {"error": "area_ids must be a non-empty list"}
+        clean_ids: list[str] = []
+        for raw in area_ids:
+            if not isinstance(raw, str) or not raw.strip():
+                return {"error": "area_ids must contain non-empty strings"}
+            clean_ids.append(raw.strip())
+        try:
+            results = await asyncio.gather(
+                *(self.monitor_activity(aid, duration_ms) for aid in clean_ids),
+                return_exceptions=True,
+            )
+        except Exception as e:
+            logger.error("monitor_activity_batch fan-out failed: %s", e)
+            return {"error": str(e)}
+
+        per_area: dict[str, Any] = {}
+        for aid, outcome in zip(clean_ids, results, strict=True):
+            if isinstance(outcome, BaseException):
+                per_area[aid] = {"error": "request_failed", "message": str(outcome)}
+            else:
+                per_area[aid] = outcome
+        return {
+            "duration_ms": duration_ms,
+            "area_count": len(clean_ids),
+            "results": per_area,
+        }
+
+    # ------------------------------------------------------------------
+    # Slim/paginated views (Tier 1 MCP improvements)
+    # ------------------------------------------------------------------
+
+    async def list_morphologies_summary(
+        self,
+        name_substring: str | None = None,
+        type_filter: str | None = None,
+        class_filter: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Slim morphology listing: returns ``{name, type, class, pattern_count}`` only.
+
+        Wraps :meth:`list_morphologies` (which returns full pattern arrays for ~70+
+        morphologies) and projects to a ~30-byte-per-row summary. This avoids the
+        token wall when the full payload is too large for an MCP response.
+
+        Args:
+            name_substring: Optional case-insensitive substring filter on name.
+            type_filter: Exact match on ``type`` field (e.g. ``"patterns"``).
+            class_filter: Exact match on ``class`` field (e.g. ``"core"`` or ``"custom"``).
+            limit: Max rows to return (default 50, hard cap 500).
+            offset: Skip first N rows after filtering (for pagination).
+
+        Returns:
+            Dict with ``total_unfiltered``, ``total_filtered``, ``returned``, ``offset``,
+            ``limit``, and ``items`` (list of slim row dicts).
+        """
+        try:
+            limit = max(1, min(int(limit), 500))
+            offset = max(0, int(offset))
+            full = await self.list_morphologies()
+            if not isinstance(full, dict) or "error" in full:
+                return full if isinstance(full, dict) else {"error": "bad_payload"}
+            total_unfiltered = len(full)
+            name_needle = (name_substring or "").lower().strip()
+            type_needle = (type_filter or "").strip()
+            class_needle = (class_filter or "").strip()
+
+            rows: list[dict[str, Any]] = []
+            for morph_name, morph_data in full.items():
+                if not isinstance(morph_data, dict):
+                    continue
+                if name_needle and name_needle not in str(morph_name).lower():
+                    continue
+                m_type = str(morph_data.get("type", ""))
+                if type_needle and m_type != type_needle:
+                    continue
+                m_class = str(morph_data.get("class", ""))
+                if class_needle and m_class != class_needle:
+                    continue
+                params = morph_data.get("parameters") or {}
+                pattern_count = 0
+                if isinstance(params, dict):
+                    if isinstance(params.get("patterns"), list):
+                        pattern_count = len(params["patterns"])
+                    elif isinstance(params.get("vectors"), list):
+                        pattern_count = len(params["vectors"])
+                rows.append(
+                    {
+                        "name": str(morph_name),
+                        "type": m_type,
+                        "class": m_class,
+                        "pattern_count": pattern_count,
+                        "source": str(morph_data.get("source", "")),
+                    }
+                )
+            rows.sort(key=lambda r: r["name"])
+            total_filtered = len(rows)
+            window = rows[offset : offset + limit]
+            return {
+                "total_unfiltered": total_unfiltered,
+                "total_filtered": total_filtered,
+                "returned": len(window),
+                "offset": offset,
+                "limit": limit,
+                "items": window,
+            }
+        except Exception as e:
+            logger.error("list_morphologies_summary failed: %s", e)
+            return {"error": str(e)}
+
+    async def get_connectivity_summary(
+        self,
+        src_filter: str | None = None,
+        dst_filter: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Slim connectivity table: ``[{src, dst, morphology, psc_mult, plasticity}]``.
+
+        Reads the cortical_map_detailed payload (smaller than the full genome blueprint)
+        and emits a tabular summary suitable for one-shot MCP responses. Filters apply
+        to the underlying cortical IDs before pagination.
+
+        Args:
+            src_filter: Optional cortical ID substring filter (matched against src).
+            dst_filter: Optional cortical ID substring filter (matched against dst).
+            limit: Max rows to return (default 100, hard cap 2000).
+            offset: Skip first N rows after filtering.
+
+        Returns:
+            Dict with ``total_filtered``, ``returned``, ``offset``, ``limit``, ``items``.
+        """
+        try:
+            limit = max(1, min(int(limit), 2000))
+            offset = max(0, int(offset))
+            detailed = await self.get_cortical_map_detailed()
+            if not isinstance(detailed, dict) or "error" in detailed:
+                return detailed if isinstance(detailed, dict) else {"error": "bad_payload"}
+            src_needle = (src_filter or "").strip()
+            dst_needle = (dst_filter or "").strip()
+
+            rows: list[dict[str, Any]] = []
+            for src_id, dst_map in detailed.items():
+                if src_needle and src_needle not in src_id:
+                    continue
+                if not isinstance(dst_map, dict):
+                    continue
+                for dst_id, mapping_rules in dst_map.items():
+                    if dst_needle and dst_needle not in dst_id:
+                        continue
+                    if not isinstance(mapping_rules, list):
+                        continue
+                    for rule in mapping_rules:
+                        if not isinstance(rule, dict):
+                            continue
+                        rows.append(
+                            {
+                                "src": src_id,
+                                "dst": dst_id,
+                                "morphology": rule.get("morphology_id", ""),
+                                "psc_mult": rule.get("postSynapticCurrent_multiplier"),
+                                "plasticity": bool(rule.get("plasticity_flag", False)),
+                                "plasticity_constant": rule.get("plasticity_constant"),
+                            }
+                        )
+            rows.sort(key=lambda r: (r["src"], r["dst"], str(r["morphology"])))
+            total_filtered = len(rows)
+            window = rows[offset : offset + limit]
+            return {
+                "total_filtered": total_filtered,
+                "returned": len(window),
+                "offset": offset,
+                "limit": limit,
+                "items": window,
+            }
+        except Exception as e:
+            logger.error("get_connectivity_summary failed: %s", e)
+            return {"error": str(e)}
+
+    # Plasticity-relevant fields surfaced by inspect_cortical_areas_minimal.
+    # Kept short and stable so MCP consumers can rely on a known shape.
+    _MINIMAL_AREA_FIELDS: tuple[str, ...] = (
+        "cortical_name",
+        "area_type",
+        "cortical_dimensions",
+        "neuron_count",
+        "neuron_fire_threshold",
+        "neuron_post_synaptic_potential",
+        "neuron_post_synaptic_potential_max",
+        "neuron_excitability",
+        "neuron_leak_coefficient",
+        "neuron_refractory_period",
+        "neuron_snooze_period",
+        "neuron_consecutive_fire_count",
+        "neuron_plasticity_constant",
+        "neuron_psp_uniform_distribution",
+        "neuron_mp_charge_accumulation",
+        "neuron_burst_engine_active",
+        "incoming_synapse_count",
+        "outgoing_synapse_count",
+    )
+
+    async def inspect_cortical_areas_minimal(
+        self,
+        cortical_ids: list[str],
+    ) -> dict[str, Any]:
+        """Project full inspection payload to ~18 plasticity-relevant fields per area.
+
+        Wraps :meth:`fetch_multi_cortical_area_properties` and discards verbose fields
+        (visualization geometry, encoding option lists, properties dict, etc.) so a
+        five-area sweep fits comfortably in a single MCP response.
+
+        Returns:
+            Dict mapping ``cortical_id`` -> projected field dict.
+        """
+        try:
+            if not isinstance(cortical_ids, list) or not cortical_ids:
+                return {"error": "cortical_ids must be a non-empty list"}
+            clean_ids: list[str] = []
+            for raw in cortical_ids:
+                if not isinstance(raw, str) or not raw.strip():
+                    return {"error": "cortical_ids must contain non-empty strings"}
+                clean_ids.append(raw.strip())
+            full = await self.fetch_multi_cortical_area_properties(clean_ids)
+            if not isinstance(full, dict) or "error" in full:
+                return full if isinstance(full, dict) else {"error": "bad_payload"}
+            slim: dict[str, Any] = {}
+            for cid, area in full.items():
+                if not isinstance(area, dict):
+                    slim[cid] = {"error": "bad_area_record"}
+                    continue
+                projected: dict[str, Any] = {}
+                for field in self._MINIMAL_AREA_FIELDS:
+                    if field in area:
+                        projected[field] = area[field]
+                slim[cid] = projected
+            return slim
+        except Exception as e:
+            logger.error("inspect_cortical_areas_minimal failed: %s", e)
+            return {"error": str(e)}
+
+    # ------------------------------------------------------------------
+    # Circuit-design primitives
+    # ------------------------------------------------------------------
+
+    async def build_reflex_mapping(
+        self,
+        src_area_id: str,
+        dst_area_id: str,
+        morphology_name: str,
+        voxel_mappings: list[dict[str, Any]],
+        postsynaptic_current_multiplier: int,
+        plasticity_flag: bool = False,
+        plasticity_constant: int = 0,
+        ltp_multiplier: int = 1,
+        ltd_multiplier: int = 1,
+        plasticity_window: int = 10,
+        synaptic_delay_bursts: int = 0,
+        morphology_scalar: list[int] | None = None,
+        replace_existing: bool = False,
+    ) -> dict[str, Any]:
+        """Create a custom ``patterns`` morphology and wire src->dst with it in one call.
+
+        Compiles ``voxel_mappings`` (each ``{"src": [x,y,z], "dst": [x,y,z]}``) to the
+        FEAGI patterns morphology JSON, registers it via :meth:`create_morphology`, then
+        attaches it to a new mapping entry between ``src_area_id`` and ``dst_area_id``
+        via :meth:`update_cortical_mapping`. By default the new entry is appended to
+        any existing mapping rules; pass ``replace_existing=True`` to overwrite.
+
+        Args:
+            src_area_id: Base64 source cortical ID.
+            dst_area_id: Base64 destination cortical ID.
+            morphology_name: Unique name for the new morphology (e.g. ``"hinge_to_cart"``).
+            voxel_mappings: List of ``{"src":[x,y,z], "dst":[x,y,z]}`` dicts. Wildcards
+                are supported by passing the string ``"*"``, ``"?"``, or ``"!"`` in place
+                of an integer (FEAGI pattern semantics).
+            postsynaptic_current_multiplier: Synaptic gain. Positive = excite, negative = inhibit.
+            plasticity_flag: Enable STDP on this mapping rule.
+            plasticity_constant: STDP base learning rate (integer; FEAGI scales internally).
+            ltp_multiplier / ltd_multiplier / plasticity_window / synaptic_delay_bursts:
+                Pass-through STDP parameters; defaults are sensible for an excitatory
+                Hebbian rule with no axonal delay.
+            morphology_scalar: Optional ``[x,y,z]`` scalar override; usually ``None``.
+            replace_existing: If True, overwrite all current mapping rules with this one.
+
+        Returns:
+            Dict with ``morphology_create``, ``mapping_update``, and ``rule`` (the
+            assembled mapping rule that was sent), or ``error`` on failure.
+        """
+        try:
+            if not isinstance(voxel_mappings, list) or not voxel_mappings:
+                return {"error": "voxel_mappings must be a non-empty list"}
+            patterns: list[Any] = []
+            for idx, vm in enumerate(voxel_mappings):
+                if not isinstance(vm, dict):
+                    return {"error": f"voxel_mappings[{idx}] must be a dict"}
+                src_xyz = vm.get("src")
+                dst_xyz = vm.get("dst")
+                if (
+                    not isinstance(src_xyz, list)
+                    or not isinstance(dst_xyz, list)
+                    or len(src_xyz) != 3
+                    or len(dst_xyz) != 3
+                ):
+                    return {
+                        "error": (
+                            f"voxel_mappings[{idx}] must have 'src' and 'dst' lists of length 3"
+                        )
+                    }
+                patterns.append([list(src_xyz), list(dst_xyz)])
+            morph_create = await self.create_morphology(
+                morphology_name=morphology_name,
+                morphology_type="patterns",
+                morphology_parameters={"patterns": patterns},
+            )
+            if isinstance(morph_create, dict) and "error" in morph_create:
+                return {
+                    "error": "create_morphology_failed",
+                    "morphology_create": morph_create,
+                }
+
+            scalar = morphology_scalar if morphology_scalar is not None else [1, 1, 1]
+            new_rule: dict[str, Any] = {
+                "morphology_id": morphology_name,
+                "morphology_scalar": scalar,
+                "postSynapticCurrent_multiplier": int(postsynaptic_current_multiplier),
+                "plasticity_flag": bool(plasticity_flag),
+                "plasticity_constant": int(plasticity_constant),
+                "ltp_multiplier": int(ltp_multiplier),
+                "ltd_multiplier": int(ltd_multiplier),
+                "plasticity_window": int(plasticity_window),
+                "synaptic_delay_bursts": int(synaptic_delay_bursts),
+            }
+
+            if replace_existing:
+                rules: list[dict[str, Any]] = [new_rule]
+            else:
+                existing = await self.get_cortical_mapping(src_area_id, dst_area_id)
+                rules = []
+                if isinstance(existing, dict):
+                    raw_rules = existing.get("rules")
+                    if isinstance(raw_rules, list):
+                        for r in raw_rules:
+                            if isinstance(r, dict):
+                                rules.append(r)
+                rules.append(new_rule)
+
+            mapping_update = await self.update_cortical_mapping(
+                src_area=src_area_id,
+                dst_area=dst_area_id,
+                mapping_rules=rules,
+            )
+            return {
+                "morphology_create": morph_create,
+                "mapping_update": mapping_update,
+                "rule": new_rule,
+                "patterns_count": len(patterns),
+            }
+        except Exception as e:
+            logger.error("build_reflex_mapping failed: %s", e)
+            return {"error": str(e)}
+
+    async def auto_polarity_probe(
+        self,
+        opu_id: str,
+        sensor_id: str,
+        columns: list[int] | None = None,
+        intensity_z: int = 5,
+        repeats: int = 3,
+        settle_ms: int = 400,
+    ) -> dict[str, Any]:
+        """Force-fire each column of an OPU and report the sensor delta it produces.
+
+        For each ``x`` in ``columns``: stimulate ``(x, 0, intensity_z)`` for ``repeats``
+        bursts, wait ``settle_ms``, then compare the latest sensor snapshot for
+        ``sensor_id`` against the pre-stimulation baseline. Useful for discovering
+        which OPU column drives an actuator in which physical direction without
+        having to hand-decode encoder voxels.
+
+        IMPORTANT: This requires the embodiment agent to be subscribed to motor
+        output for ``opu_id``. If no agent is subscribed, the cart will not move
+        and the deltas will be zero.
+
+        Args:
+            opu_id: Base64 OPU cortical ID to probe (e.g. cart motor).
+            sensor_id: Base64 IPU cortical ID to observe (e.g. cart-velocity sensor).
+            columns: List of x-coordinates to probe. Defaults to ``[0, 1]``.
+            intensity_z: Z coordinate to use during stimulation.
+            repeats: Number of force-fire stimuli per column.
+            settle_ms: Time to wait between stimulation and post-stim snapshot.
+
+        Returns:
+            Dict with ``baseline``, per-column probe results (``stim_xyz``,
+            ``post_samples``, ``observed_z_shift``), and ``inferred_direction_map``
+            mapping each probed column to a coarse ``"positive_z"`` / ``"negative_z"``
+            / ``"no_change"`` label based on weighted z-centroid shift.
+        """
+        import asyncio
+
+        try:
+            cols = list(columns) if columns else [0, 1]
+            cols = [int(c) for c in cols]
+
+            async def _sensor_centroid_z() -> float | None:
+                snap = await self.get_sensor_snapshot_last(sensor_id)
+                if not isinstance(snap, dict) or "error" in snap:
+                    return None
+                areas = snap.get("areas")
+                if not isinstance(areas, list) or not areas:
+                    return None
+                samples = areas[0].get("samples") if isinstance(areas[0], dict) else None
+                if not isinstance(samples, list) or not samples:
+                    return None
+                total_w = 0.0
+                weighted = 0.0
+                for s in samples:
+                    if not isinstance(s, dict):
+                        continue
+                    z_val = float(s.get("z", 0))
+                    p = float(s.get("potential", 0.0))
+                    if p <= 0:
+                        continue
+                    weighted += z_val * p
+                    total_w += p
+                return weighted / total_w if total_w > 0 else None
+
+            baseline_z = await _sensor_centroid_z()
+
+            results: list[dict[str, Any]] = []
+            for col in cols:
+                stim_payload = {opu_id: [[col, 0, int(intensity_z)]] * max(1, int(repeats))}
+                stim = await self.stimulate_areas(stim_payload, mode="force_fire")
+                await asyncio.sleep(max(0, int(settle_ms)) / 1000.0)
+                post_z = await _sensor_centroid_z()
+                shift = (
+                    None
+                    if baseline_z is None or post_z is None
+                    else (post_z - baseline_z)
+                )
+                results.append(
+                    {
+                        "stim_xyz": [col, 0, int(intensity_z)],
+                        "stimulation_result": stim,
+                        "baseline_z_centroid": baseline_z,
+                        "post_z_centroid": post_z,
+                        "observed_z_shift": shift,
+                    }
+                )
+
+            inferred: dict[str, str] = {}
+            shift_threshold = 0.25
+            for r in results:
+                key = f"col_{r['stim_xyz'][0]}"
+                shift = r.get("observed_z_shift")
+                if shift is None:
+                    inferred[key] = "indeterminate"
+                elif shift > shift_threshold:
+                    inferred[key] = "positive_z"
+                elif shift < -shift_threshold:
+                    inferred[key] = "negative_z"
+                else:
+                    inferred[key] = "no_change"
+
+            return {
+                "opu_id": opu_id,
+                "sensor_id": sensor_id,
+                "columns": cols,
+                "intensity_z": int(intensity_z),
+                "repeats": int(repeats),
+                "settle_ms": int(settle_ms),
+                "baseline_z_centroid": baseline_z,
+                "results": results,
+                "inferred_direction_map": inferred,
+            }
+        except Exception as e:
+            logger.error("auto_polarity_probe failed: %s", e)
+            return {"error": str(e)}
+
+    # ------------------------------------------------------------------
+    # Embodiment introspection (proxies to controller-side endpoints)
+    # ------------------------------------------------------------------
+
+    async def embodiment_get_physics_state(
+        self,
+        introspection_url: str,
+        timeout_s: float = 2.0,
+    ) -> dict[str, Any]:
+        """GET <introspection_url>/v1/state - raw embodiment physics state.
+
+        Proxies to a small HTTP endpoint exposed by the embodiment controller
+        (currently implemented for the MuJoCo controller). Provides ground truth
+        joint positions, velocities, applied forces, and sensor scalars without
+        going through the FEAGI encoder pipeline.
+
+        Args:
+            introspection_url: Base URL of the controller's introspection server,
+                e.g. ``"http://localhost:9876"``.
+            timeout_s: HTTP timeout.
+
+        Returns:
+            Whatever the controller exposes; typically
+            ``{"time": float, "joints": {...}, "actuators": {...}, "sensors": {...}}``.
+        """
+        try:
+            url = introspection_url.rstrip("/") + "/v1/state"
+            async with httpx.AsyncClient(timeout=timeout_s) as client:
+                response = await client.get(url)
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error("embodiment_get_physics_state failed: %s", e)
+            return {"error": str(e)}
+
+    async def embodiment_set_joint_state(
+        self,
+        introspection_url: str,
+        joint_qpos: dict[str, float] | None = None,
+        joint_qvel: dict[str, float] | None = None,
+        timeout_s: float = 2.0,
+    ) -> dict[str, Any]:
+        """POST <introspection_url>/v1/set_state - place joints deterministically.
+
+        Use to test reflex polarity (e.g. "what does my circuit do when the
+        pendulum is at +30°?") without waiting for natural fall.
+
+        Args:
+            introspection_url: Base URL of the controller's introspection server.
+            joint_qpos: Mapping ``joint_name -> qpos_value``.
+            joint_qvel: Mapping ``joint_name -> qvel_value``.
+            timeout_s: HTTP timeout.
+        """
+        try:
+            payload: dict[str, Any] = {}
+            if joint_qpos:
+                payload["joint_qpos"] = {str(k): float(v) for k, v in joint_qpos.items()}
+            if joint_qvel:
+                payload["joint_qvel"] = {str(k): float(v) for k, v in joint_qvel.items()}
+            if not payload:
+                return {"error": "joint_qpos or joint_qvel must be provided"}
+            url = introspection_url.rstrip("/") + "/v1/set_state"
+            async with httpx.AsyncClient(timeout=timeout_s) as client:
+                response = await client.post(url, json=payload)
+            if 200 <= response.status_code < 300:
+                return _as_json_dict(response.json()) or {"status": "ok"}
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error("embodiment_set_joint_state failed: %s", e)
+            return {"error": str(e)}
