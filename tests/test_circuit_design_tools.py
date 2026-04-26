@@ -333,6 +333,44 @@ class TestBuildReflexMapping:
         assert out["error"] == "create_morphology_failed"
         mock_client.update_cortical_mapping.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_max_weight_and_plasticity_eta_pass_through(self, mock_client):
+        mock_client.create_morphology = AsyncMock(return_value={"success": True})
+        mock_client.get_cortical_mapping = AsyncMock(return_value={"rules": []})
+        mock_client.update_cortical_mapping = AsyncMock(return_value={"success": True})
+        out = await mock_client.build_reflex_mapping(
+            src_area_id="src",
+            dst_area_id="dst",
+            morphology_name="m",
+            voxel_mappings=[{"src": [0, 0, 0], "dst": [0, 0, 0]}],
+            postsynaptic_current_multiplier=1,
+            plasticity_flag=True,
+            plasticity_mode="rstdp",
+            eligibility_decay_bursts=10,
+            reward_source_area="aA==",
+            punishment_source_area="aQ==",
+            max_weight=10.0,
+            plasticity_eta=0.01,
+        )
+        r = out["rule"]
+        assert r["max_weight"] == 10.0
+        assert r["plasticity_eta"] == 0.01
+        assert mock_client.update_cortical_mapping.await_args.kwargs["mapping_rules"][-1] == r
+
+    @pytest.mark.asyncio
+    async def test_ltp_multiplier_rejected_outside_i8(self, mock_client):
+        mock_client.create_morphology = AsyncMock(return_value={"success": True})
+        out = await mock_client.build_reflex_mapping(
+            src_area_id="src",
+            dst_area_id="dst",
+            morphology_name="m",
+            voxel_mappings=[{"src": [0, 0, 0], "dst": [0, 0, 0]}],
+            postsynaptic_current_multiplier=1,
+            ltp_multiplier=200,
+        )
+        assert "error" in out
+        assert "i8" in out["error"]
+
 
 class TestAutoPolarityProbe:
     @pytest.mark.asyncio

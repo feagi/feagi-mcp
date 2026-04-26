@@ -257,6 +257,22 @@ mypy src/
 
 ---
 
+## Circuit design & plasticity
+
+### R-STDP: i8 LTP/LTD, `plasticity_eta`, and `max_weight`
+
+The FEAGI NPU stores `ltp_multiplier` and `ltd_multiplier` as **i8** (range
+`-128`..`127`). Eligibility traces still use integer `delta_plus` / `delta_minus`
+steps. The **weight commit** is `w += plasticity_eta * R * e` with
+`plasticity_eta` defaulting to **1.0**; set it in `(0, 1]` (e.g. `0.01`) for
+sub-unit learning. Use **`max_weight`** to cap positive growth. Both fields
+are valid only when `plasticity_mode` is `stdp` or `rstdp` (rejected on `off`).
+
+From MCP, `build_reflex_mapping` checks LTP/LTD fit in i8 and forwards
+`max_weight` / `plasticity_eta` on the rule dict.
+
+---
+
 ## Still have questions?
 
 Open an issue on GitHub or join our Discord!

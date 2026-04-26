@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import math
 from typing import Any, cast
 
 import httpx
@@ -2100,6 +2101,8 @@ class FeagiClient:
         eligibility_decay_bursts: int | None = None,
         reward_source_area: str | None = None,
         punishment_source_area: str | None = None,
+        max_weight: float | None = None,
+        plasticity_eta: float | None = None,
     ) -> dict[str, Any]:
         """Create a custom ``patterns`` morphology and wire src->dst with it in one call.
 
@@ -2119,11 +2122,15 @@ class FeagiClient:
             postsynaptic_current_multiplier: Synaptic gain. Positive = excite, negative = inhibit.
             plasticity_flag: Enable STDP on this mapping rule.
             plasticity_constant: STDP base learning rate (integer; FEAGI scales internally).
+            ltp_multiplier / ltd_multiplier: Each must fit server ``i8`` range ``-128..127``;
+                use ``plasticity_eta`` for sub-unit step sizes on the weight commit.
             ltp_multiplier / ltd_multiplier / plasticity_window / synaptic_delay_bursts:
                 Pass-through STDP parameters; defaults are sensible for an excitatory
                 Hebbian rule with no axonal delay.
             morphology_scalar: Optional ``[x,y,z]`` scalar override; usually ``None``.
             replace_existing: If True, overwrite all current mapping rules with this one.
+            max_weight: Optional cap on positive weight commits; server validates.
+            plasticity_eta: Optional scale on ``w += eta * R * e`` (server default 1.0).
 
         Returns:
             Dict with ``morphology_create``, ``mapping_update``, and ``rule`` (the
@@ -2161,6 +2168,19 @@ class FeagiClient:
                     "morphology_create": morph_create,
                 }
 
+            for name, m in (
+                ("ltp_multiplier", ltp_multiplier),
+                ("ltd_multiplier", ltd_multiplier),
+            ):
+                mi = int(m)
+                if mi < -128 or mi > 127:
+                    return {
+                        "error": (
+                            f"{name} must fit in i8 range -128..127 (got {m!r}); "
+                            "use plasticity_eta for sub-unit learning rates"
+                        )
+                    }
+
             scalar = morphology_scalar if morphology_scalar is not None else [1, 1, 1]
             new_rule: dict[str, Any] = {
                 "morphology_id": morphology_name,
@@ -2193,6 +2213,32 @@ class FeagiClient:
                 new_rule["reward_source_area"] = str(reward_source_area)
             if punishment_source_area is not None:
                 new_rule["punishment_source_area"] = str(punishment_source_area)
+            if max_weight is not None:
+                try:
+                    mw = float(max_weight)
+                except (TypeError, ValueError):
+                    return {"error": "max_weight must be a number or None"}
+                if mw != mw or mw <= 0.0:
+                    return {
+                        "error": (
+                            "max_weight must be strictly positive and not NaN; "
+                            f"got {max_weight!r}"
+                        )
+                    }
+                new_rule["max_weight"] = mw
+            if plasticity_eta is not None:
+                try:
+                    pe = float(plasticity_eta)
+                except (TypeError, ValueError):
+                    return {"error": "plasticity_eta must be a number or None"}
+                if pe != pe or pe <= 0.0 or not math.isfinite(pe):
+                    return {
+                        "error": (
+                            "plasticity_eta must be finite and strictly positive; "
+                            f"got {plasticity_eta!r}"
+                        )
+                    }
+                new_rule["plasticity_eta"] = pe
 
             if replace_existing:
                 rules: list[dict[str, Any]] = [new_rule]

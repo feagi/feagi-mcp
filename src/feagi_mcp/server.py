@@ -775,7 +775,10 @@ async def update_cortical_mapping(
 ) -> dict[str, Any]:
     """Create or update connections between two cortical areas.
 
-    Each mapping rule defines morphology, synaptic strength, and plasticity.
+    For plastic rules, optional fields include ``max_weight`` (cap on positive weight
+    commits) and ``plasticity_eta`` (scales ``w += eta * R * e``). LTP/LTD
+    multipliers are ``i8`` in the runtime. See ``build_reflex_mapping`` and
+    ``docs/FAQ.md`` (Circuit design & plasticity).
 
     Args:
         src_area: Source cortical area ID
@@ -1544,6 +1547,8 @@ async def build_reflex_mapping(
     eligibility_decay_bursts: int | None = None,
     reward_source_area: str | None = None,
     punishment_source_area: str | None = None,
+    max_weight: float | None = None,
+    plasticity_eta: float | None = None,
 ) -> dict[str, Any]:
     """Create a custom ``patterns`` morphology and wire src->dst with it in one call.
 
@@ -1577,6 +1582,11 @@ async def build_reflex_mapping(
 
     When ``plasticity_mode`` is omitted, the server falls back to ``"stdp"`` if
     ``plasticity_flag=True``, otherwise ``"off"``.
+
+    Optional ``max_weight`` and ``plasticity_eta`` forward to the same mapping rule
+    keys accepted by :func:`update_cortical_mapping`. LTP/LTD are ``i8``; use
+    ``plasticity_eta`` to scale the weight update when a fractional learning rate
+    is needed.
     """
     return await feagi.build_reflex_mapping(
         src_area_id=src_area_id,
@@ -1596,6 +1606,8 @@ async def build_reflex_mapping(
         eligibility_decay_bursts=eligibility_decay_bursts,
         reward_source_area=reward_source_area,
         punishment_source_area=punishment_source_area,
+        max_weight=max_weight,
+        plasticity_eta=plasticity_eta,
     )
 
 
