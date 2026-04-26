@@ -7,6 +7,10 @@ import httpx
 
 from feagi_mcp.area_metadata import enrich_area_list, enrich_area_with_name, get_semantic_info
 from feagi_mcp.bv_operations import BV_OPERATION_BY_ID, resolve_path
+from feagi_mcp.introspection_discovery import (
+    IntrospectionEndpoint,
+    discover_endpoint,
+)
 from feagi_mcp.placement_policy import (
     check_min_separation_to_existing,
     check_origin_exclusion,
@@ -2194,10 +2198,70 @@ class FeagiClient:
     # Embodiment introspection (proxies to controller-side endpoints)
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _resolve_introspection_url(
+        introspection_url: str | None,
+        controller_id: str,
+    ) -> tuple[str | None, IntrospectionEndpoint | None]:
+        """Return (url, descriptor) for an explicit URL or auto-discovery.
+
+        Explicit URLs always win; discovery is only attempted when the caller
+        omits the URL. Returning the descriptor (when present) lets callers
+        surface metadata such as PID and controller version for diagnostics.
+        """
+        if introspection_url and introspection_url.strip():
+            return introspection_url.strip(), None
+        descriptor = discover_endpoint(controller_id)
+        if descriptor is None:
+            return None, None
+        return descriptor.url, descriptor
+
+    async def embodiment_discover_introspection_endpoint(
+        self,
+        controller_id: str = "mujoco",
+    ) -> dict[str, Any]:
+        """Locate the introspection HTTP endpoint for a launched controller.
+
+        Reads the descriptor written by feagi-desktop's launcher when it
+        spawns a controller with introspection enabled. Returns a structured
+        payload so MCP clients can surface diagnostics (PID, version, when
+        the controller started) in addition to the URL.
+
+        Args:
+            controller_id: Controller bundle id (must match the id used by
+                the launcher); defaults to ``"mujoco"``.
+
+        Returns:
+            ``{"found": bool, "controller_id": str, ...}`` — when ``found``
+            is ``True`` the payload includes ``url``, ``host``, ``port``,
+            ``pid``, ``controller_version``, ``started_at``,
+            ``descriptor_path``, and ``schema_version``.
+        """
+        try:
+            descriptor = discover_endpoint(controller_id)
+        except ValueError as exc:
+            return {
+                "found": False,
+                "controller_id": controller_id,
+                "error": str(exc),
+            }
+        if descriptor is None:
+            return {
+                "found": False,
+                "controller_id": controller_id,
+                "message": (
+                    "No introspection descriptor found. Ensure the "
+                    "controller was launched via feagi-desktop with "
+                    "introspection enabled."
+                ),
+            }
+        return {"found": True, **descriptor.as_dict()}
+
     async def embodiment_get_physics_state(
         self,
-        introspection_url: str,
+        introspection_url: str | None = None,
         timeout_s: float = 2.0,
+        controller_id: str = "mujoco",
     ) -> dict[str, Any]:
         """GET <introspection_url>/v1/state - raw embodiment physics state.
 
@@ -2207,20 +2271,38 @@ class FeagiClient:
         going through the FEAGI encoder pipeline.
 
         Args:
-            introspection_url: Base URL of the controller's introspection server,
-                e.g. ``"http://localhost:9876"``.
+            introspection_url: Base URL of the controller's introspection
+                server, e.g. ``"http://127.0.0.1:9173"``. When omitted, the
+                URL is auto-discovered via the launcher-written descriptor
+                under ``<runtime_root>/controllers/.introspection/<id>.json``.
             timeout_s: HTTP timeout.
+            controller_id: Controller bundle id used during auto-discovery.
 
         Returns:
             Whatever the controller exposes; typically
             ``{"time": float, "joints": {...}, "actuators": {...}, "sensors": {...}}``.
         """
+        url, descriptor = self._resolve_introspection_url(
+            introspection_url, controller_id
+        )
+        if url is None:
+            return {
+                "error": "introspection_url_unavailable",
+                "message": (
+                    f"No introspection URL provided and no descriptor found "
+                    f"for controller_id={controller_id!r}."
+                ),
+            }
         try:
-            url = introspection_url.rstrip("/") + "/v1/state"
+            full_url = url.rstrip("/") + "/v1/state"
             async with httpx.AsyncClient(timeout=timeout_s) as client:
-                response = await client.get(url)
+                response = await client.get(full_url)
             if response.status_code == 200:
-                return _as_json_dict(response.json())
+                payload = _as_json_dict(response.json())
+                if descriptor is not None:
+                    payload.setdefault("_introspection_source", "auto-discovered")
+                    payload.setdefault("_descriptor_path", descriptor.descriptor_path)
+                return payload
             return {
                 "error": f"HTTP {response.status_code}",
                 "message": response.text,
@@ -2231,22 +2313,37 @@ class FeagiClient:
 
     async def embodiment_set_joint_state(
         self,
-        introspection_url: str,
+        introspection_url: str | None = None,
         joint_qpos: dict[str, float] | None = None,
         joint_qvel: dict[str, float] | None = None,
         timeout_s: float = 2.0,
+        controller_id: str = "mujoco",
     ) -> dict[str, Any]:
         """POST <introspection_url>/v1/set_state - place joints deterministically.
 
         Use to test reflex polarity (e.g. "what does my circuit do when the
-        pendulum is at +30°?") without waiting for natural fall.
+        pendulum is at +30 degrees?") without waiting for natural fall.
 
         Args:
-            introspection_url: Base URL of the controller's introspection server.
+            introspection_url: Base URL of the controller's introspection
+                server. When omitted, auto-discovered via the launcher-written
+                descriptor.
             joint_qpos: Mapping ``joint_name -> qpos_value``.
             joint_qvel: Mapping ``joint_name -> qvel_value``.
             timeout_s: HTTP timeout.
+            controller_id: Controller bundle id used during auto-discovery.
         """
+        url, descriptor = self._resolve_introspection_url(
+            introspection_url, controller_id
+        )
+        if url is None:
+            return {
+                "error": "introspection_url_unavailable",
+                "message": (
+                    f"No introspection URL provided and no descriptor found "
+                    f"for controller_id={controller_id!r}."
+                ),
+            }
         try:
             payload: dict[str, Any] = {}
             if joint_qpos:
@@ -2255,11 +2352,19 @@ class FeagiClient:
                 payload["joint_qvel"] = {str(k): float(v) for k, v in joint_qvel.items()}
             if not payload:
                 return {"error": "joint_qpos or joint_qvel must be provided"}
-            url = introspection_url.rstrip("/") + "/v1/set_state"
+            full_url = url.rstrip("/") + "/v1/set_state"
             async with httpx.AsyncClient(timeout=timeout_s) as client:
-                response = await client.post(url, json=payload)
+                response = await client.post(full_url, json=payload)
             if 200 <= response.status_code < 300:
-                return _as_json_dict(response.json()) or {"status": "ok"}
+                payload_out = _as_json_dict(response.json()) or {"status": "ok"}
+                if descriptor is not None:
+                    payload_out.setdefault(
+                        "_introspection_source", "auto-discovered"
+                    )
+                    payload_out.setdefault(
+                        "_descriptor_path", descriptor.descriptor_path
+                    )
+                return payload_out
             return {
                 "error": f"HTTP {response.status_code}",
                 "message": response.text,

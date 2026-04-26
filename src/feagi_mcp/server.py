@@ -1575,39 +1575,70 @@ async def auto_polarity_probe(
 
 
 @mcp.tool()
+async def embodiment_discover_introspection_endpoint(
+    controller_id: str = "mujoco",
+) -> dict[str, Any]:
+    """Locate the controller's introspection HTTP endpoint via the launcher descriptor.
+
+    feagi-desktop's launcher allocates an ephemeral port for each controller
+    that supports introspection (currently MuJoCo) and writes a descriptor at
+    ``<runtime_root>/controllers/.introspection/<controller_id>.json``. This
+    tool reads that descriptor so the MCP can talk to the controller without
+    requiring the URL to be configured up front.
+
+    Returns ``{"found": True, "url": "http://127.0.0.1:<port>", ...}`` when
+    the controller is up, or ``{"found": False, ...}`` otherwise. The
+    descriptor metadata (PID, controller version, started_at) is included
+    when present so callers can sanity-check the endpoint.
+    """
+    return await feagi.embodiment_discover_introspection_endpoint(controller_id)
+
+
+@mcp.tool()
 async def embodiment_get_physics_state(
-    introspection_url: str,
+    introspection_url: str | None = None,
     timeout_s: float = 2.0,
+    controller_id: str = "mujoco",
 ) -> dict[str, Any]:
     """GET ground-truth physics state from the embodiment controller.
 
     Currently implemented for the MuJoCo controller (see
-    ``nrs-embodiments/controllers/simulators/mujoco/mcp_introspection.py``). The
-    controller exposes its state on a small HTTP server when launched with
-    ``--mcp-introspection-port`` (or ``MUJOCO_MCP_INTROSPECTION_PORT`` env). Pass
-    that base URL here, e.g. ``"http://localhost:9876"``.
+    ``nrs-embodiments/controllers/simulators/mujoco/mcp_introspection.py``).
+    When ``introspection_url`` is omitted, the URL is auto-discovered via the
+    descriptor that feagi-desktop writes at controller spawn time
+    (``<runtime_root>/controllers/.introspection/<controller_id>.json``). Pass
+    an explicit URL to bypass discovery (e.g. for ad-hoc ``mcp_introspection.py``
+    runs outside feagi-desktop).
     """
-    return await feagi.embodiment_get_physics_state(introspection_url, timeout_s)
+    return await feagi.embodiment_get_physics_state(
+        introspection_url=introspection_url,
+        timeout_s=timeout_s,
+        controller_id=controller_id,
+    )
 
 
 @mcp.tool()
 async def embodiment_set_joint_state(
-    introspection_url: str,
+    introspection_url: str | None = None,
     joint_qpos: dict[str, float] | None = None,
     joint_qvel: dict[str, float] | None = None,
     timeout_s: float = 2.0,
+    controller_id: str = "mujoco",
 ) -> dict[str, Any]:
     """Place embodiment joints deterministically (e.g. tilt pendulum to test reflex).
 
-    Useful to verify a reflex circuit responds correctly at a given physical state
-    without waiting for the dynamics to wander there organically. Currently
-    implemented for the MuJoCo controller's introspection server.
+    Useful to verify a reflex circuit responds correctly at a given physical
+    state without waiting for the dynamics to wander there organically.
+    Currently implemented for the MuJoCo controller's introspection server.
+    When ``introspection_url`` is omitted, the URL is auto-discovered via
+    the launcher-written descriptor.
     """
     return await feagi.embodiment_set_joint_state(
-        introspection_url,
+        introspection_url=introspection_url,
         joint_qpos=joint_qpos,
         joint_qvel=joint_qvel,
         timeout_s=timeout_s,
+        controller_id=controller_id,
     )
 
 
