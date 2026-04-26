@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -239,6 +240,157 @@ class TestAgentAndMonitoring:
     async def test_monitor_activity_batch_empty(self, mock_client):
         result = await mock_client.monitor_activity_batch([])
         assert "error" in result
+
+
+class TestMonitorActivityLifetimeStats:
+    """Verify lifetime fire-count enrichment that disambiguates 'silent now'
+    from 'never fired' (the cartpole-detector misdiagnosis case)."""
+
+    def _build_url_dispatcher(self, *, area_id: str, neuron_props: dict[int, dict[str, Any]]):
+        """Return a side_effect callable that maps URL -> response by pattern."""
+
+        async def fake_get(url: str, params: dict[str, Any] | None = None):  # noqa: ARG001
+            if "/v1/monitoring/cortical_activity" in url:
+                return _ok(
+                    {
+                        "area_id": area_id,
+                        "firing_statistics": {
+                            "total_spikes": 0,
+                            "firing_rate_hz": 0.0,
+                            "active_neurons": [],
+                        },
+                        "spike_history": [],
+                    }
+                )
+            if url.endswith(f"/v1/connectome/cortical_area/{area_id}/neurons"):
+                return _ok(list(neuron_props.keys()))
+            for nid, props in neuron_props.items():
+                if url.endswith(f"/v1/connectome/neuron/{nid}/properties"):
+                    return _ok(props)
+            raise AssertionError(f"unexpected URL in test: {url}")
+
+        return fake_get
+
+    @pytest.mark.asyncio
+    async def test_lifetime_stats_distinguishes_quiet_from_dead(self, mock_client):
+        """A neuron that has fired 280x lifetime but is silent in this window
+        must surface ``max_consecutive_fire_count=280`` so we don't misread
+        the area as broken."""
+        neuron_props = {
+            295: {
+                "neuron_id": 295,
+                "x": 0,
+                "y": 0,
+                "z": 0,
+                "consecutive_fire_count": 280,
+                "membrane_potential": 0.0,
+            }
+        }
+        mock_client._client.get.side_effect = self._build_url_dispatcher(
+            area_id="Y3BsZWFzdTE=", neuron_props=neuron_props
+        )
+        result = await mock_client.monitor_activity("Y3BsZWFzdTE=", duration_ms=200)
+        stats = result["lifetime_stats"]
+        assert stats["total_neurons_in_area"] == 1
+        assert stats["neurons_inspected"] == 1
+        assert stats["lifetime_active_count"] == 1
+        assert stats["max_consecutive_fire_count"] == 280
+        assert stats["top_neurons"][0]["neuron_id"] == 295
+        assert stats["top_neurons"][0]["consecutive_fire_count"] == 280
+
+    @pytest.mark.asyncio
+    async def test_lifetime_stats_truly_dead_area(self, mock_client):
+        neuron_props = {
+            1: {
+                "neuron_id": 1,
+                "x": 0,
+                "y": 0,
+                "z": 0,
+                "consecutive_fire_count": 0,
+                "membrane_potential": 0.0,
+            }
+        }
+        mock_client._client.get.side_effect = self._build_url_dispatcher(
+            area_id="dead_area", neuron_props=neuron_props
+        )
+        result = await mock_client.monitor_activity("dead_area")
+        stats = result["lifetime_stats"]
+        assert stats["lifetime_active_count"] == 0
+        assert stats["max_consecutive_fire_count"] == 0
+        assert stats["top_neurons"] == []
+
+    @pytest.mark.asyncio
+    async def test_lifetime_stats_disabled_skips_extra_calls(self, mock_client):
+        """``include_lifetime_stats=False`` must not issue any neuron-list /
+        per-neuron property calls."""
+        urls_seen: list[str] = []
+
+        async def fake_get(url: str, params: dict[str, Any] | None = None):  # noqa: ARG001
+            urls_seen.append(url)
+            return _ok(
+                {
+                    "area_id": "x",
+                    "firing_statistics": {"total_spikes": 0, "active_neurons": []},
+                    "spike_history": [],
+                }
+            )
+
+        mock_client._client.get.side_effect = fake_get
+        result = await mock_client.monitor_activity(
+            "x", duration_ms=100, include_lifetime_stats=False
+        )
+        assert "lifetime_stats" not in result
+        assert len(urls_seen) == 1
+        assert "/v1/monitoring/cortical_activity" in urls_seen[0]
+
+    @pytest.mark.asyncio
+    async def test_lifetime_stats_respects_neuron_cap(self, mock_client):
+        """With many neurons, ``lifetime_neuron_cap`` must limit fan-out."""
+        neuron_props = {
+            i: {
+                "neuron_id": i,
+                "x": 0,
+                "y": 0,
+                "z": i,
+                "consecutive_fire_count": i,
+                "membrane_potential": 0.0,
+            }
+            for i in range(10)
+        }
+        mock_client._client.get.side_effect = self._build_url_dispatcher(
+            area_id="big", neuron_props=neuron_props
+        )
+        result = await mock_client.monitor_activity(
+            "big", duration_ms=100, lifetime_neuron_cap=3
+        )
+        stats = result["lifetime_stats"]
+        assert stats["total_neurons_in_area"] == 10
+        assert stats["neurons_inspected"] == 3
+        assert stats["max_consecutive_fire_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_lifetime_stats_failure_isolated_from_primary(self, mock_client):
+        """If the lifetime-stats fan-out fails, the primary payload must still
+        return cleanly with an ``error`` recorded under ``lifetime_stats``."""
+
+        async def fake_get(url: str, params: dict[str, Any] | None = None):  # noqa: ARG001
+            if "/v1/monitoring/cortical_activity" in url:
+                return _ok(
+                    {
+                        "area_id": "a",
+                        "firing_statistics": {"total_spikes": 0, "active_neurons": []},
+                        "spike_history": [],
+                    }
+                )
+            response = MagicMock()
+            response.status_code = 500
+            response.text = "boom"
+            return response
+
+        mock_client._client.get.side_effect = fake_get
+        result = await mock_client.monitor_activity("a")
+        assert result["firing_statistics"]["total_spikes"] == 0
+        assert "error" in result["lifetime_stats"]
 
 
 class TestSnapshotManager:

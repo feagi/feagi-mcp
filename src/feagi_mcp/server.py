@@ -39,21 +39,41 @@ snapshot_manager = SnapshotManager()
 
 
 @mcp.tool()
-async def monitor_activity(area_id: str, duration_ms: int = 1000) -> dict[str, Any]:
-    """Monitor real-time neural activity in a cortical area.
+async def monitor_activity(
+    area_id: str,
+    duration_ms: int = 1000,
+    include_lifetime_stats: bool = True,
+    lifetime_neuron_cap: int = 64,
+) -> dict[str, Any]:
+    """Monitor real-time neural activity, plus lifetime fire-count enrichment.
 
-    This tool observes firing rates, active neurons, and spike patterns over a specified
-    duration. Use this to verify CPG oscillations, check signal propagation, or debug
-    why circuits aren't working.
+    Observes firing rates, active neurons, and spike patterns over the sample
+    window. The base REST endpoint reports only spikes seen in that window,
+    which can incorrectly suggest a circuit is dead when it is merely silent
+    at sample time. By default this tool also attaches ``lifetime_stats``
+    aggregating per-neuron ``consecutive_fire_count`` across the area, so a
+    "0 spikes now but lifetime_active_count > 0" result clearly distinguishes
+    "currently quiet" from "never wired/never fired".
 
     Args:
-        area_id: Cortical area identifier (e.g., "cCPGa_", "opose0")
-        duration_ms: Monitoring duration in milliseconds (default: 1000)
+        area_id: Cortical area identifier (e.g., "cCPGa_", "opose0").
+        duration_ms: Sample window in milliseconds (default: 1000).
+        include_lifetime_stats: When True (default), attach ``lifetime_stats``.
+            Set False for very large areas where the extra fan-out is unwanted.
+        lifetime_neuron_cap: Maximum neurons inspected for lifetime stats
+            (default: 64). Caps round-trips for big areas.
 
     Returns:
-        Activity data including firing_rate, active_neurons, spike_timestamps
+        Activity data including ``firing_statistics`` (sample window) and,
+        when enabled, ``lifetime_stats`` with ``max_consecutive_fire_count``,
+        ``lifetime_active_count``, and ``top_neurons``.
     """
-    result = await feagi.monitor_activity(area_id, duration_ms)
+    result = await feagi.monitor_activity(
+        area_id,
+        duration_ms,
+        include_lifetime_stats=include_lifetime_stats,
+        lifetime_neuron_cap=lifetime_neuron_cap,
+    )
     return result
 
 
@@ -1326,21 +1346,32 @@ async def list_agent_capabilities_all(
 async def monitor_activity_batch(
     area_ids: list[str],
     duration_ms: int = 1000,
+    include_lifetime_stats: bool = True,
+    lifetime_neuron_cap: int = 64,
 ) -> dict[str, Any]:
     """Monitor multiple cortical areas concurrently.
 
     Composes ``GET /v1/monitoring/cortical_activity`` (no new server route) but
     fans out the calls in parallel so observing 4-6 areas takes roughly the time
-    of a single call instead of N sequential round-trips.
+    of a single call instead of N sequential round-trips. Each per-area payload
+    is enriched with the same ``lifetime_stats`` block as ``monitor_activity``
+    when ``include_lifetime_stats`` is True.
 
     Args:
         area_ids: List of cortical area ids to observe simultaneously.
         duration_ms: Monitoring window applied to every area (default 1000).
+        include_lifetime_stats: Forward to per-area enrichment (default True).
+        lifetime_neuron_cap: Per-area neuron sampling cap (default 64).
 
     Returns:
         ``{"duration_ms", "area_count", "results": {area_id: payload}}``.
     """
-    return await feagi.monitor_activity_batch(area_ids, duration_ms)
+    return await feagi.monitor_activity_batch(
+        area_ids,
+        duration_ms,
+        include_lifetime_stats=include_lifetime_stats,
+        lifetime_neuron_cap=lifetime_neuron_cap,
+    )
 
 
 @mcp.tool()
@@ -1509,6 +1540,10 @@ async def build_reflex_mapping(
     synaptic_delay_bursts: int = 0,
     morphology_scalar: list[int] | None = None,
     replace_existing: bool = False,
+    plasticity_mode: str | None = None,
+    eligibility_decay_bursts: int | None = None,
+    reward_source_area: str | None = None,
+    punishment_source_area: str | None = None,
 ) -> dict[str, Any]:
     """Create a custom ``patterns`` morphology and wire src->dst with it in one call.
 
@@ -1527,6 +1562,21 @@ async def build_reflex_mapping(
     ``"!"``) are supported in any axis. By default the new mapping is appended to
     existing rules between the two areas; pass ``replace_existing=True`` to wipe
     them first.
+
+    Plasticity controls:
+        ``plasticity_flag`` enables learning on the mapping (legacy STDP path).
+        ``plasticity_mode`` is the new explicit selector:
+            * ``"off"`` - no learning (equivalent to ``plasticity_flag=False``);
+            * ``"stdp"`` - classic correlation-based Hebbian STDP;
+            * ``"rstdp"`` - reward-modulated STDP. Requires
+              ``eligibility_decay_bursts`` (>=1) and at least one of
+              ``reward_source_area`` / ``punishment_source_area`` (base64 IDs of
+              detector cortical areas). The detector areas must be driven by
+              hard-wired (non-plastic) input only; the server's wireheading lint
+              rejects genomes that violate this.
+
+    When ``plasticity_mode`` is omitted, the server falls back to ``"stdp"`` if
+    ``plasticity_flag=True``, otherwise ``"off"``.
     """
     return await feagi.build_reflex_mapping(
         src_area_id=src_area_id,
@@ -1542,6 +1592,10 @@ async def build_reflex_mapping(
         synaptic_delay_bursts=synaptic_delay_bursts,
         morphology_scalar=morphology_scalar,
         replace_existing=replace_existing,
+        plasticity_mode=plasticity_mode,
+        eligibility_decay_bursts=eligibility_decay_bursts,
+        reward_source_area=reward_source_area,
+        punishment_source_area=punishment_source_area,
     )
 
 

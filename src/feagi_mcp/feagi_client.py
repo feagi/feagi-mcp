@@ -1,5 +1,6 @@
 """HTTP client for FEAGI REST API."""
 
+import asyncio
 import logging
 from typing import Any, cast
 
@@ -106,30 +107,139 @@ class FeagiClient:
             logger.error(f"Health check failed: {e}")
             return {"status": "error", "message": str(e)}
 
-    async def monitor_activity(self, area_id: str, duration_ms: int = 1000) -> dict[str, Any]:
-        """Monitor cortical area activity.
+    async def monitor_activity(
+        self,
+        area_id: str,
+        duration_ms: int = 1000,
+        include_lifetime_stats: bool = True,
+        lifetime_neuron_cap: int = 64,
+    ) -> dict[str, Any]:
+        """Monitor cortical area activity with optional lifetime fire-count enrichment.
+
+        The base REST endpoint reports only the spikes observed within the sample
+        window, which can incorrectly suggest a neuron is dead when it is merely
+        quiet at sample time. When ``include_lifetime_stats`` is True (default),
+        the result is enriched with ``lifetime_stats`` carrying per-neuron
+        ``consecutive_fire_count`` aggregates across the area. This answers the
+        "is this circuit silent right now, or never wired?" question in one call.
 
         Args:
-            area_id: Cortical area identifier
-            duration_ms: Monitoring duration in milliseconds
+            area_id: Cortical area identifier.
+            duration_ms: Sample window in milliseconds.
+            include_lifetime_stats: When True, attach ``lifetime_stats`` block.
+            lifetime_neuron_cap: Maximum neurons to inspect for lifetime stats
+                (caps fan-out for large areas; first ``N`` neurons are sampled).
 
         Returns:
-            Activity data including firing rate and active neurons
+            Activity data including ``firing_statistics`` (sample window) and,
+            when enabled, ``lifetime_stats`` (lifetime fire counters).
         """
         try:
             response = await self._client.get(
                 f"{self.base_url}/v1/monitoring/cortical_activity",
                 params={"area": area_id, "duration": duration_ms / 1000.0},
             )
-            if response.status_code == 200:
-                return _as_json_dict(response.json())
-            return {
-                "error": f"HTTP {response.status_code}",
-                "message": response.text,
-            }
+            if response.status_code != 200:
+                return {
+                    "error": f"HTTP {response.status_code}",
+                    "message": response.text,
+                }
+            result = _as_json_dict(response.json())
         except Exception as e:
             logger.error(f"monitor_activity failed: {e}")
             return {"error": "request_failed", "message": str(e)}
+
+        if include_lifetime_stats:
+            result["lifetime_stats"] = await self._compute_area_lifetime_stats(
+                area_id, lifetime_neuron_cap
+            )
+        return result
+
+    async def _compute_area_lifetime_stats(
+        self,
+        area_id: str,
+        neuron_cap: int,
+    ) -> dict[str, Any]:
+        """Aggregate lifetime fire counters across (a sample of) area neurons.
+
+        Walks ``/v1/connectome/cortical_area/{id}/neurons`` for the neuron-id
+        list, then fans out ``/v1/connectome/neuron/{id}/properties`` in
+        parallel (capped at ``neuron_cap``) to gather ``consecutive_fire_count``.
+
+        Returns a dict with:
+            * ``total_neurons_in_area`` - reported area size.
+            * ``neurons_inspected`` - count actually sampled (<= ``neuron_cap``).
+            * ``lifetime_active_count`` - neurons with ``consecutive_fire_count > 0``.
+            * ``max_consecutive_fire_count`` - max across sampled neurons.
+            * ``top_neurons`` - up to 5 highest fire-count neurons with id/coords.
+            * ``error`` - present only on failure; never raises.
+        """
+        try:
+            response = await self._client.get(
+                f"{self.base_url}/v1/connectome/cortical_area/{area_id}/neurons"
+            )
+            if response.status_code != 200:
+                return {
+                    "error": f"HTTP {response.status_code}",
+                    "message": response.text,
+                }
+            neuron_ids_raw = response.json()
+            if not isinstance(neuron_ids_raw, list):
+                return {"error": "unexpected_payload", "message": "neuron list not a JSON array"}
+            total_in_area = len(neuron_ids_raw)
+            sampled_ids = [str(nid) for nid in neuron_ids_raw[: max(0, int(neuron_cap))]]
+            if not sampled_ids:
+                return {
+                    "total_neurons_in_area": total_in_area,
+                    "neurons_inspected": 0,
+                    "lifetime_active_count": 0,
+                    "max_consecutive_fire_count": 0,
+                    "top_neurons": [],
+                }
+
+            async def _fetch(nid: str) -> dict[str, Any] | None:
+                try:
+                    r = await self._client.get(
+                        f"{self.base_url}/v1/connectome/neuron/{nid}/properties"
+                    )
+                    if r.status_code != 200:
+                        return None
+                    return _as_json_dict(r.json())
+                except Exception as exc:
+                    logger.debug("lifetime stats: neuron %s fetch failed: %s", nid, exc)
+                    return None
+
+            properties = await asyncio.gather(*[_fetch(nid) for nid in sampled_ids])
+            inspected = [p for p in properties if p is not None]
+            counts = [int(p.get("consecutive_fire_count", 0) or 0) for p in inspected]
+            active_count = sum(1 for c in counts if c > 0)
+            max_count = max(counts) if counts else 0
+            ranked = sorted(
+                [
+                    {
+                        "neuron_id": p.get("neuron_id"),
+                        "x": p.get("x"),
+                        "y": p.get("y"),
+                        "z": p.get("z"),
+                        "consecutive_fire_count": int(p.get("consecutive_fire_count", 0) or 0),
+                        "membrane_potential": p.get("membrane_potential"),
+                    }
+                    for p in inspected
+                ],
+                key=lambda d: d["consecutive_fire_count"],
+                reverse=True,
+            )
+            top_neurons = [d for d in ranked if d["consecutive_fire_count"] > 0][:5]
+            return {
+                "total_neurons_in_area": total_in_area,
+                "neurons_inspected": len(inspected),
+                "lifetime_active_count": active_count,
+                "max_consecutive_fire_count": max_count,
+                "top_neurons": top_neurons,
+            }
+        except Exception as e:
+            logger.warning("_compute_area_lifetime_stats failed for %s: %s", area_id, e)
+            return {"error": "lifetime_stats_failed", "message": str(e)}
 
     async def list_cortical_areas(self) -> list[dict[str, Any]]:
         """List all cortical areas in the current genome."""
@@ -1703,18 +1813,20 @@ class FeagiClient:
         self,
         area_ids: list[str],
         duration_ms: int = 1000,
+        include_lifetime_stats: bool = True,
+        lifetime_neuron_cap: int = 64,
     ) -> dict[str, Any]:
         """Fan out :meth:`monitor_activity` over multiple areas in parallel.
 
         Composes the existing ``GET /v1/monitoring/cortical_activity`` endpoint
         (no new server route) but issues all requests concurrently so a typical
         4-6 area inspection completes in roughly the duration of a single call.
+        Lifetime-stats enrichment is forwarded per-area; disable for very large
+        batches if the extra per-neuron fan-out is unwanted.
 
         Returns:
             Dict mapping ``area_id`` -> per-area activity payload (or error dict).
         """
-        import asyncio
-
         if not isinstance(area_ids, list) or not area_ids:
             return {"error": "area_ids must be a non-empty list"}
         clean_ids: list[str] = []
@@ -1724,7 +1836,15 @@ class FeagiClient:
             clean_ids.append(raw.strip())
         try:
             results = await asyncio.gather(
-                *(self.monitor_activity(aid, duration_ms) for aid in clean_ids),
+                *(
+                    self.monitor_activity(
+                        aid,
+                        duration_ms,
+                        include_lifetime_stats=include_lifetime_stats,
+                        lifetime_neuron_cap=lifetime_neuron_cap,
+                    )
+                    for aid in clean_ids
+                ),
                 return_exceptions=True,
             )
         except Exception as e:
@@ -1976,6 +2096,10 @@ class FeagiClient:
         synaptic_delay_bursts: int = 0,
         morphology_scalar: list[int] | None = None,
         replace_existing: bool = False,
+        plasticity_mode: str | None = None,
+        eligibility_decay_bursts: int | None = None,
+        reward_source_area: str | None = None,
+        punishment_source_area: str | None = None,
     ) -> dict[str, Any]:
         """Create a custom ``patterns`` morphology and wire src->dst with it in one call.
 
@@ -2049,6 +2173,26 @@ class FeagiClient:
                 "plasticity_window": int(plasticity_window),
                 "synaptic_delay_bursts": int(synaptic_delay_bursts),
             }
+
+            # R-STDP optional fields. Server validates the combination; we forward as-is.
+            if plasticity_mode is not None:
+                mode_normalized = str(plasticity_mode).strip().lower()
+                if mode_normalized not in {"off", "stdp", "rstdp", "r-stdp"}:
+                    return {
+                        "error": (
+                            f"plasticity_mode must be one of 'off', 'stdp', 'rstdp'; "
+                            f"got '{plasticity_mode}'"
+                        )
+                    }
+                new_rule["plasticity_mode"] = mode_normalized
+            if eligibility_decay_bursts is not None:
+                if int(eligibility_decay_bursts) < 0:
+                    return {"error": "eligibility_decay_bursts must be >= 0"}
+                new_rule["eligibility_decay_bursts"] = int(eligibility_decay_bursts)
+            if reward_source_area is not None:
+                new_rule["reward_source_area"] = str(reward_source_area)
+            if punishment_source_area is not None:
+                new_rule["punishment_source_area"] = str(punishment_source_area)
 
             if replace_existing:
                 rules: list[dict[str, Any]] = [new_rule]
