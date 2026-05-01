@@ -2118,7 +2118,7 @@ class FeagiClient:
         self,
         cortical_ids: list[str],
     ) -> dict[str, Any]:
-        """Project full inspection payload to a fixed set of plasticity- and leak-related fields per area.
+        """Reduce inspection payload to plasticity- and leak-related fields per area.
 
         Wraps :meth:`fetch_multi_cortical_area_properties` and discards verbose fields
         (visualization geometry, encoding option lists, etc.) so a

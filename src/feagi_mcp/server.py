@@ -750,8 +750,10 @@ async def update_cortical_area(cortical_id: str, updates: dict[str, Any]) -> dic
 
     Modify neural parameters, position, dimensions, or other properties. For
     **rate-modulated (homeostatic) leak** on dense custom LIF areas, set
-    ``rate_modulated_leak`` to an object, for example
-    ``{"enabled": true, "target_firing_per_burst": 0.1, "rate_ema_tau_bursts": 50.0, "gain": 0.2, "leak_min": 0.02, "leak_max": 0.5, "update_every_n_bursts": 1}``;
+    ``rate_modulated_leak`` to an object with fields such as ``enabled``,
+    ``target_firing_per_burst``, ``rate_ema_tau_bursts``, ``gain``,
+    ``leak_min``, ``leak_max``, and ``update_every_n_bursts`` (see API docs for
+    example JSON);
     use ``enabled: false`` to disable. Flat genome suffix ``cx-hmlk-d`` maps to the same
     key.
 
