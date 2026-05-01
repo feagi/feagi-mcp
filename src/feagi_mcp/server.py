@@ -8,6 +8,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from feagi_mcp.bv_operations import list_operation_summaries
+from feagi_mcp.composer_simulator_packs import ComposerSimulatorPacksClient
 from feagi_mcp.config import load_config
 from feagi_mcp.feagi_client import FeagiClient
 from feagi_mcp.placement_policy import (
@@ -28,6 +29,10 @@ config = load_config()
 feagi = FeagiClient(
     host=config.host,
     port=config.port,
+    timeout=config.timeout_seconds,
+)
+composer_sim_packs = ComposerSimulatorPacksClient(
+    base_url=config.composer_base_url,
     timeout=config.timeout_seconds,
 )
 
@@ -116,14 +121,21 @@ async def get_area_parameters(area_id: str) -> dict[str, Any]:
 
 @mcp.tool()
 async def get_embodiment_status() -> dict[str, Any]:
-    """Get status of connected embodiment controllers.
+    """Get status of connected embodiment controllers (GET /v1/embodiment/status when available).
 
-    Shows which controllers are registered, their motor/sensor cortical IDs,
-    device counts, and connection health. Critical for debugging why motor
-    commands aren't reaching the robot.
+    When the **HTTP** embodiment status route is up, you get full registration
+    metadata. If it is **unavailable**, the client falls back to a **static**
+    read of the loaded genome (``status": "genome_info"``) and **must not** be
+    used as a substitute for live ZMQ/registration state.
+
+    For **which OPU / IPU the agent actually bound in this session** (cortical
+    ids, group order, control modes), prefer
+    ``get_agent_device_registrations`` with a concrete ``agent_id`` from
+    ``get_registered_agents`` — that is the least ambiguous source when the
+    agent is online.
 
     Returns:
-        Embodiment status including connected agents, motor/sensor mappings, last activity
+        Online embodiment JSON, or fallback genome I/O description with a notice.
     """
     result = await feagi.get_embodiment_status()
     return result
@@ -452,6 +464,13 @@ async def health_check() -> dict[str, Any]:
     (``brain_readiness``, ``cortical_area_count``, etc.). Falls back to a minimal
     payload if the system endpoint is unavailable.
 
+    **``connected_agents`` vs. ``get_registered_agents``:** The health payload may
+    expose a ``connected_agents`` (or similar) field that is **stricter** than
+    the agent registry (e.g. a session-level “fully streaming” counter). A value
+    of **0** there does *not* automatically mean there are no embodiment clients:
+    if ``get_registered_agents`` returns ids and ``get_motor_snapshot_last`` shows
+    activity, the pipeline is still live. Cross-check both when debugging links.
+
     Returns:
         Full health_check JSON or a minimal ``status`` / ``genome_name`` object.
     """
@@ -505,9 +524,13 @@ async def get_cortical_synapse_counts(area_id: str) -> dict[str, Any]:
 
 @mcp.tool()
 async def get_registered_agents() -> dict[str, Any]:
-    """Get list of all registered agents and their subscriptions.
+    """Get list of all registered agents and their subscriptions (agent registry).
 
-    Use this to verify controllers are connected and subscribed to motor outputs.
+    Use this to verify an embodiment or simulator has completed FEAGI’s
+    **registration** handshake. **Do not** equate the returned ``count`` with
+    *connected_agents* values from ``health_check`` — the latter is often a
+    stricter, session-specific notion (e.g. fully handshaken transport) and can
+    read 0 when ``get_registered_agents`` and motor taps still work.
 
     Returns:
         List of registered agents with their capabilities, subscriptions, and status
@@ -725,7 +748,12 @@ async def create_cortical_area(
 async def update_cortical_area(cortical_id: str, updates: dict[str, Any]) -> dict[str, Any]:
     """Update properties of an existing cortical area.
 
-    Modify neural parameters, position, dimensions, or other properties.
+    Modify neural parameters, position, dimensions, or other properties. For
+    **rate-modulated (homeostatic) leak** on dense custom LIF areas, set
+    ``rate_modulated_leak`` to an object, for example
+    ``{"enabled": true, "target_firing_per_burst": 0.1, "rate_ema_tau_bursts": 50.0, "gain": 0.2, "leak_min": 0.02, "leak_max": 0.5, "update_every_n_bursts": 1}``;
+    use ``enabled: false`` to disable. Flat genome suffix ``cx-hmlk-d`` maps to the same
+    key.
 
     Args:
         cortical_id: Cortical area ID to update
@@ -1173,7 +1201,10 @@ async def confirm_amalgamation_destination(
 
 
 @mcp.tool()
-async def get_motor_snapshot_last(agent_id: str | None = None) -> dict[str, Any]:
+async def get_motor_snapshot_last(
+    agent_id: str | None = None,
+    cortical_id: str | None = None,
+) -> dict[str, Any]:
     """Latest motor output produced by the burst loop (`/v1/output/motor_snapshot/last`).
 
     Use this to confirm whether OPU areas are firing and whether motor packets are
@@ -1185,8 +1216,14 @@ async def get_motor_snapshot_last(agent_id: str | None = None) -> dict[str, Any]
 
     Args:
         agent_id: Optional agent filter for the per-agent stats.
+        cortical_id: Optional **base64** OPU id to return **only** that area in
+            ``areas`` and adjust ``total_areas`` / ``total_neurons`` (same id as
+            the JSON ``cortical_id`` in each area row). Use to isolate a cart or
+            hinge motor when multiple OPUs and internal areas appear together.
     """
-    return await feagi.get_motor_snapshot_last(agent_id)
+    return await feagi.get_motor_snapshot_last(
+        agent_id, cortical_id=cortical_id
+    )
 
 
 @mcp.tool()
@@ -1321,15 +1358,24 @@ async def get_voxel_neurons(
 
 
 @mcp.tool()
-async def list_area_synapses(cortical_area_id: str) -> dict[str, Any]:
-    """Placed synapses for one cortical area (`/v1/connectome/{area}/synapses`).
+async def list_area_synapses(
+    cortical_area_id: str,
+    direction: str = "outgoing",
+) -> dict[str, Any]:
+    """Realized synapse **edges** for a cortical area (not morphology rules only).
 
-    Unlike ``get_cortical_mapping`` (which returns morphology rules), this returns
-    the actual realized per-synapse list with source/target neuron ids, weights,
-    PSP, and synapse type. Use this to confirm that morphologies wired the
-    expected synapses after upload.
+    **``direction`` (important):** The default path lists **efferent** (outgoing)
+    synapses from this area. IPU→OPU plastic synapses for a **motor** area are
+    **afferent** (into the OPU); for those, pass ``direction="incoming"`` or
+    ``direction="both"``. Otherwise you will see 200 with an empty list even when
+    ``inspect_cortical_areas_minimal`` reports a large ``incoming_synapse_count``.
+
+    ``direction=both`` returns one dict with ``outgoing`` and ``incoming`` keys.
+
+    For morphology **rules** (morphology id, PSC, plasticity mode), use
+    ``get_cortical_mapping`` or ``get_connectivity_summary`` instead of this tool.
     """
-    return await feagi.list_area_synapses(cortical_area_id)
+    return await feagi.list_area_synapses(cortical_area_id, direction=direction)
 
 
 @mcp.tool()
@@ -1517,13 +1563,13 @@ async def get_connectivity_summary(
 
 @mcp.tool()
 async def inspect_cortical_areas_minimal(cortical_ids: list[str]) -> dict[str, Any]:
-    """Project ``inspect_cortical_areas_batch`` to ~18 plasticity-relevant fields.
+    """Project ``inspect_cortical_areas_batch`` to a fixed, compact field set per area.
 
     Returns one record per cortical_id with only the fields needed for circuit
-    design (dimensions, fire threshold, PSP, leak, refractory, plasticity constant,
-    burst engine flag, synapse counts). Discards visualization geometry and
-    encoding option lists. Lets you sweep five areas at once without exhausting
-    the response budget.
+    design (dimensions, fire threshold, PSP, leak, ``rate_modulated_leak`` when
+    present, refractory, plasticity constant, burst engine flag, synapse counts).
+    Discards visualization geometry and encoding option lists. Lets you sweep
+    several areas at once without exhausting the response budget.
     """
     return await feagi.inspect_cortical_areas_minimal(cortical_ids)
 
@@ -1619,6 +1665,8 @@ async def auto_polarity_probe(
     intensity_z: int = 5,
     repeats: int = 3,
     settle_ms: int = 400,
+    include_mujoco_physics: bool = False,
+    controller_id: str = "mujoco",
 ) -> dict[str, Any]:
     """Empirically discover OPU column -> sensor direction by force-firing each column.
 
@@ -1627,6 +1675,12 @@ async def auto_polarity_probe(
     weighted-z centroid shift. The result is an inferred direction map you can use
     to wire your reflex morphology without manually decoding the embodiment's
     motor convention.
+
+    Set ``include_mujoco_physics=True`` to append MuJoCo
+    ``embodiment_get_physics_state`` samples (actuator ``ctrl`` / joint ``qpos``)
+    per column so a ``no_change`` in FEAGI’s sensor frame can be compared to
+    ground truth from the simulator’s introspection server (requires
+    auto-discovered or reachable controller URL).
 
     Requires the embodiment agent to be subscribed to motor output for ``opu_id``.
     """
@@ -1637,6 +1691,8 @@ async def auto_polarity_probe(
         intensity_z=intensity_z,
         repeats=repeats,
         settle_ms=settle_ms,
+        include_mujoco_physics=include_mujoco_physics,
+        controller_id=controller_id,
     )
 
 
@@ -1708,17 +1764,119 @@ async def embodiment_set_joint_state(
     )
 
 
+@mcp.tool()
+async def embodiment_reset_simulation_time_stats(
+    introspection_url: str | None = None,
+    timeout_s: float = 2.0,
+    controller_id: str = "mujoco",
+) -> dict[str, Any]:
+    """Reset the session max MuJoCo simulation clock (benchmark high-water mark).
+
+    Proxies to ``POST <introspection_url>/v1/reset_simulation_time_stats`` on
+    the MuJoCo controller (see
+    ``nrs-embodiments/controllers/simulators/mujoco/mcp_introspection.py``). Use
+    before a new "longest time upright" trial; current ``mujoco_simulation_time_s`` is
+    unchanged. Auto-discovery matches ``embodiment_get_physics_state``.
+    """
+    return await feagi.embodiment_reset_simulation_time_stats(
+        introspection_url=introspection_url,
+        timeout_s=timeout_s,
+        controller_id=controller_id,
+    )
+
+
+@mcp.tool()
+async def composer_list_simulator_packs(
+    engine: str | None = None,
+    kind: str | None = None,
+    state: str = "active",
+) -> dict[str, Any]:
+    """Query Composer public catalog of shared simulator asset packs (GCS-backed).
+
+    Maps to Composer ``GET /v1/public/global/simulator-packs`` (staging/production).
+    Requires ``FEAGI_COMPOSER_BASE_URL``. Use filters to shrink results (e.g. ``engine=mujoco``).
+
+    Returns:
+        Composer JSON body (typically ``data`` array) plus ``http_status`` when non-success.
+    """
+    return await composer_sim_packs.list_simulator_packs(
+        engine=engine, kind=kind, state=state
+    )
+
+
+@mcp.tool()
+async def composer_get_simulator_pack_versions(
+    pack_id: str,
+    engine: str | None = None,
+) -> dict[str, Any]:
+    """List semver versions indexed for ``pack_id`` on Composer.
+
+    ``GET .../simulator-packs/{pack_id}``. Use before requesting a resolved manifest.
+    """
+    return await composer_sim_packs.get_pack_version_summary(pack_id, engine=engine)
+
+
+@mcp.tool()
+async def composer_get_simulator_pack_resolved(
+    pack_id: str,
+    semver: str,
+    engine: str | None = None,
+) -> dict[str, Any]:
+    """Resolved pack manifest with per-file HTTPS URLs (include.xml, LICENSE, etc.).
+
+    ``GET .../simulator-packs/{pack_id}/versions/{semver}/resolved``.
+    After ``composer_download_simulator_pack_bundle``, point MJCF ``include``
+    entries at paths under ``output_directory``.
+    """
+    return await composer_sim_packs.get_pack_resolved(
+        pack_id, semver, engine=engine
+    )
+
+
+@mcp.tool()
+async def composer_download_simulator_pack_bundle(
+    output_directory: str,
+    pack_id: str,
+    semver: str,
+    engine: str | None = None,
+) -> dict[str, Any]:
+    """Download every file listed in the resolved manifest into ``output_directory``.
+
+    Creates the directory tree as needed; writes ONLY flat basename keys from Composer
+    (e.g. ``include.xml``, ``manifest.json``, ``LICENSE``).
+
+    Useful to place pack assets beside an embodiment ``scene.xml`` for MuJoCo ``include``.
+    Requires network access from the MCP process to ``storage.googleapis.com``.
+    """
+    return await composer_sim_packs.download_pack_bundle(
+        output_directory,
+        pack_id,
+        semver,
+        engine=engine,
+    )
+
+
 def main() -> None:
     """Run the FEAGI MCP server."""
     logger.info("Starting FEAGI MCP Server...")
     logger.info(f"Connecting to FEAGI at {config.host}:{config.port}")
+    if composer_sim_packs.enabled:
+        logger.info(
+            "Composer simulator packs: FEAGI_COMPOSER_BASE_URL is set (%s)",
+            config.composer_base_url.strip().rstrip("/"),
+        )
 
     try:
         mcp.run(transport="stdio")
     except KeyboardInterrupt:
         logger.info("Shutting down...")
     finally:
-        asyncio.run(feagi.close())
+
+        async def _shutdown_clients() -> None:
+            await feagi.close()
+            await composer_sim_packs.close()
+
+        asyncio.run(_shutdown_clients())
 
 
 if __name__ == "__main__":

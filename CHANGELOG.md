@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Composer shared simulator packs** (optional ``FEAGI_COMPOSER_BASE_URL``): tools
+  ``composer_list_simulator_packs``, ``composer_get_simulator_pack_versions``,
+  ``composer_get_simulator_pack_resolved``, ``composer_download_simulator_pack_bundle``;
+  client module ``composer_simulator_packs.py`` and tests ``test_composer_simulator_packs.py``.
+
 ### Changed
+- **`inspect_cortical_areas_minimal`**: includes optional `rate_modulated_leak` (homeostatic LIF leak) from the area record or `properties`; **`update_cortical_area`** / **FeagiClient** docstrings and **`docs/NEW_TOOLS.md`** document the same object shape and flat key `cx-hmlk-d`.
 - **Documentation**: MCP tool and catalog text for **`GET /v1/cortical_area/voxel_neurons`** (`get_cortical_area_voxel_neurons`): when to use voxel/neuron inspection, incoming/outgoing synapses, and debugging; `list_brain_visualizer_operations`, `brain_visualizer_api`, `feagi_client.brain_visualizer_operation`, `README.md`, `docs/API_REFERENCE.md`, and `bv_operations` description.
 - **Documentation**: Cortical area naming policy for MCP (no `Mcp` prefix; role/circuit-first names) in `docs/NEW_TOOLS.md` and tool/client docstrings.
 - **`create_cortical_area`**: Added `brain_region_id` for CUSTOM/MEMORY areas (required by FEAGI `custom_cortical_area` API). The client returns a clear error if it is missing; may be supplied via `properties["brain_region_id"]` instead.

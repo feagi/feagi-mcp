@@ -13,6 +13,11 @@ class FeagiMcpConfig(BaseSettings):
         extra="ignore",
     )
 
+    #: Composer public REST root (HTTPS), no trailing slash. Example:
+    #: ``https://us-staging-composer.brainsforrobots.com``. When empty,
+    #: ``composer_*`` MCP tools return ``composer_base_url_not_configured``.
+    composer_base_url: str = ""
+
     host: str = "localhost"
     port: int = 8000
     timeout_seconds: float = 30.0

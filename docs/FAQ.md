@@ -271,6 +271,27 @@ are valid only when `plasticity_mode` is `stdp` or `rstdp` (rejected on `off`).
 From MCP, `build_reflex_mapping` checks LTP/LTD fit in i8 and forwards
 `max_weight` / `plasticity_eta` on the rule dict.
 
+### `list_area_synapses` shows 0, but the OPU has incoming count?
+
+The REST route `/v1/connectome/{id}/synapses` lists only **efferent** (outgoing)
+edges from that area. Motor **OPUs** are almost entirely driven by **incoming**
+IPU→OPU synapses. Use MCP `list_area_synapses` with
+`direction="incoming"` (or `direction="both"`), or call
+`GET /v1/connectome/{id}/synapses/incoming` on a recent feagi-api build.
+`get_cortical_mapping` is still the right place for *rules* (morphology, PSC, plasticity).
+
+### `health_check` says 0 connected agents, but the sim works?
+
+`connected_agents` in health and the `get_registered_agents` list can disagree:
+the first is often a stricter / transport-level notion. If agents appear in
+`get_registered_agents` and motor or sensor snapshots update, the embodiment
+is still in play.
+
+### Motor snapshot: many areas at once?
+
+Pass `cortical_id` to `get_motor_snapshot_last` to filter the tap to a single
+OPU (new query param on the FEAGI `motor_snapshot/last` endpoint in recent builds).
+
 ---
 
 ## Still have questions?

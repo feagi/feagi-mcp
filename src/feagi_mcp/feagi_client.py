@@ -1207,7 +1207,12 @@ class FeagiClient:
     async def update_cortical_area(
         self, cortical_id: str, updates: dict[str, Any]
     ) -> dict[str, Any]:
-        """Update properties of an existing cortical area."""
+        """Update properties of an existing cortical area.
+
+        Pass optional ``rate_modulated_leak`` (dict) to enable or change intrinsic
+        firing-rate homeostasis for dense custom areas (same key as the REST/Brain
+        Visualizer PUT body). Omitted fields keep prior behavior.
+        """
         try:
             request_data = {"cortical_id": cortical_id}
             request_data.update(updates)
@@ -1430,12 +1435,17 @@ class FeagiClient:
     # ------------------------------------------------------------------
 
     async def get_motor_snapshot_last(
-        self, agent_id: str | None = None
+        self,
+        agent_id: str | None = None,
+        cortical_id: str | None = None,
     ) -> dict[str, Any]:
         """GET /v1/output/motor_snapshot/last - latest motor output captured by the burst loop.
 
         Args:
             agent_id: Optional agent filter applied to the per-agent publish stats.
+            cortical_id: When set, server returns only the ``areas`` block for
+                that OPU (base64 id) and recomputes ``total_*``; use this to read
+                a single motor area without wading through unrelated areas.
 
         Returns:
             Dict with ``burst_num``, ``timestamp_ms``, ``has_data``, ``total_areas``,
@@ -1446,6 +1456,8 @@ class FeagiClient:
             params: dict[str, str] = {}
             if isinstance(agent_id, str) and agent_id.strip():
                 params["agent_id"] = agent_id.strip()
+            if isinstance(cortical_id, str) and cortical_id.strip():
+                params["cortical_id"] = cortical_id.strip()
             response = await self._client.get(
                 f"{self.base_url}/v1/output/motor_snapshot/last",
                 params=params or None,
@@ -1747,24 +1759,85 @@ class FeagiClient:
             logger.error("get_voxel_neurons failed: %s", e)
             return {"error": str(e)}
 
-    async def list_area_synapses(self, cortical_area_id: str) -> dict[str, Any]:
-        """GET /v1/connectome/{cortical_area_id}/synapses - placed synapses for one area.
+    async def list_area_synapses(
+        self,
+        cortical_area_id: str,
+        direction: str = "outgoing",
+    ) -> dict[str, Any]:
+        """List realized synapse edges for a cortical area (not just mapping rules).
 
-        Returns the actual realized per-synapse list (source/target neuron ids,
-        weights, postsynaptic potentials, type) - not just morphology rules.
+        The underlying HTTP contract is split:
+
+        - **outgoing** (default) — ``GET /v1/connectome/{id}/synapses`` — efferent
+          edges *from* neurons in this area. OPU “motor” areas that only receive
+          input show **0** here even with hundreds of incoming afferent synapses.
+        - **incoming** — ``GET /v1/connectome/{id}/synapses/incoming`` — afferent
+          edges *to* neurons in this area. Use for IPU→OPU plastic **weights** on
+          a destination.
+        - **both** — two round-trips; the dict contains ``outgoing`` and
+          ``incoming`` lists and separate counts.
         """
         area = str(cortical_area_id).strip()
         if not area:
             return {"error": "cortical_area_id must be non-empty"}
+        dir_n = str(direction or "outgoing").strip().lower()
+        if dir_n not in {"outgoing", "incoming", "both"}:
+            return {
+                "error": "direction must be 'outgoing', 'incoming', or 'both'",
+            }
         try:
-            response = await self._client.get(
-                f"{self.base_url}/v1/connectome/{area}/synapses"
-            )
+            if dir_n == "both":
+                r_out = await self._client.get(
+                    f"{self.base_url}/v1/connectome/{area}/synapses"
+                )
+                r_in = await self._client.get(
+                    f"{self.base_url}/v1/connectome/{area}/synapses/incoming"
+                )
+                if r_out.status_code != 200 and r_in.status_code != 200:
+                    return {
+                        "cortical_area_id": area,
+                        "error": f"outgoing: HTTP {r_out.status_code}; "
+                        f"incoming: HTTP {r_in.status_code}",
+                        "message": r_out.text,
+                    }
+                out: list[Any] = (
+                    list(r_out.json()) if r_out.status_code == 200 else []
+                )
+                ins: list[Any] = (
+                    list(r_in.json()) if r_in.status_code == 200 else []
+                )
+                result: dict[str, Any] = {
+                    "cortical_area_id": area,
+                    "direction": "both",
+                    "outgoing_synapse_count": len(out),
+                    "incoming_synapse_count": len(ins),
+                    "outgoing": out,
+                    "incoming": ins,
+                }
+                if r_out.status_code != 200:
+                    result["outgoing_error"] = {
+                        "http": r_out.status_code,
+                        "message": r_out.text,
+                    }
+                if r_in.status_code != 200:
+                    result["incoming_error"] = {
+                        "http": r_in.status_code,
+                        "message": r_in.text,
+                    }
+                return result
+
+            if dir_n == "outgoing":
+                path = f"{self.base_url}/v1/connectome/{area}/synapses"
+            else:
+                path = f"{self.base_url}/v1/connectome/{area}/synapses/incoming"
+
+            response = await self._client.get(path)
             if response.status_code == 200:
                 payload = response.json()
                 if isinstance(payload, list):
                     return {
                         "cortical_area_id": area,
+                        "direction": dir_n,
                         "synapse_count": len(payload),
                         "synapses": payload,
                     }
@@ -2016,7 +2089,7 @@ class FeagiClient:
             logger.error("get_connectivity_summary failed: %s", e)
             return {"error": str(e)}
 
-    # Plasticity-relevant fields surfaced by inspect_cortical_areas_minimal.
+    # Plasticity- and dynamics-relevant fields surfaced by inspect_cortical_areas_minimal.
     # Kept short and stable so MCP consumers can rely on a known shape.
     _MINIMAL_AREA_FIELDS: tuple[str, ...] = (
         "cortical_name",
@@ -2037,17 +2110,22 @@ class FeagiClient:
         "neuron_burst_engine_active",
         "incoming_synapse_count",
         "outgoing_synapse_count",
+        # Optional homeostatic LIF leak (FEAGI dense custom areas): see rate_modulated_leak.md
+        "rate_modulated_leak",
     )
 
     async def inspect_cortical_areas_minimal(
         self,
         cortical_ids: list[str],
     ) -> dict[str, Any]:
-        """Project full inspection payload to ~18 plasticity-relevant fields per area.
+        """Project full inspection payload to a fixed set of plasticity- and leak-related fields per area.
 
         Wraps :meth:`fetch_multi_cortical_area_properties` and discards verbose fields
-        (visualization geometry, encoding option lists, properties dict, etc.) so a
+        (visualization geometry, encoding option lists, etc.) so a
         five-area sweep fits comfortably in a single MCP response.
+        For ``rate_modulated_leak``, the value is taken from the top-level record if
+        present, otherwise from ``properties["rate_modulated_leak"]`` when the API
+        nests genomes that way.
 
         Returns:
             Dict mapping ``cortical_id`` -> projected field dict.
@@ -2072,6 +2150,10 @@ class FeagiClient:
                 for field in self._MINIMAL_AREA_FIELDS:
                     if field in area:
                         projected[field] = area[field]
+                    else:
+                        bag = area.get("properties")
+                        if isinstance(bag, dict) and field in bag:
+                            projected[field] = bag[field]
                 slim[cid] = projected
             return slim
         except Exception as e:
@@ -2276,6 +2358,8 @@ class FeagiClient:
         intensity_z: int = 5,
         repeats: int = 3,
         settle_ms: int = 400,
+        include_mujoco_physics: bool = False,
+        controller_id: str = "mujoco",
     ) -> dict[str, Any]:
         """Force-fire each column of an OPU and report the sensor delta it produces.
 
@@ -2284,6 +2368,11 @@ class FeagiClient:
         ``sensor_id`` against the pre-stimulation baseline. Useful for discovering
         which OPU column drives an actuator in which physical direction without
         having to hand-decode encoder voxels.
+
+        Set ``include_mujoco_physics=True`` to append
+        :meth:`embodiment_get_physics_state` after each column (actuator
+        ``ctrl`` / joint ``qpos``) so the probe is grounded in MuJoCo, not just
+        FEAGI’s sensor frame.
 
         IMPORTANT: This requires the embodiment agent to be subscribed to motor
         output for ``opu_id``. If no agent is subscribed, the cart will not move
@@ -2296,6 +2385,9 @@ class FeagiClient:
             intensity_z: Z coordinate to use during stimulation.
             repeats: Number of force-fire stimuli per column.
             settle_ms: Time to wait between stimulation and post-stim snapshot.
+            include_mujoco_physics: If True, capture MuJoCo state via the controller
+                introspection server (requires a discoverable URL).
+            controller_id: Introspection bundle id when using physics capture.
 
         Returns:
             Dict with ``baseline``, per-column probe results (``stim_xyz``,
@@ -2333,6 +2425,11 @@ class FeagiClient:
                 return weighted / total_w if total_w > 0 else None
 
             baseline_z = await _sensor_centroid_z()
+            baseline_physics: dict[str, Any] | None = None
+            if include_mujoco_physics:
+                baseline_physics = await self.embodiment_get_physics_state(
+                    controller_id=controller_id
+                )
 
             results: list[dict[str, Any]] = []
             for col in cols:
@@ -2345,15 +2442,18 @@ class FeagiClient:
                     if baseline_z is None or post_z is None
                     else (post_z - baseline_z)
                 )
-                results.append(
-                    {
-                        "stim_xyz": [col, 0, int(intensity_z)],
-                        "stimulation_result": stim,
-                        "baseline_z_centroid": baseline_z,
-                        "post_z_centroid": post_z,
-                        "observed_z_shift": shift,
-                    }
-                )
+                row: dict[str, Any] = {
+                    "stim_xyz": [col, 0, int(intensity_z)],
+                    "stimulation_result": stim,
+                    "baseline_z_centroid": baseline_z,
+                    "post_z_centroid": post_z,
+                    "observed_z_shift": shift,
+                }
+                if include_mujoco_physics:
+                    row["mujoco_physics_after"] = await self.embodiment_get_physics_state(
+                        controller_id=controller_id
+                    )
+                results.append(row)
 
             inferred: dict[str, str] = {}
             shift_threshold = 0.25
@@ -2369,7 +2469,7 @@ class FeagiClient:
                 else:
                     inferred[key] = "no_change"
 
-            return {
+            out: dict[str, Any] = {
                 "opu_id": opu_id,
                 "sensor_id": sensor_id,
                 "columns": cols,
@@ -2380,6 +2480,9 @@ class FeagiClient:
                 "results": results,
                 "inferred_direction_map": inferred,
             }
+            if include_mujoco_physics and baseline_physics is not None:
+                out["mujoco_physics_baseline"] = baseline_physics
+            return out
         except Exception as e:
             logger.error("auto_polarity_probe failed: %s", e)
             return {"error": str(e)}
@@ -2470,7 +2573,10 @@ class FeagiClient:
 
         Returns:
             Whatever the controller exposes; typically
-            ``{"time": float, "joints": {...}, "actuators": {...}, "sensors": {...}}``.
+            ``{"time": float, "mujoco_simulation_time_s": float,
+            "mujoco_simulation_time_max_session_s": float, "joints": {...},
+            "actuators": {...}, "sensors": {...}}`` (see MuJoCo introspection
+            ``/v1/state`` for the full schema).
         """
         url, descriptor = self._resolve_introspection_url(
             introspection_url, controller_id
@@ -2499,6 +2605,52 @@ class FeagiClient:
             }
         except Exception as e:
             logger.error("embodiment_get_physics_state failed: %s", e)
+            return {"error": str(e)}
+
+    async def embodiment_reset_simulation_time_stats(
+        self,
+        introspection_url: str | None = None,
+        timeout_s: float = 2.0,
+        controller_id: str = "mujoco",
+    ) -> dict[str, Any]:
+        """POST ``/v1/reset_simulation_time_stats`` on the controller introspection server.
+
+        Zeros the **session** high-water mark ``mujoco_simulation_time_max_session_s`` so
+        you can start a fresh benchmark of "longest balanced time" in this process. Does
+        not change MuJoCo ``data.time``; the next ``GET /v1/state`` still reports the
+        current sim clock, and the max re-accumulates from the next snapshots.
+
+        Args:
+            introspection_url: Base URL, or ``None`` to auto-discover the descriptor
+                for ``controller_id``.
+            timeout_s: HTTP timeout.
+            controller_id: Descriptor id for discovery.
+        """
+        url, _descriptor = self._resolve_introspection_url(
+            introspection_url, controller_id
+        )
+        if url is None:
+            return {
+                "error": "introspection_url_unavailable",
+                "message": (
+                    f"No introspection URL provided and no descriptor found "
+                    f"for controller_id={controller_id!r}."
+                ),
+            }
+        try:
+            full_url = url.rstrip("/") + "/v1/reset_simulation_time_stats"
+            async with httpx.AsyncClient(timeout=timeout_s) as client:
+                response = await client.post(
+                    full_url, json={},
+                )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error("embodiment_reset_simulation_time_stats failed: %s", e)
             return {"error": str(e)}
 
     async def embodiment_set_joint_state(

@@ -223,6 +223,45 @@ class TestInspectCorticalAreasMinimal:
         assert projected["incoming_synapse_count"] == 0
 
     @pytest.mark.asyncio
+    async def test_includes_rate_modulated_leak_from_properties(self, mock_client):
+        rml = {
+            "enabled": True,
+            "target_firing_per_burst": 0.1,
+            "rate_ema_tau_bursts": 50.0,
+        }
+        full_payload = {
+            "id_b": {
+                "cortical_name": "custom_a",
+                "area_type": "CUSTOM",
+                "cortical_dimensions": [1, 1, 1],
+                "neuron_count": 1,
+                "properties": {"rate_modulated_leak": rml},
+            },
+        }
+        mock_client._client.post.return_value = _ok(full_payload)
+        out = await mock_client.inspect_cortical_areas_minimal(["id_b"])
+        assert "id_b" in out
+        assert out["id_b"]["rate_modulated_leak"] == rml
+
+    @pytest.mark.asyncio
+    async def test_prefers_top_level_rate_modulated_leak(self, mock_client):
+        top: dict = {"enabled": True}
+        nested: dict = {"enabled": False}
+        full_payload = {
+            "id_c": {
+                "cortical_name": "custom_b",
+                "area_type": "CUSTOM",
+                "cortical_dimensions": [1, 1, 1],
+                "neuron_count": 1,
+                "rate_modulated_leak": top,
+                "properties": {"rate_modulated_leak": nested},
+            },
+        }
+        mock_client._client.post.return_value = _ok(full_payload)
+        out = await mock_client.inspect_cortical_areas_minimal(["id_c"])
+        assert out["id_c"]["rate_modulated_leak"] == top
+
+    @pytest.mark.asyncio
     async def test_rejects_empty_list(self, mock_client):
         out = await mock_client.inspect_cortical_areas_minimal([])
         assert "error" in out
@@ -455,3 +494,24 @@ class TestEmbodimentProxies:
         client = FeagiClient()
         out = await client.embodiment_set_joint_state("http://localhost:9876")
         assert "error" in out
+
+    @pytest.mark.asyncio
+    async def test_reset_simulation_time_stats_posts(self):
+        client = FeagiClient()
+        with patch("feagi_mcp.feagi_client.httpx.AsyncClient") as ctor:
+            inner = AsyncMock()
+            inner.post.return_value = _ok(
+                {
+                    "status": "ok",
+                    "mujoco_simulation_time_max_session_s": 0.0,
+                    "mujoco_simulation_time_s": 1.23,
+                }
+            )
+            ctor.return_value.__aenter__.return_value = inner
+            out = await client.embodiment_reset_simulation_time_stats(
+                "http://localhost:9876/"
+            )
+        assert out["status"] == "ok"
+        inner.post.assert_awaited_once_with(
+            "http://localhost:9876/v1/reset_simulation_time_stats", json={}
+        )

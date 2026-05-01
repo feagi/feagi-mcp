@@ -20,6 +20,9 @@ Model Context Protocol (MCP) server for FEAGI neural monitoring and control. Ena
 - **Download genomes** - Retrieve current brain configuration
 - **List areas** - Enumerate all cortical regions
 
+### Composer integration (optional)
+- **Simulator asset packs** - List/resolve/download shared packs from Composer when `FEAGI_COMPOSER_BASE_URL` is set
+
 ## Installation
 
 ```bash
@@ -47,6 +50,8 @@ feagi-mcp
 ```bash
 export FEAGI_HOST=localhost
 export FEAGI_PORT=8000
+# Optional: Composer public API (shared simulator packs, embodiment metadata APIs, etc.)
+export FEAGI_COMPOSER_BASE_URL=https://us-staging-composer.brainsforrobots.com
 feagi-mcp
 ```
 
@@ -62,7 +67,8 @@ Add to your Cursor MCP settings (`~/.cursor/mcp.json`):
       "args": ["-m", "feagi_mcp.server"],
       "env": {
         "FEAGI_HOST": "localhost",
-        "FEAGI_PORT": "8000"
+        "FEAGI_PORT": "8000",
+        "FEAGI_COMPOSER_BASE_URL": "https://us-staging-composer.brainsforrobots.com"
       }
     }
   }
@@ -98,6 +104,13 @@ Add to your Cursor MCP settings (`~/.cursor/mcp.json`):
 - `get_cortical_mapping` - Get connection configuration between two areas
 - `update_cortical_mapping` - Create/update connections with morphology rules
 - `delete_cortical_mapping` - Remove connections between areas
+
+### Composer shared simulator packs (optional)
+Set `FEAGI_COMPOSER_BASE_URL` to the Composer HTTPS root (e.g. staging). Read-only routes under `/v1/public/global/simulator-packs`.
+- `composer_list_simulator_packs` - Catalog with optional filters (`engine`, `kind`, `state`)
+- `composer_get_simulator_pack_versions` - Version index for a `pack_id`
+- `composer_get_simulator_pack_resolved` - Resolved manifest and per-file HTTPS URLs (GCS)
+- `composer_download_simulator_pack_bundle` - Fetch every listed file into a local directory for MJCF `include` wiring (MuJoCo still requires XML edit + model reload)
 
 ### Brain Visualizer parity (full REST router)
 - `list_brain_visualizer_operations` - Index of every supported `operation_id` with HTTP method and path (same surface as `FEAGIHTTPAddressList.gd`)

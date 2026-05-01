@@ -2,7 +2,7 @@
   "name": "feagi",
   "displayName": "FEAGI Neural Monitor",
   "description": "Observe and control FEAGI neural systems for LLM-assisted circuit design",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "publisher": "neuraville",
   "categories": ["AI", "Robotics", "Science"],
   "keywords": ["feagi", "neural", "brain", "robotics", "mcp", "ai"],
@@ -89,6 +89,26 @@
       "name": "validate_genome",
       "category": "genome",
       "description": "Validate genome structure before upload"
+    },
+    {
+      "name": "composer_list_simulator_packs",
+      "category": "composer",
+      "description": "List shared simulator packs from Composer (requires FEAGI_COMPOSER_BASE_URL)"
+    },
+    {
+      "name": "composer_get_simulator_pack_versions",
+      "category": "composer",
+      "description": "Get semver catalog for one pack_id"
+    },
+    {
+      "name": "composer_get_simulator_pack_resolved",
+      "category": "composer",
+      "description": "Resolved pack manifest + per-file HTTPS URLs"
+    },
+    {
+      "name": "composer_download_simulator_pack_bundle",
+      "category": "composer",
+      "description": "Download resolved simulator pack files to a directory"
     },
     {
       "name": "stimulate_area",

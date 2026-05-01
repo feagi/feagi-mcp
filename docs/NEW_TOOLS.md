@@ -120,6 +120,8 @@ Set `skip_placement_validation=True` only if you must bypass these checks.
 
 **Use case**: Change neural parameters, position, dimensions without reloading entire genome.
 
+**Rate-modulated leak (homeostatic, dense custom LIF):** set `rate_modulated_leak` in `updates` to a JSON object (`enabled`, `target_firing_per_burst`, `rate_ema_tau_bursts`, `gain`, `leak_min`, `leak_max`, `update_every_n_bursts`) as in the FEAGI and Brain Visualizer Advanced / Danger area UI. `inspect_cortical_areas_minimal` includes `rate_modulated_leak` in its projection when the field is present on the area or under `properties`.
+
 ### 7. `delete_cortical_area`
 **Purpose**: Remove a cortical area  
 **Endpoint**: `/v1/cortical_area/cortical_area` (DELETE)
@@ -163,6 +165,21 @@ mcp.update_cortical_mapping(
 ### 10. `delete_cortical_mapping`
 **Purpose**: Remove connections between two areas  
 **Endpoint**: `/v1/cortical_mapping/mapping` (DELETE)
+
+### 11–14. Composer shared simulator packs (optional)
+
+**Purpose**: Eliminate fragile browser-curl probing of Composer for GCS-hosted MuJoCo (and other) asset packs deployed via `shared-sim/` CI.
+
+**Configuration**: Set `FEAGI_COMPOSER_BASE_URL` to the Composer HTTPS root (no trailing slash), e.g. `https://us-staging-composer.brainsforrobots.com`.
+
+| Tool | Maps to |
+|------|---------|
+| `composer_list_simulator_packs` | `GET /v1/public/global/simulator-packs` |
+| `composer_get_simulator_pack_versions` | `GET .../simulator-packs/{pack_id}` |
+| `composer_get_simulator_pack_resolved` | `GET .../{pack_id}/versions/{semver}/resolved` |
+| `composer_download_simulator_pack_bundle` | resolved JSON + sequential `GET` of each blob URL |
+
+**Use case**: After `composer_get_simulator_pack_resolved`, place files beside `scene.xml` via `composer_download_simulator_pack_bundle`, add MJCF `<include file="…"/>`, restart the MuJoCo controller (MjModel reload).
 
 ## Impact on Current Debugging Workflow
 

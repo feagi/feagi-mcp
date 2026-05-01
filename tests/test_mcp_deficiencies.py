@@ -207,8 +207,43 @@ class TestNeuronInspection:
             ]
         )
         result = await mock_client.list_area_synapses("aXN2bQEAAAM=")
+        assert result["direction"] == "outgoing"
         assert result["synapse_count"] == 2
         assert isinstance(result["synapses"], list)
+        first_url = mock_client._client.get.call_args[0][0]
+        assert first_url.endswith("/aXN2bQEAAAM=/synapses")
+        assert "/synapses/incoming" not in first_url
+
+    @pytest.mark.asyncio
+    async def test_list_area_synapses_both_merges_endpoints(self, mock_client):
+        out = [
+            {
+                "source_neuron_id": 1,
+                "target_neuron_id": 2,
+                "weight": 0.1,
+            }
+        ]
+        ins = [
+            {
+                "source_neuron_id": 10,
+                "target_neuron_id": 20,
+                "weight": 0.2,
+            }
+        ]
+
+        mock_client._client.get = AsyncMock(
+            side_effect=[_ok(out), _ok(ins)],
+        )
+        result = await mock_client.list_area_synapses("YWFhYQ==", direction="both")
+        assert result["direction"] == "both"
+        assert result["outgoing_synapse_count"] == 1
+        assert result["incoming_synapse_count"] == 1
+        assert result["outgoing"] == out
+        assert result["incoming"] == ins
+        assert mock_client._client.get.call_count == 2
+        urls = [c[0][0] for c in mock_client._client.get.call_args_list]
+        assert any(str(u).endswith("/synapses") and "/incoming" not in str(u) for u in urls)
+        assert any("/synapses/incoming" in str(u) for u in urls)
 
 
 class TestAgentAndMonitoring:
