@@ -146,8 +146,6 @@ async def test_download_fails_when_resolved_http_error(
     mock_client: ComposerSimulatorPacksClient,
     tmp_path: Path,
 ) -> None:
-    mock_client.get_pack_resolved = AsyncMock(
-        return_value={"http_status": 404, "detail": "nope"}
-    )
+    mock_client.get_pack_resolved = AsyncMock(return_value={"http_status": 404, "detail": "nope"})
     out = await mock_client.download_pack_bundle(str(tmp_path / "o"), "p", "1.0.0")
     assert out["error"] == "resolved_fetch_failed"

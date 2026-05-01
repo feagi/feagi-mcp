@@ -1223,9 +1223,7 @@ async def get_motor_snapshot_last(
             the JSON ``cortical_id`` in each area row). Use to isolate a cart or
             hinge motor when multiple OPUs and internal areas appear together.
     """
-    return await feagi.get_motor_snapshot_last(
-        agent_id, cortical_id=cortical_id
-    )
+    return await feagi.get_motor_snapshot_last(agent_id, cortical_id=cortical_id)
 
 
 @mcp.tool()
@@ -1801,9 +1799,7 @@ async def composer_list_simulator_packs(
     Returns:
         Composer JSON body (typically ``data`` array) plus ``http_status`` when non-success.
     """
-    return await composer_sim_packs.list_simulator_packs(
-        engine=engine, kind=kind, state=state
-    )
+    return await composer_sim_packs.list_simulator_packs(engine=engine, kind=kind, state=state)
 
 
 @mcp.tool()
@@ -1830,9 +1826,7 @@ async def composer_get_simulator_pack_resolved(
     After ``composer_download_simulator_pack_bundle``, point MJCF ``include``
     entries at paths under ``output_directory``.
     """
-    return await composer_sim_packs.get_pack_resolved(
-        pack_id, semver, engine=engine
-    )
+    return await composer_sim_packs.get_pack_resolved(pack_id, semver, engine=engine)
 
 
 @mcp.tool()

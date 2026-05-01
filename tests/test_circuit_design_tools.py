@@ -508,9 +508,7 @@ class TestEmbodimentProxies:
                 }
             )
             ctor.return_value.__aenter__.return_value = inner
-            out = await client.embodiment_reset_simulation_time_stats(
-                "http://localhost:9876/"
-            )
+            out = await client.embodiment_reset_simulation_time_stats("http://localhost:9876/")
         assert out["status"] == "ok"
         inner.post.assert_awaited_once_with(
             "http://localhost:9876/v1/reset_simulation_time_stats", json={}

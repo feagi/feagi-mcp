@@ -74,39 +74,27 @@ class TestDiscoverEndpoint:
         assert ep.pid == 4242
         assert ep.controller_version == "1.0.71"
         assert ep.descriptor_path == str(path)
-        assert ep.schema_version.startswith(
-            f"{SUPPORTED_INTROSPECTION_SCHEMA_MAJOR}."
-        )
+        assert ep.schema_version.startswith(f"{SUPPORTED_INTROSPECTION_SCHEMA_MAJOR}.")
 
-    def test_returns_none_when_no_descriptor_present(
-        self, tmp_path: Path
-    ) -> None:
+    def test_returns_none_when_no_descriptor_present(self, tmp_path: Path) -> None:
         empty_root = tmp_path / "empty"
         empty_root.mkdir()
         ep = discover_endpoint("mujoco", env_override=str(empty_root))
         assert ep is None
 
-    def test_returns_none_when_descriptor_is_malformed(
-        self, tmp_path: Path
-    ) -> None:
+    def test_returns_none_when_descriptor_is_malformed(self, tmp_path: Path) -> None:
         intro_dir = tmp_path / "controllers" / INTROSPECTION_SUBDIR
         intro_dir.mkdir(parents=True, exist_ok=True)
-        (intro_dir / "mujoco.json").write_text(
-            "{ this is not valid json", encoding="utf-8"
-        )
+        (intro_dir / "mujoco.json").write_text("{ this is not valid json", encoding="utf-8")
         ep = discover_endpoint("mujoco", env_override=str(tmp_path))
         assert ep is None
 
-    def test_returns_none_for_unsupported_schema_major(
-        self, tmp_path: Path
-    ) -> None:
+    def test_returns_none_for_unsupported_schema_major(self, tmp_path: Path) -> None:
         _write_descriptor(tmp_path, "mujoco", schema_version="2.0.0")
         ep = discover_endpoint("mujoco", env_override=str(tmp_path))
         assert ep is None
 
-    def test_returns_none_when_required_fields_missing(
-        self, tmp_path: Path
-    ) -> None:
+    def test_returns_none_when_required_fields_missing(self, tmp_path: Path) -> None:
         intro_dir = tmp_path / "controllers" / INTROSPECTION_SUBDIR
         intro_dir.mkdir(parents=True, exist_ok=True)
         (intro_dir / "mujoco.json").write_text(
@@ -145,9 +133,7 @@ class TestEmbodimentAutoResolve:
     """Auto-discovery integration via FeagiClient."""
 
     @pytest.mark.asyncio
-    async def test_get_physics_state_uses_descriptor_when_url_omitted(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_get_physics_state_uses_descriptor_when_url_omitted(self, tmp_path: Path) -> None:
         descriptor_path = _write_descriptor(tmp_path, "mujoco", port=9555)
         client = FeagiClient()
         with (
@@ -164,9 +150,7 @@ class TestEmbodimentAutoResolve:
         inner.get.assert_awaited_once_with("http://127.0.0.1:9555/v1/state")
 
     @pytest.mark.asyncio
-    async def test_get_physics_state_explicit_url_skips_discovery(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_get_physics_state_explicit_url_skips_discovery(self, tmp_path: Path) -> None:
         _write_descriptor(tmp_path, "mujoco", port=9555)
         client = FeagiClient()
         with (
@@ -188,15 +172,11 @@ class TestEmbodimentAutoResolve:
     ) -> None:
         client = FeagiClient()
         with patch.dict("os.environ", {"FEAGI_RUNTIME_ROOT": str(tmp_path)}):
-            out = await client.embodiment_get_physics_state(
-                controller_id="mujoco-no-such-id"
-            )
+            out = await client.embodiment_get_physics_state(controller_id="mujoco-no-such-id")
         assert out["error"] == "introspection_url_unavailable"
 
     @pytest.mark.asyncio
-    async def test_set_joint_state_uses_descriptor_when_url_omitted(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_set_joint_state_uses_descriptor_when_url_omitted(self, tmp_path: Path) -> None:
         _write_descriptor(tmp_path, "mujoco", port=9777)
         client = FeagiClient()
         with (
@@ -206,9 +186,7 @@ class TestEmbodimentAutoResolve:
             inner = AsyncMock()
             inner.post.return_value = _ok({"status": "queued"})
             ctor.return_value.__aenter__.return_value = inner
-            out = await client.embodiment_set_joint_state(
-                joint_qpos={"hinge": 0.3}
-            )
+            out = await client.embodiment_set_joint_state(joint_qpos={"hinge": 0.3})
         assert out["status"] == "queued"
         post_call = inner.post.await_args
         assert post_call.args[0] == "http://127.0.0.1:9777/v1/set_state"
@@ -226,17 +204,11 @@ class TestEmbodimentAutoResolve:
         assert out["error"] == "introspection_url_unavailable"
 
     @pytest.mark.asyncio
-    async def test_discover_tool_returns_full_metadata(
-        self, tmp_path: Path
-    ) -> None:
-        descriptor_path = _write_descriptor(
-            tmp_path, "mujoco", port=9888, pid=12345
-        )
+    async def test_discover_tool_returns_full_metadata(self, tmp_path: Path) -> None:
+        descriptor_path = _write_descriptor(tmp_path, "mujoco", port=9888, pid=12345)
         client = FeagiClient()
         with patch.dict("os.environ", {"FEAGI_RUNTIME_ROOT": str(tmp_path)}):
-            payload = await client.embodiment_discover_introspection_endpoint(
-                "mujoco"
-            )
+            payload = await client.embodiment_discover_introspection_endpoint("mujoco")
         assert payload["found"] is True
         assert payload["controller_id"] == "mujoco"
         assert payload["url"] == "http://127.0.0.1:9888"
@@ -246,17 +218,13 @@ class TestEmbodimentAutoResolve:
         assert payload["descriptor_path"] == str(descriptor_path)
         assert payload["controller_version"] == "1.0.71"
         assert payload["started_at"] == "2026-04-25T16:00:00Z"
-        assert payload["schema_version"].startswith(
-            f"{SUPPORTED_INTROSPECTION_SCHEMA_MAJOR}."
-        )
+        assert payload["schema_version"].startswith(f"{SUPPORTED_INTROSPECTION_SCHEMA_MAJOR}.")
 
     @pytest.mark.asyncio
     async def test_discover_tool_reports_not_found(self, tmp_path: Path) -> None:
         client = FeagiClient()
         with patch.dict("os.environ", {"FEAGI_RUNTIME_ROOT": str(tmp_path)}):
-            payload = await client.embodiment_discover_introspection_endpoint(
-                "mujoco-missing"
-            )
+            payload = await client.embodiment_discover_introspection_endpoint("mujoco-missing")
         assert payload["found"] is False
         assert payload["controller_id"] == "mujoco-missing"
         assert "message" in payload
@@ -264,8 +232,6 @@ class TestEmbodimentAutoResolve:
     @pytest.mark.asyncio
     async def test_discover_tool_reports_error_for_unsafe_id(self) -> None:
         client = FeagiClient()
-        payload = await client.embodiment_discover_introspection_endpoint(
-            "../oops"
-        )
+        payload = await client.embodiment_discover_introspection_endpoint("../oops")
         assert payload["found"] is False
         assert "error" in payload

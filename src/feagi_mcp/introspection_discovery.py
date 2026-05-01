@@ -77,13 +77,9 @@ def _sanitize_controller_id(controller_id: str) -> str:
     if not controller_id:
         raise ValueError("controller_id must be non-empty")
     if controller_id.startswith("."):
-        raise ValueError(
-            f"controller_id must not start with '.': {controller_id!r}"
-        )
+        raise ValueError(f"controller_id must not start with '.': {controller_id!r}")
     if not _CONTROLLER_ID_RE.match(controller_id):
-        raise ValueError(
-            f"controller_id contains unsafe characters: {controller_id!r}"
-        )
+        raise ValueError(f"controller_id contains unsafe characters: {controller_id!r}")
     return controller_id
 
 
@@ -94,9 +90,7 @@ def _candidate_runtime_roots(env_override: str | None = None) -> list[Path]:
     staging and production conventions used by feagi-desktop.
     """
     candidates: list[Path] = []
-    override = env_override if env_override is not None else os.environ.get(
-        "FEAGI_RUNTIME_ROOT"
-    )
+    override = env_override if env_override is not None else os.environ.get("FEAGI_RUNTIME_ROOT")
     if override:
         override_path = Path(override).expanduser()
         if override_path.as_posix().strip():
@@ -136,8 +130,7 @@ def _load_descriptor(path: Path) -> IntrospectionEndpoint | None:
     major = _parse_schema_major(schema_version)
     if major is None or major != SUPPORTED_INTROSPECTION_SCHEMA_MAJOR:
         logger.warning(
-            "introspection: unsupported schema_version=%r in %s "
-            "(expected major=%d)",
+            "introspection: unsupported schema_version=%r in %s (expected major=%d)",
             schema_version,
             path,
             SUPPORTED_INTROSPECTION_SCHEMA_MAJOR,
@@ -219,9 +212,7 @@ def discover_endpoint_or_raise(
     """
     found = discover_endpoint(controller_id, env_override=env_override)
     if found is None:
-        roots = ", ".join(
-            str(p) for p in _candidate_runtime_roots(env_override)
-        )
+        roots = ", ".join(str(p) for p in _candidate_runtime_roots(env_override))
         raise FileNotFoundError(
             "No introspection descriptor found for controller "
             f"{controller_id!r}. Searched: {roots}. "

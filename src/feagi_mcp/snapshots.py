@@ -72,9 +72,7 @@ def validate_label(label: str) -> str:
         raise ValueError("label must be a string")
     trimmed = label.strip()
     if not _LABEL_PATTERN.match(trimmed):
-        raise ValueError(
-            f"label must match [A-Za-z0-9_.-] (1-128 chars); got: '{label}'"
-        )
+        raise ValueError(f"label must match [A-Za-z0-9_.-] (1-128 chars); got: '{label}'")
     return trimmed
 
 

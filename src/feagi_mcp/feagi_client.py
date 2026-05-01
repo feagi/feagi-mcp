@@ -1472,9 +1472,7 @@ class FeagiClient:
             logger.error("get_motor_snapshot_last failed: %s", e)
             return {"error": str(e)}
 
-    async def get_sensor_snapshot_last(
-        self, cortical_id: str | None = None
-    ) -> dict[str, Any]:
+    async def get_sensor_snapshot_last(self, cortical_id: str | None = None) -> dict[str, Any]:
         """GET /v1/input/sensor_snapshot/last - latest sensory input decoded this burst.
 
         Args:
@@ -1555,9 +1553,7 @@ class FeagiClient:
     async def get_burst_counter(self) -> dict[str, Any]:
         """GET /v1/burst_engine/burst_counter - current burst index."""
         try:
-            response = await self._client.get(
-                f"{self.base_url}/v1/burst_engine/burst_counter"
-            )
+            response = await self._client.get(f"{self.base_url}/v1/burst_engine/burst_counter")
             if response.status_code == 200:
                 return {"burst_counter": int(response.json())}
             return {
@@ -1571,9 +1567,7 @@ class FeagiClient:
     async def get_burst_engine_config(self) -> dict[str, Any]:
         """GET /v1/burst_engine/config - frequency, run/pause flags, interval."""
         try:
-            response = await self._client.get(
-                f"{self.base_url}/v1/burst_engine/config"
-            )
+            response = await self._client.get(f"{self.base_url}/v1/burst_engine/config")
             if response.status_code == 200:
                 return _as_json_dict(response.json())
             return {
@@ -1638,9 +1632,7 @@ class FeagiClient:
     async def pause_burst_engine(self) -> dict[str, Any]:
         """POST /v1/burst_engine/hold - explicit hold endpoint (LLM-friendly alias)."""
         try:
-            response = await self._client.post(
-                f"{self.base_url}/v1/burst_engine/hold"
-            )
+            response = await self._client.post(f"{self.base_url}/v1/burst_engine/hold")
             if response.status_code == 200:
                 return _as_json_dict(response.json())
             return {
@@ -1654,9 +1646,7 @@ class FeagiClient:
     async def resume_burst_engine(self) -> dict[str, Any]:
         """POST /v1/burst_engine/resume - resume after a hold."""
         try:
-            response = await self._client.post(
-                f"{self.base_url}/v1/burst_engine/resume"
-            )
+            response = await self._client.post(f"{self.base_url}/v1/burst_engine/resume")
             if response.status_code == 200:
                 return _as_json_dict(response.json())
             return {
@@ -1787,9 +1777,7 @@ class FeagiClient:
             }
         try:
             if dir_n == "both":
-                r_out = await self._client.get(
-                    f"{self.base_url}/v1/connectome/{area}/synapses"
-                )
+                r_out = await self._client.get(f"{self.base_url}/v1/connectome/{area}/synapses")
                 r_in = await self._client.get(
                     f"{self.base_url}/v1/connectome/{area}/synapses/incoming"
                 )
@@ -1800,12 +1788,8 @@ class FeagiClient:
                         f"incoming: HTTP {r_in.status_code}",
                         "message": r_out.text,
                     }
-                out: list[Any] = (
-                    list(r_out.json()) if r_out.status_code == 200 else []
-                )
-                ins: list[Any] = (
-                    list(r_in.json()) if r_in.status_code == 200 else []
-                )
+                out: list[Any] = list(r_out.json()) if r_out.status_code == 200 else []
+                ins: list[Any] = list(r_in.json()) if r_in.status_code == 200 else []
                 result: dict[str, Any] = {
                     "cortical_area_id": area,
                     "direction": "both",
@@ -2303,8 +2287,7 @@ class FeagiClient:
                 if mw != mw or mw <= 0.0:
                     return {
                         "error": (
-                            "max_weight must be strictly positive and not NaN; "
-                            f"got {max_weight!r}"
+                            f"max_weight must be strictly positive and not NaN; got {max_weight!r}"
                         )
                     }
                 new_rule["max_weight"] = mw
@@ -2437,11 +2420,7 @@ class FeagiClient:
                 stim = await self.stimulate_areas(stim_payload, mode="force_fire")
                 await asyncio.sleep(max(0, int(settle_ms)) / 1000.0)
                 post_z = await _sensor_centroid_z()
-                shift = (
-                    None
-                    if baseline_z is None or post_z is None
-                    else (post_z - baseline_z)
-                )
+                shift = None if baseline_z is None or post_z is None else (post_z - baseline_z)
                 row: dict[str, Any] = {
                     "stim_xyz": [col, 0, int(intensity_z)],
                     "stimulation_result": stim,
@@ -2578,9 +2557,7 @@ class FeagiClient:
             "actuators": {...}, "sensors": {...}}`` (see MuJoCo introspection
             ``/v1/state`` for the full schema).
         """
-        url, descriptor = self._resolve_introspection_url(
-            introspection_url, controller_id
-        )
+        url, descriptor = self._resolve_introspection_url(introspection_url, controller_id)
         if url is None:
             return {
                 "error": "introspection_url_unavailable",
@@ -2626,9 +2603,7 @@ class FeagiClient:
             timeout_s: HTTP timeout.
             controller_id: Descriptor id for discovery.
         """
-        url, _descriptor = self._resolve_introspection_url(
-            introspection_url, controller_id
-        )
+        url, _descriptor = self._resolve_introspection_url(introspection_url, controller_id)
         if url is None:
             return {
                 "error": "introspection_url_unavailable",
@@ -2641,7 +2616,8 @@ class FeagiClient:
             full_url = url.rstrip("/") + "/v1/reset_simulation_time_stats"
             async with httpx.AsyncClient(timeout=timeout_s) as client:
                 response = await client.post(
-                    full_url, json={},
+                    full_url,
+                    json={},
                 )
             if response.status_code == 200:
                 return _as_json_dict(response.json())
@@ -2675,9 +2651,7 @@ class FeagiClient:
             timeout_s: HTTP timeout.
             controller_id: Controller bundle id used during auto-discovery.
         """
-        url, descriptor = self._resolve_introspection_url(
-            introspection_url, controller_id
-        )
+        url, descriptor = self._resolve_introspection_url(introspection_url, controller_id)
         if url is None:
             return {
                 "error": "introspection_url_unavailable",
@@ -2700,12 +2674,8 @@ class FeagiClient:
             if 200 <= response.status_code < 300:
                 payload_out = _as_json_dict(response.json()) or {"status": "ok"}
                 if descriptor is not None:
-                    payload_out.setdefault(
-                        "_introspection_source", "auto-discovered"
-                    )
-                    payload_out.setdefault(
-                        "_descriptor_path", descriptor.descriptor_path
-                    )
+                    payload_out.setdefault("_introspection_source", "auto-discovered")
+                    payload_out.setdefault("_descriptor_path", descriptor.descriptor_path)
                 return payload_out
             return {
                 "error": f"HTTP {response.status_code}",
