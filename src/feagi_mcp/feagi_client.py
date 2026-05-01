@@ -215,22 +215,25 @@ class FeagiClient:
             counts = [int(p.get("consecutive_fire_count", 0) or 0) for p in inspected]
             active_count = sum(1 for c in counts if c > 0)
             max_count = max(counts) if counts else 0
+            rows: list[dict[str, Any]] = [
+                {
+                    "neuron_id": p.get("neuron_id"),
+                    "x": p.get("x"),
+                    "y": p.get("y"),
+                    "z": p.get("z"),
+                    "consecutive_fire_count": int(p.get("consecutive_fire_count", 0) or 0),
+                    "membrane_potential": p.get("membrane_potential"),
+                }
+                for p in inspected
+            ]
             ranked = sorted(
-                [
-                    {
-                        "neuron_id": p.get("neuron_id"),
-                        "x": p.get("x"),
-                        "y": p.get("y"),
-                        "z": p.get("z"),
-                        "consecutive_fire_count": int(p.get("consecutive_fire_count", 0) or 0),
-                        "membrane_potential": p.get("membrane_potential"),
-                    }
-                    for p in inspected
-                ],
-                key=lambda d: d["consecutive_fire_count"],
+                rows,
+                key=lambda d: int(d.get("consecutive_fire_count", 0) or 0),
                 reverse=True,
             )
-            top_neurons = [d for d in ranked if d["consecutive_fire_count"] > 0][:5]
+            top_neurons = [d for d in ranked if int(d.get("consecutive_fire_count", 0) or 0) > 0][
+                :5
+            ]
             return {
                 "total_neurons_in_area": total_in_area,
                 "neurons_inspected": len(inspected),
