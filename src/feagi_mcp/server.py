@@ -10,6 +10,7 @@ from mcp.server.fastmcp import FastMCP
 from feagi_mcp.bv_operations import list_operation_summaries
 from feagi_mcp.composer_simulator_packs import ComposerSimulatorPacksClient
 from feagi_mcp.config import load_config
+from feagi_mcp.cortical_id_decode import decode_cortical_id_interpretation
 from feagi_mcp.feagi_client import FeagiClient
 from feagi_mcp.placement_policy import (
     LAYOUT_XY_PLANE,
@@ -1022,14 +1023,34 @@ async def save_genome_to_filesystem(
 
 
 @mcp.tool()
+async def interpret_cortical_id(cortical_id: str) -> dict[str, Any]:
+    """Decode an 8-byte FEAGI cortical ID without calling FEAGI (pure client-side).
+
+    Returns hex bytes, ``cortical_subunit_index`` (byte 6), ``cortical_unit_index`` (byte 7),
+    ``mapping_hints`` for BV ``unit_id`` / ROS ``deviceGroupId`` / Python motor XYZP grouping,
+    and notes. Accepts standard base64 wire IDs or legacy 8-character latin-1 keys.
+
+    Natural language: \"decode cortical id\", \"what unit index is this id\", \"device group
+    for base64 cortical area\".
+    """
+    return decode_cortical_id_interpretation(cortical_id)
+
+
+@mcp.tool()
 async def inspect_cortical_area(cortical_id: str) -> dict[str, Any]:
     """Full cortical area record from connectome (POST cortical_area/cortical_area_properties).
 
     Natural language: prefer this over get_area_parameters when you need the same fields as
     Brain Visualizer's cortical inspector (dimensions, types, neural params from services).
+
+    The response always includes ``cortical_id_interpretation`` (see ``interpret_cortical_id``)
+    so agents can align ``deviceGroupId`` / BV unit index with byte 7 without manual base64 work.
     """
     result = await feagi.fetch_cortical_area_properties(cortical_id)
-    return result
+    interpretation = decode_cortical_id_interpretation(cortical_id)
+    if isinstance(result, dict):
+        return {**result, "cortical_id_interpretation": interpretation}
+    return {"cortical_id_interpretation": interpretation, "raw": result}
 
 
 @mcp.tool()

@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`interpret_cortical_id`**: client-side decode of 8-byte cortical IDs (hex, byte 6/7 indices,
+  mapping hints for BV unit_id, ROS deviceGroupId, Python motor XYZP). **`inspect_cortical_area`**
+  now attaches ``cortical_id_interpretation`` on every response.
 - **Composer shared simulator packs** (optional ``FEAGI_COMPOSER_BASE_URL``): tools
   ``composer_list_simulator_packs``, ``composer_get_simulator_pack_versions``,
   ``composer_get_simulator_pack_resolved``, ``composer_download_simulator_pack_bundle``;

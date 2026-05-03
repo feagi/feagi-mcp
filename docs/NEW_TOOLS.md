@@ -181,6 +181,16 @@ mcp.update_cortical_mapping(
 
 **Use case**: After `composer_get_simulator_pack_resolved`, place files beside `scene.xml` via `composer_download_simulator_pack_bundle`, add MJCF `<include file="…"/>`, restart the MuJoCo controller (MjModel reload).
 
+## Cortical ID interpretation (client-side)
+
+### `interpret_cortical_id`
+
+Pure decode of an 8-byte cortical wire ID (standard Base64 or legacy 8-character latin-1 key): hex layout, ``cortical_subunit_index`` (byte 6), ``cortical_unit_index`` (byte 7), and ``mapping_hints`` aligned with Brain Visualizer ``unit_id``, ROS connector ``deviceGroupId``, and feagi-python-sdk motor XYZP keys. No HTTP call to FEAGI.
+
+### ``inspect_cortical_area``
+
+The connectome inspector response includes ``cortical_id_interpretation`` (same structure) for the requested ``cortical_id`` so agents do not need a separate decode step.
+
 ## Impact on Current Debugging Workflow
 
 ### Before (Manual Approach):
