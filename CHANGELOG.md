@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`stimulate_area_batch`**: MCP tool and `FeagiClient.stimulate_area_batch` — fire many
+  ``[x,y,z]`` voxels in one cortical area in a single ``manual_stimulation`` HTTP call
+  (wraps existing `stimulate_areas`). Use for mirroring encoder patterns onto an OPU
+  without one round trip per voxel.
 - **`interpret_cortical_id`**: client-side decode of 8-byte cortical IDs (hex, byte 6/7 indices,
   mapping hints for BV unit_id, ROS deviceGroupId, Python motor XYZP). **`inspect_cortical_area`**
   now attaches ``cortical_id_interpretation`` on every response.

@@ -349,6 +349,51 @@ class TestStimulation:
         )
 
 
+class TestStimulateAreaBatch:
+    """Batch stimulation within one cortical area."""
+
+    @pytest.mark.asyncio
+    async def test_stimulate_area_batch_empty_returns_error(self, mock_client):
+        result = await mock_client.stimulate_area_batch("areaX", [])
+        assert result["success"] is False
+        assert "non-empty" in result["error"]
+        mock_client._client.post.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stimulate_area_batch_invalid_coord_length(self, mock_client):
+        result = await mock_client.stimulate_area_batch(
+            "areaX",
+            [[0, 0, 0], [1, 2]],
+        )
+        assert result["success"] is False
+        assert "coordinates_list[1]" in result["error"]
+        mock_client._client.post.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stimulate_area_batch_posts_single_payload(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "success": True,
+            "unique_neuron_ids": 7,
+            "matched_coordinates": 7,
+            "mode": "force_fire",
+        }
+        mock_client._client.post.return_value = mock_response
+
+        coords = [[i, 0, 4] for i in range(7)]
+        result = await mock_client.stimulate_area_batch("opse_left", coords)
+
+        assert result["success"] is True
+        mock_client._client.post.assert_called_once_with(
+            "http://localhost:8000/v1/agent/manual_stimulation",
+            json={
+                "stimulation_payload": {"opse_left": coords},
+                "mode": "force_fire",
+            },
+        )
+
+
 class TestCreateBrainRegion:
     """POST /v1/region/region via FeagiClient.create_brain_region."""
 

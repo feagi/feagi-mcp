@@ -200,6 +200,35 @@ def discover_endpoint(
     return None
 
 
+def discover_all_endpoints(
+    *,
+    env_override: str | None = None,
+) -> list[IntrospectionEndpoint]:
+    """Scan all runtime roots and return every valid introspection descriptor.
+
+    Iterates over ``<root>/controllers/.introspection/*.json`` for each
+    candidate root. Duplicate ``controller_id`` values across roots are
+    resolved by first-match-wins (same precedence as :func:`discover_endpoint`).
+    """
+    seen: set[str] = set()
+    results: list[IntrospectionEndpoint] = []
+    for root in _candidate_runtime_roots(env_override):
+        introspection_dir = root / "controllers" / INTROSPECTION_SUBDIR
+        if not introspection_dir.is_dir():
+            continue
+        for child in sorted(introspection_dir.iterdir()):
+            if not child.suffix == ".json" or not child.is_file():
+                continue
+            controller_id = child.stem
+            if controller_id in seen:
+                continue
+            descriptor = _load_descriptor(child)
+            if descriptor is not None:
+                seen.add(controller_id)
+                results.append(descriptor)
+    return results
+
+
 def discover_endpoint_or_raise(
     controller_id: str,
     *,

@@ -11,6 +11,7 @@ from feagi_mcp.area_metadata import enrich_area_list, enrich_area_with_name, get
 from feagi_mcp.bv_operations import BV_OPERATION_BY_ID, resolve_path
 from feagi_mcp.introspection_discovery import (
     IntrospectionEndpoint,
+    discover_all_endpoints,
     discover_endpoint,
 )
 from feagi_mcp.placement_policy import (
@@ -332,6 +333,34 @@ class FeagiClient:
             }
         except Exception as e:
             logger.error(f"download_genome failed: {e}")
+            return {"error": str(e)}
+
+    async def download_region_genome(self, region_id: str) -> dict[str, Any]:
+        """GET /v1/genome/download_region — export a brain-region subtree as genome JSON.
+
+        The returned genome contains only the cortical areas, morphologies,
+        brain regions, and physiology that belong to the given region branch.
+        Destination mappings to areas outside the branch are stripped.
+
+        Args:
+            region_id: UUID of the root brain region to export.
+
+        Returns:
+            Region genome JSON (same shape as a full genome).
+        """
+        try:
+            response = await self._client.get(
+                f"{self.base_url}/v1/genome/download_region",
+                params={"region_id": region_id},
+            )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error(f"download_region_genome failed: {e}")
             return {"error": str(e)}
 
     async def upload_genome(self, genome_data: dict[str, Any]) -> dict[str, Any]:
@@ -883,6 +912,42 @@ class FeagiClient:
         except Exception as e:
             logger.error(f"stimulate_areas failed: {e}")
             return {"success": False, "error": str(e)}
+
+    async def stimulate_area_batch(
+        self,
+        area_id: str,
+        coordinates_list: list[list[int]],
+        mode: str = "force_fire",
+    ) -> dict[str, Any]:
+        """Stimulate many voxels in one cortical area in a single HTTP request.
+
+        Wraps :meth:`stimulate_areas` with ``{area_id: coordinates_list}``.
+
+        Args:
+            area_id: Cortical area identifier (wire-format base64 id).
+            coordinates_list: Non-empty list of ``[x, y, z]`` voxel coordinates.
+            mode: Stimulation mode (default ``force_fire``).
+
+        Returns:
+            Same aggregate shape as :meth:`stimulate_area` / :meth:`stimulate_areas`.
+        """
+        if not coordinates_list:
+            return {
+                "success": False,
+                "error": "coordinates_list must be non-empty",
+            }
+        normalized: list[list[int]] = []
+        for i, coords in enumerate(coordinates_list):
+            if len(coords) != 3:
+                return {
+                    "success": False,
+                    "error": (
+                        f"coordinates_list[{i}] must have exactly 3 integers "
+                        f"[x, y, z], got {coords!r}"
+                    ),
+                }
+            normalized.append([int(coords[0]), int(coords[1]), int(coords[2])])
+        return await self.stimulate_areas({area_id: normalized}, mode=mode)
 
     async def get_embodiment_status(self) -> dict[str, Any]:
         """Get status of connected embodiment controllers."""
@@ -2470,6 +2535,208 @@ class FeagiClient:
             return {"error": str(e)}
 
     # ------------------------------------------------------------------
+    # Controller bridge discovery
+    # ------------------------------------------------------------------
+
+    async def list_controller_bridges(self) -> dict[str, Any]:
+        """List active controller bridges by combining introspection descriptors with registered agents.
+
+        Scans the runtime introspection directory for descriptor files written
+        by feagi-desktop when launching controllers, then cross-references with
+        FEAGI's agent registry for runtime status.
+
+        Returns:
+            ``controllers`` list with each entry containing descriptor metadata
+            and agent registration status.
+        """
+        descriptors = discover_all_endpoints()
+        agents_resp = await self.get_registered_agents()
+        agent_ids: list[str] = agents_resp.get("agent_ids", [])
+
+        controllers: list[dict[str, Any]] = []
+        for desc in descriptors:
+            entry: dict[str, Any] = {
+                "controller_id": desc.controller_id,
+                "introspection_url": desc.url,
+                "host": desc.host,
+                "port": desc.port,
+                "pid": desc.pid,
+                "controller_version": desc.controller_version,
+                "started_at": desc.started_at,
+                "descriptor_path": desc.descriptor_path,
+            }
+            matching_agents = [
+                a for a in agent_ids
+                if desc.controller_id.lower() in a.lower()
+            ]
+            entry["matching_agent_ids"] = matching_agents
+            entry["agent_registered"] = len(matching_agents) > 0
+            controllers.append(entry)
+
+        return {
+            "controllers": controllers,
+            "total_descriptors": len(descriptors),
+            "registered_agent_ids": agent_ids,
+        }
+
+    async def get_agent_joint_map(self, agent_id: str) -> dict[str, Any]:
+        """Extract a focused joint-to-OPU mapping from an agent's device registrations.
+
+        Parses the ``output_units`` from the agent's device registrations
+        and produces a flat joint list with cortical area IDs, group/channel
+        indices, control modes, and angle ranges.
+
+        Args:
+            agent_id: Agent identifier (from ``get_registered_agents``).
+
+        Returns:
+            ``joints`` list and ``opu_cortical_ids`` set for stimulation targeting.
+        """
+        reg_resp = await self.get_agent_device_registrations(agent_id)
+        if "error" in reg_resp:
+            return reg_resp
+
+        dev_reg = reg_resp.get("device_registrations", {})
+        if not isinstance(dev_reg, dict):
+            return {"error": "no device_registrations found", "agent_id": agent_id}
+
+        output_units = dev_reg.get("output_units", {})
+        if not isinstance(output_units, dict):
+            output_units = {}
+
+        joints: list[dict[str, Any]] = []
+        opu_cortical_ids: set[str] = set()
+
+        for device_type, groups in output_units.items():
+            if not isinstance(groups, dict):
+                continue
+            for group_id, group_data in groups.items():
+                if not isinstance(group_data, dict):
+                    continue
+                cortical_id = group_data.get("cortical_id", "")
+                if cortical_id:
+                    opu_cortical_ids.add(cortical_id)
+                channels = group_data.get("channels", {})
+                if not isinstance(channels, dict):
+                    continue
+                for channel_idx, channel_data in channels.items():
+                    if not isinstance(channel_data, dict):
+                        continue
+                    joint: dict[str, Any] = {
+                        "device_type": device_type,
+                        "group_id": group_id,
+                        "channel_index": int(channel_idx) if str(channel_idx).isdigit() else channel_idx,
+                        "cortical_id": cortical_id,
+                        "joint_name": channel_data.get("custom_name", channel_data.get("name", f"joint_{channel_idx}")),
+                        "control_mode": channel_data.get("control_mode", "unknown"),
+                    }
+                    min_val = channel_data.get("min_value")
+                    max_val = channel_data.get("max_value")
+                    if min_val is not None:
+                        joint["min_value"] = min_val
+                    if max_val is not None:
+                        joint["max_value"] = max_val
+                    joints.append(joint)
+
+        return {
+            "agent_id": agent_id,
+            "joints": joints,
+            "opu_cortical_ids": sorted(opu_cortical_ids),
+            "total_joints": len(joints),
+        }
+
+    async def send_motor_command(
+        self,
+        agent_id: str,
+        joint_name: str,
+        target_value: float,
+    ) -> dict[str, Any]:
+        """Stimulate an OPU cortical area to drive a specific joint to a target value.
+
+        Resolves the joint's OPU cortical area and channel from the agent's
+        device registrations, retrieves the OPU geometry to determine the
+        voxel resolution, maps the target value to a voxel X coordinate using
+        the joint's min/max range, and fires that voxel via manual stimulation.
+
+        Requires the burst engine to be running and the controller bridge to
+        be connected for the stimulation to reach the physical actuator.
+
+        Args:
+            agent_id: Agent identifier (from ``get_registered_agents``).
+            joint_name: Joint name as reported by ``get_agent_joint_map``.
+            target_value: Target position/angle in the joint's native units
+                (degrees for servos, typically within ``min_value``..``max_value``).
+
+        Returns:
+            Stimulation result with the resolved cortical area, voxel
+            coordinate, and value mapping used.
+        """
+        joint_map = await self.get_agent_joint_map(agent_id)
+        if "error" in joint_map:
+            return joint_map
+
+        joints = joint_map.get("joints", [])
+        matched = [j for j in joints if j.get("joint_name", "").lower() == joint_name.lower()]
+        if not matched:
+            available = [j.get("joint_name", "?") for j in joints]
+            return {
+                "error": f"Joint '{joint_name}' not found for agent '{agent_id}'",
+                "available_joints": available,
+            }
+
+        joint = matched[0]
+        cortical_id = joint.get("cortical_id", "")
+        channel_index = joint.get("channel_index", 0)
+        min_val = float(joint.get("min_value", 0))
+        max_val = float(joint.get("max_value", 180))
+
+        if not cortical_id:
+            return {"error": f"No OPU cortical_id mapped for joint '{joint_name}'"}
+
+        geom = await self.get_cortical_area_geometry()
+        if "error" in geom:
+            return {"error": "Failed to retrieve cortical area geometry", "detail": geom}
+
+        area_geom = geom.get(cortical_id, {})
+        if not area_geom:
+            return {"error": f"Geometry not found for OPU cortical area '{cortical_id}'"}
+
+        dim_x = int(area_geom.get("cortical_dimensions_per_axis", {}).get("x", 0))
+        if dim_x <= 0:
+            dim_x = int(area_geom.get("block_boundaries", [1, 1, 1])[0])
+        if dim_x <= 0:
+            return {"error": f"Cannot determine X dimension for OPU '{cortical_id}'"}
+
+        val_range = max_val - min_val
+        if val_range <= 0:
+            return {
+                "error": f"Invalid value range [{min_val}, {max_val}] for joint '{joint_name}'"
+            }
+
+        clamped = max(min_val, min(max_val, target_value))
+        normalized = (clamped - min_val) / val_range
+        voxel_x = int(round(normalized * (dim_x - 1)))
+        voxel_x = max(0, min(dim_x - 1, voxel_x))
+
+        y_coord = int(channel_index) if isinstance(channel_index, (int, float)) else 0
+        coordinates = [voxel_x, y_coord, 0]
+
+        stim_result = await self.stimulate_area(
+            cortical_id, coordinates, 1.0
+        )
+
+        return {
+            "success": stim_result.get("success", False),
+            "joint_name": joint_name,
+            "target_value": target_value,
+            "clamped_value": clamped,
+            "cortical_id": cortical_id,
+            "voxel_coordinate": coordinates,
+            "opu_x_resolution": dim_x,
+            "value_range": [min_val, max_val],
+            "stimulation_detail": stim_result,
+        }
+
     # Embodiment introspection (proxies to controller-side endpoints)
     # ------------------------------------------------------------------
 

@@ -114,6 +114,11 @@
       "name": "stimulate_area",
       "category": "control",
       "description": "Stimulate neurons for testing circuits"
+    },
+    {
+      "name": "stimulate_area_batch",
+      "category": "control",
+      "description": "Stimulate many voxels in one area in one HTTP round trip"
     }
   ]
 }

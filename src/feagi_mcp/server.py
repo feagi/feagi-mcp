@@ -168,6 +168,33 @@ async def stimulate_area(
 
 
 @mcp.tool()
+async def stimulate_area_batch(
+    area_id: str,
+    coordinates_list: list[list[int]],
+    mode: str = "force_fire",
+) -> dict[str, Any]:
+    """Stimulate many voxels in one cortical area in a single request.
+
+    Use this to mirror encoder patterns onto a motor OPU, fill a z-slab, or
+    fire a list of test coordinates without one MCP round trip per voxel.
+    The FEAGI API receives one ``manual_stimulation`` payload for the whole
+    list. ``potential`` / ``duration_ms`` are not sent (same as
+    :func:`stimulate_area` today).
+
+    Args:
+        area_id: Cortical area identifier (base64 wire id)
+        coordinates_list: List of ``[x, y, z]`` integer coordinates; each must
+            have length 3
+        mode: Stimulation mode (default ``force_fire``)
+
+    Returns:
+        Success status and aggregate neuron / match counts from the API
+    """
+    result = await feagi.stimulate_area_batch(area_id, coordinates_list, mode)
+    return result
+
+
+@mcp.tool()
 async def list_cortical_areas() -> list[dict[str, Any]]:
     """List all cortical areas in the current genome.
 
@@ -242,6 +269,32 @@ async def download_genome() -> dict[str, Any]:
         Complete genome JSON structure
     """
     result = await feagi.download_genome()
+    return result
+
+
+@mcp.tool()
+async def download_region_genome(region_id: str) -> dict[str, Any]:
+    """Download a brain-region subtree as a standalone genome JSON.
+
+    Exports only the cortical areas, morphologies, brain regions, and
+    physiology that belong to the specified region branch.  Destination
+    mappings to areas outside the branch are stripped so the result is a
+    self-contained genome that can be loaded independently or shared.
+
+    Use ``get_brain_regions`` first to discover available region IDs and
+    their titles.
+
+    Natural language: "export brain region", "save neural circuit",
+    "download region as genome".
+
+    Args:
+        region_id: UUID of the root brain region to export
+            (e.g. from get_brain_regions output).
+
+    Returns:
+        Region genome JSON (same shape as a full genome download).
+    """
+    result = await feagi.download_region_genome(region_id)
     return result
 
 
@@ -1718,16 +1771,93 @@ async def auto_polarity_probe(
 
 
 @mcp.tool()
+async def list_controller_bridges() -> dict[str, Any]:
+    """List all active controller bridges (xARM, MuJoCo, ROS2, etc.) discovered on this machine.
+
+    Combines two sources:
+    1. **Introspection descriptors** written by feagi-desktop when launching
+       controllers (scans ``<runtime_root>/controllers/.introspection/``).
+    2. **Registered agents** from the FEAGI agent registry (``/v1/agent/list``).
+
+    Use this to check which controllers are running before issuing motor
+    commands, stimulating OPU areas, or using embodiment introspection tools.
+
+    Returns:
+        ``controllers`` list with introspection URLs, PIDs, matching agent
+        registrations, and ``registered_agent_ids`` for cross-reference.
+    """
+    return await feagi.list_controller_bridges()
+
+
+@mcp.tool()
+async def get_agent_joint_map(agent_id: str) -> dict[str, Any]:
+    """Get a focused joint-to-OPU cortical area mapping for a registered agent.
+
+    Parses the agent's device registrations and extracts a flat list of joints
+    with their OPU cortical area IDs, group/channel indices, control modes,
+    and angle ranges. Use this to understand which cortical areas to stimulate
+    in order to drive specific robot joints.
+
+    Args:
+        agent_id: Agent identifier (from ``get_registered_agents``).
+
+    Returns:
+        ``joints`` list with per-joint metadata and ``opu_cortical_ids`` for
+        stimulation targeting.
+    """
+    return await feagi.get_agent_joint_map(agent_id)
+
+
+@mcp.tool()
+async def send_motor_command(
+    agent_id: str,
+    joint_name: str,
+    target_value: float,
+) -> dict[str, Any]:
+    """Drive a specific robot joint to a target angle/position via OPU stimulation.
+
+    This is a high-level convenience tool that:
+    1. Looks up the joint's OPU cortical area from the agent's device registrations.
+    2. Retrieves the OPU geometry to determine voxel resolution.
+    3. Maps the target value to a voxel X coordinate using the joint's range.
+    4. Fires that voxel via ``stimulate_area``.
+
+    **Prerequisites:**
+    - The controller bridge must be running (check with ``list_controller_bridges``).
+    - The agent must be registered (check with ``get_registered_agents``).
+    - The burst engine must be running (check with ``get_burst_engine_status``).
+
+    Use ``get_agent_joint_map`` first to discover available joint names and
+    their value ranges.
+
+    Args:
+        agent_id: Agent identifier (from ``get_registered_agents``).
+        joint_name: Joint name as reported by ``get_agent_joint_map``
+            (case-insensitive match).
+        target_value: Target angle/position in the joint's native units
+            (degrees for servo motors).
+
+    Returns:
+        Stimulation result with resolved cortical area, voxel coordinate,
+        and the value-to-voxel mapping used.
+    """
+    return await feagi.send_motor_command(agent_id, joint_name, target_value)
+
+
+@mcp.tool()
 async def embodiment_discover_introspection_endpoint(
     controller_id: str = "mujoco",
 ) -> dict[str, Any]:
-    """Locate the controller's introspection HTTP endpoint via the launcher descriptor.
+    """Locate a controller's introspection HTTP endpoint via the launcher descriptor.
 
     feagi-desktop's launcher allocates an ephemeral port for each controller
-    that supports introspection (currently MuJoCo) and writes a descriptor at
+    that supports introspection and writes a descriptor at
     ``<runtime_root>/controllers/.introspection/<controller_id>.json``. This
     tool reads that descriptor so the MCP can talk to the controller without
     requiring the URL to be configured up front.
+
+    Use ``list_controller_bridges`` to discover all controller IDs with
+    descriptors on this machine.
 
     Returns ``{"found": True, "url": "http://127.0.0.1:<port>", ...}`` when
     the controller is up, or ``{"found": False, ...}`` otherwise. The
@@ -1743,15 +1873,13 @@ async def embodiment_get_physics_state(
     timeout_s: float = 2.0,
     controller_id: str = "mujoco",
 ) -> dict[str, Any]:
-    """GET ground-truth physics state from the embodiment controller.
+    """GET ground-truth physics state from an embodiment controller.
 
-    Currently implemented for the MuJoCo controller (see
-    ``nrs-embodiments/controllers/simulators/mujoco/mcp_introspection.py``).
+    Works with any controller that exposes ``GET /v1/state`` on its
+    introspection server (e.g. MuJoCo, xARM when introspection is enabled).
     When ``introspection_url`` is omitted, the URL is auto-discovered via the
-    descriptor that feagi-desktop writes at controller spawn time
-    (``<runtime_root>/controllers/.introspection/<controller_id>.json``). Pass
-    an explicit URL to bypass discovery (e.g. for ad-hoc ``mcp_introspection.py``
-    runs outside feagi-desktop).
+    descriptor that feagi-desktop writes at controller spawn time. Pass an
+    explicit URL to bypass discovery.
     """
     return await feagi.embodiment_get_physics_state(
         introspection_url=introspection_url,
@@ -1768,13 +1896,13 @@ async def embodiment_set_joint_state(
     timeout_s: float = 2.0,
     controller_id: str = "mujoco",
 ) -> dict[str, Any]:
-    """Place embodiment joints deterministically (e.g. tilt pendulum to test reflex).
+    """Place embodiment joints deterministically (e.g. tilt pendulum, position arm).
 
     Useful to verify a reflex circuit responds correctly at a given physical
-    state without waiting for the dynamics to wander there organically.
-    Currently implemented for the MuJoCo controller's introspection server.
-    When ``introspection_url`` is omitted, the URL is auto-discovered via
-    the launcher-written descriptor.
+    state without waiting for the dynamics to wander there organically. Works
+    with any controller exposing ``POST /v1/set_state`` on its introspection
+    server. When ``introspection_url`` is omitted, the URL is auto-discovered
+    via the launcher-written descriptor.
     """
     return await feagi.embodiment_set_joint_state(
         introspection_url=introspection_url,
@@ -1791,13 +1919,11 @@ async def embodiment_reset_simulation_time_stats(
     timeout_s: float = 2.0,
     controller_id: str = "mujoco",
 ) -> dict[str, Any]:
-    """Reset the session max MuJoCo simulation clock (benchmark high-water mark).
+    """Reset the session max simulation clock (benchmark high-water mark).
 
     Proxies to ``POST <introspection_url>/v1/reset_simulation_time_stats`` on
-    the MuJoCo controller (see
-    ``nrs-embodiments/controllers/simulators/mujoco/mcp_introspection.py``). Use
-    before a new "longest time upright" trial; current ``mujoco_simulation_time_s`` is
-    unchanged. Auto-discovery matches ``embodiment_get_physics_state``.
+    the controller's introspection server. Use before a new "longest time
+    upright" trial. Auto-discovery matches ``embodiment_get_physics_state``.
     """
     return await feagi.embodiment_reset_simulation_time_stats(
         introspection_url=introspection_url,
