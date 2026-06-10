@@ -1790,6 +1790,70 @@ async def list_controller_bridges() -> dict[str, Any]:
 
 
 @mcp.tool()
+async def get_feagi_link_health(controller_id: str = "mujoco") -> dict[str, Any]:
+    """Get a compact FEAGI connectivity and registration health snapshot.
+
+    Aggregates:
+    - FEAGI core reachability (health endpoint),
+    - agent registry and capability registry accessibility,
+    - burst engine endpoint accessibility,
+    - controller descriptor + matching registration state.
+
+    Use this first when MCP calls start failing intermittently.
+    """
+    return await feagi.get_feagi_link_health(controller_id=controller_id)
+
+
+@mcp.tool()
+async def get_controller_lifecycle_events(
+    controller_id: str = "mujoco",
+    since_ts_ms: int | None = None,
+    limit: int = 200,
+) -> dict[str, Any]:
+    """Read recent desktop/controller lifecycle events from runtime log files.
+
+    This is a read-only diagnostic tool that correlates:
+    - desktop lifecycle actions (controller stop/start + experiment stop POST),
+    - controller recovery transitions (feagi_unreachable/back_online),
+    - Python SDK reconnect markers (disconnect/connect events).
+
+    Use this when a running embodiment appears to stop unexpectedly and you need
+    a normalized event timeline without manually parsing multiple log files.
+
+    Args:
+        controller_id: Controller bundle id, defaults to ``mujoco``.
+        since_ts_ms: Optional unix-ms lower bound filter.
+        limit: Maximum events returned (most recent retained).
+    """
+    return await feagi.get_controller_lifecycle_events(
+        controller_id=controller_id,
+        since_ts_ms=since_ts_ms,
+        limit=limit,
+    )
+
+
+@mcp.tool()
+async def get_experiment_stop_cause(
+    controller_id: str = "mujoco",
+    since_ts_ms: int | None = None,
+    limit: int = 300,
+) -> dict[str, Any]:
+    """Infer likely experiment-stop cause from lifecycle event chronology.
+
+    Produces a compact verdict + evidence window around the latest stop marker.
+    Typical outcomes:
+    - ``manual_or_external_stop_command``
+    - ``recovery_reconnect_transition_then_stop``
+    - ``no_stop_events_found``
+    """
+    return await feagi.get_experiment_stop_cause(
+        controller_id=controller_id,
+        since_ts_ms=since_ts_ms,
+        limit=limit,
+    )
+
+
+@mcp.tool()
 async def get_agent_joint_map(agent_id: str) -> dict[str, Any]:
     """Get a focused joint-to-OPU cortical area mapping for a registered agent.
 

@@ -217,7 +217,7 @@ def discover_all_endpoints(
         if not introspection_dir.is_dir():
             continue
         for child in sorted(introspection_dir.iterdir()):
-            if not child.suffix == ".json" or not child.is_file():
+            if child.suffix != ".json" or not child.is_file():
                 continue
             controller_id = child.stem
             if controller_id in seen:

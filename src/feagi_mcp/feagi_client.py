@@ -3,6 +3,10 @@
 import asyncio
 import logging
 import math
+import os
+import re
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, cast
 
 import httpx
@@ -20,6 +24,14 @@ from feagi_mcp.placement_policy import (
 )
 
 logger = logging.getLogger(__name__)
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+_ISO_TS_RE = re.compile(
+    r"(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)"
+)
+_LOCAL_TS_RE = re.compile(
+    r"(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3,6})"
+)
 
 
 def _as_json_dict(data: Any) -> dict[str, Any]:
@@ -57,6 +69,13 @@ def _normalize_cortical_area_list_payload(data: Any) -> list[dict[str, Any]]:
     return []
 
 
+def _extract_wrapped_value(raw: Any) -> Any:
+    """Unwrap FEAGI typed-value objects like ``{"type": "...", "value": ...}``."""
+    if isinstance(raw, dict) and "value" in raw:
+        return raw.get("value")
+    return raw
+
+
 class FeagiClient:
     """Client for interacting with FEAGI REST API."""
 
@@ -75,6 +94,41 @@ class FeagiClient:
     async def close(self) -> None:
         """Close the HTTP client."""
         await self._client.aclose()
+
+    @staticmethod
+    def _request_exception_payload(
+        *,
+        endpoint: str,
+        exception: Exception,
+    ) -> dict[str, Any]:
+        """Normalize transport failures into actionable diagnostics."""
+        error_type = "request_error"
+        if isinstance(exception, httpx.ConnectTimeout):
+            error_type = "connect_timeout"
+        elif isinstance(exception, httpx.ReadTimeout):
+            error_type = "read_timeout"
+        elif isinstance(exception, httpx.ConnectError):
+            error_type = "connect_error"
+        elif isinstance(exception, httpx.TimeoutException):
+            error_type = "timeout"
+        elif isinstance(exception, httpx.NetworkError):
+            error_type = "network_error"
+        return {
+            "error": "request_failed",
+            "error_type": error_type,
+            "endpoint": endpoint,
+            "message": str(exception),
+        }
+
+    @staticmethod
+    def _http_failure_payload(*, endpoint: str, response: httpx.Response) -> dict[str, Any]:
+        """Return a consistent non-2xx HTTP error payload."""
+        return {
+            "error": f"HTTP {response.status_code}",
+            "endpoint": endpoint,
+            "http_status": response.status_code,
+            "message": response.text,
+        }
 
     async def health_check(self) -> dict[str, Any]:
         """Check FEAGI reachability and full system health (incl. amalgamation_pending).
@@ -1051,8 +1105,9 @@ class FeagiClient:
 
     async def get_registered_agents(self) -> dict[str, Any]:
         """Get list of registered agents."""
+        endpoint = "/v1/agent/list"
         try:
-            response = await self._client.get(f"{self.base_url}/v1/agent/list")
+            response = await self._client.get(f"{self.base_url}{endpoint}")
             if response.status_code == 200:
                 agent_ids = response.json()
                 if isinstance(agent_ids, list):
@@ -1061,10 +1116,10 @@ class FeagiClient:
                 if isinstance(agent_ids, dict):
                     return _as_json_dict(agent_ids)
                 return {"error": "unexpected_response", "raw": agent_ids}
-            return {"error": f"HTTP {response.status_code}", "message": response.text}
+            return self._http_failure_payload(endpoint=endpoint, response=response)
         except Exception as e:
             logger.error(f"get_registered_agents failed: {e}")
-            return {"error": str(e)}
+            return self._request_exception_payload(endpoint=endpoint, exception=e)
 
     async def get_agent_properties(self, agent_id: str) -> dict[str, Any]:
         """Get properties for a specific agent."""
@@ -1090,9 +1145,10 @@ class FeagiClient:
 
     async def get_agent_device_registrations(self, agent_id: str) -> dict[str, Any]:
         """Get device registrations for an agent."""
+        endpoint = "/v1/agent/capabilities/all"
         try:
             response = await self._client.get(
-                f"{self.base_url}/v1/agent/capabilities/all",
+                f"{self.base_url}{endpoint}",
                 params={"include_device_registrations": "true"},
             )
             if response.status_code == 200:
@@ -1101,9 +1157,23 @@ class FeagiClient:
                     agent_data = all_agents[agent_id]
                     if isinstance(agent_data, dict):
                         caps = agent_data.get("capabilities", {})
-                        dev_reg: Any = {}
+                        dev_reg: dict[str, Any] = {}
                         if isinstance(caps, dict):
-                            dev_reg = caps.get("device_registrations", {})
+                            raw_dev_reg = caps.get("device_registrations", {})
+                            if isinstance(raw_dev_reg, dict):
+                                dev_reg = dict(raw_dev_reg)
+                            # New FEAGI payloads may expose registrations directly
+                            # under capabilities instead of nesting in
+                            # ``device_registrations``.
+                            for key in (
+                                "input_units_and_encoder_properties",
+                                "output_units_and_decoder_properties",
+                                "input_units",
+                                "output_units",
+                            ):
+                                value = caps.get(key)
+                                if value is not None and key not in dev_reg:
+                                    dev_reg[key] = value
                         return {
                             "agent_id": agent_id,
                             "agent_name": agent_data.get("agent_name", "unknown"),
@@ -1111,10 +1181,10 @@ class FeagiClient:
                             "device_registrations": dev_reg,
                         }
                 return {"error": f"Agent {agent_id} not found in capabilities"}
-            return {"error": f"HTTP {response.status_code}", "message": response.text}
+            return self._http_failure_payload(endpoint=endpoint, response=response)
         except Exception as e:
             logger.error(f"get_agent_device_registrations failed: {e}")
-            return {"error": str(e)}
+            return self._request_exception_payload(endpoint=endpoint, exception=e)
 
     async def list_opu_areas(self) -> list[str]:
         """List all OPU cortical area IDs."""
@@ -1915,6 +1985,7 @@ class FeagiClient:
         Diagnostic for cases where ``get_agent_device_registrations`` returns empty
         but devices are clearly active. Returns the full FEAGI response unmodified.
         """
+        endpoint = "/v1/agent/capabilities/all"
         try:
             params = {
                 "include_device_registrations": (
@@ -1922,18 +1993,86 @@ class FeagiClient:
                 )
             }
             response = await self._client.get(
-                f"{self.base_url}/v1/agent/capabilities/all",
+                f"{self.base_url}{endpoint}",
                 params=params,
             )
             if response.status_code == 200:
                 return _as_json_dict(response.json())
-            return {
-                "error": f"HTTP {response.status_code}",
-                "message": response.text,
-            }
+            return self._http_failure_payload(endpoint=endpoint, response=response)
         except Exception as e:
             logger.error("list_agent_capabilities_all failed: %s", e)
-            return {"error": str(e)}
+            return self._request_exception_payload(endpoint=endpoint, exception=e)
+
+    async def get_feagi_link_health(self, controller_id: str = "mujoco") -> dict[str, Any]:
+        """Aggregate FEAGI reachability + registration + bridge diagnostics.
+
+        This is a focused health snapshot for embodiment debugging. It does not
+        mutate FEAGI state.
+        """
+        health_res, agents_res, caps_res, burst_res, bridges_res = await asyncio.gather(
+            self.health_check(),
+            self.get_registered_agents(),
+            self.list_agent_capabilities_all(include_device_registrations=True),
+            self.get_burst_engine_config(),
+            self.list_controller_bridges(),
+        )
+
+        health_ok = isinstance(health_res, dict) and "error" not in health_res
+        agents_ok = isinstance(agents_res, dict) and "error" not in agents_res
+        caps_ok = isinstance(caps_res, dict) and "error" not in caps_res
+        burst_ok = isinstance(burst_res, dict) and "error" not in burst_res
+
+        registered_agent_ids = (
+            list(agents_res.get("agent_ids", []))
+            if isinstance(agents_res, dict) and isinstance(agents_res.get("agent_ids"), list)
+            else []
+        )
+        controllers = (
+            list(bridges_res.get("controllers", []))
+            if isinstance(bridges_res, dict) and isinstance(bridges_res.get("controllers"), list)
+            else []
+        )
+        controller_entry = next(
+            (
+                ctrl
+                for ctrl in controllers
+                if isinstance(ctrl, dict) and ctrl.get("controller_id") == controller_id
+            ),
+            None,
+        )
+
+        errors: dict[str, Any] = {}
+        for key, payload in (
+            ("health_check", health_res),
+            ("get_registered_agents", agents_res),
+            ("list_agent_capabilities_all", caps_res),
+            ("get_burst_engine_config", burst_res),
+        ):
+            if isinstance(payload, dict) and "error" in payload:
+                errors[key] = payload
+
+        return {
+            "timestamp_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
+            "feagi_reachable": health_ok or agents_ok or caps_ok,
+            "health_check_ok": health_ok,
+            "agent_registry_ok": agents_ok,
+            "capability_registry_ok": caps_ok,
+            "burst_engine_ok": burst_ok,
+            "registered_agent_count": len(registered_agent_ids),
+            "registered_agent_ids": registered_agent_ids,
+            "controller_id": controller_id,
+            "controller_descriptor_found": controller_entry is not None,
+            "controller_agent_registered": bool(
+                isinstance(controller_entry, dict) and controller_entry.get("agent_registered")
+            ),
+            "controller_matching_agent_ids": (
+                list(controller_entry.get("matching_agent_ids", []))
+                if isinstance(controller_entry, dict)
+                and isinstance(controller_entry.get("matching_agent_ids"), list)
+                else []
+            ),
+            "errors": errors,
+        }
 
     async def monitor_activity_batch(
         self,
@@ -2539,7 +2678,7 @@ class FeagiClient:
     # ------------------------------------------------------------------
 
     async def list_controller_bridges(self) -> dict[str, Any]:
-        """List active controller bridges by combining introspection descriptors with registered agents.
+        """List active controller bridges from descriptors and agent registry.
 
         Scans the runtime introspection directory for descriptor files written
         by feagi-desktop when launching controllers, then cross-references with
@@ -2579,12 +2718,289 @@ class FeagiClient:
             "registered_agent_ids": agent_ids,
         }
 
+    @staticmethod
+    def _strip_ansi_codes(line: str) -> str:
+        """Drop ANSI escape sequences so log parsing is deterministic."""
+        return _ANSI_ESCAPE_RE.sub("", line)
+
+    @staticmethod
+    def _parse_line_timestamp_ms(clean_line: str) -> int | None:
+        """Parse FEAGI/desktop log timestamp into unix milliseconds."""
+        iso_match = _ISO_TS_RE.search(clean_line)
+        if iso_match:
+            raw_ts = iso_match.group("ts")
+            try:
+                parsed = datetime.fromisoformat(raw_ts.replace("Z", "+00:00"))
+                return int(parsed.timestamp() * 1000)
+            except ValueError:
+                return None
+
+        local_match = _LOCAL_TS_RE.search(clean_line)
+        if local_match:
+            raw_local = local_match.group("ts")
+            for fmt in ("%Y-%m-%d %H:%M:%S,%f",):
+                try:
+                    parsed_local = datetime.strptime(raw_local, fmt)
+                    parsed_utc = parsed_local.replace(tzinfo=timezone.utc)
+                    return int(parsed_utc.timestamp() * 1000)
+                except ValueError:
+                    continue
+        return None
+
+    @staticmethod
+    def _runtime_root_candidates() -> list[Path]:
+        """Return runtime roots in precedence order."""
+        roots: list[Path] = []
+        raw_override = str(os.environ.get("FEAGI_RUNTIME_ROOT", "")).strip()
+        if raw_override:
+            roots.append(Path(raw_override).expanduser())
+        roots.append(Path.home() / ".feagi-staging")
+        roots.append(Path.home() / ".feagi")
+        deduped: list[Path] = []
+        seen: set[str] = set()
+        for root in roots:
+            key = str(root.resolve()) if root.exists() else str(root)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(root)
+        return deduped
+
+    @classmethod
+    def _latest_runtime_session_dir(cls) -> Path | None:
+        """Find the newest desktop runtime log session directory."""
+        newest: tuple[float, Path] | None = None
+        for root in cls._runtime_root_candidates():
+            sessions_root = (
+                root
+                / "logs"
+                / "neurorobotics-studio"
+                / "fds_runtime_logs"
+            )
+            if not sessions_root.is_dir():
+                continue
+            for child in sessions_root.iterdir():
+                if not child.is_dir() or not child.name.startswith("session_"):
+                    continue
+                try:
+                    mtime = child.stat().st_mtime
+                except OSError:
+                    continue
+                if newest is None or mtime > newest[0]:
+                    newest = (mtime, child)
+        return newest[1] if newest is not None else None
+
+    @classmethod
+    def _collect_lifecycle_events_from_log(
+        cls,
+        log_path: Path,
+        source: str,
+        controller_id: str,
+    ) -> list[dict[str, Any]]:
+        """Extract lifecycle events from one log file."""
+        lowered_id = controller_id.lower()
+        events: list[dict[str, Any]] = []
+        try:
+            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return events
+
+        for idx, raw in enumerate(lines, start=1):
+            clean = cls._strip_ansi_codes(raw)
+            low = clean.lower()
+            kind: str | None = None
+
+            if source == "desktop":
+                if f"stopping controller: {lowered_id}" in low:
+                    kind = "controller_stop_requested"
+                elif "controller stopped" in low:
+                    kind = "controller_stopped"
+                elif "experiment/run/stop" in low:
+                    kind = "experiment_stop_posted"
+                elif f"cleared descriptor for {lowered_id}" in low:
+                    kind = "introspection_descriptor_cleared"
+                elif f"launching controller: {lowered_id}" in low:
+                    kind = "controller_launch_requested"
+            else:
+                if "[recovery] observed health event: feagi_unreachable" in low:
+                    kind = "recovery_feagi_unreachable"
+                elif "[recovery] observed health event: feagi_back_online" in low:
+                    kind = "recovery_feagi_back_online"
+                elif "[recovery] reconnect requested" in low:
+                    kind = "recovery_reconnect_requested"
+                elif "[recovery] reconnect succeeded" in low:
+                    kind = "recovery_reconnect_succeeded"
+                elif "disconnect: start" in low:
+                    kind = "sdk_disconnect_start"
+                elif "disconnect: complete" in low:
+                    kind = "sdk_disconnect_complete"
+                elif "connect: complete" in low:
+                    kind = "sdk_connect_complete"
+
+            if kind is None:
+                continue
+
+            ts_ms = cls._parse_line_timestamp_ms(clean)
+            events.append(
+                {
+                    "kind": kind,
+                    "timestamp_ms": ts_ms,
+                    "source": source,
+                    "line_number": idx,
+                    "log_path": str(log_path),
+                    "message": clean.strip(),
+                }
+            )
+        return events
+
+    async def get_controller_lifecycle_events(
+        self,
+        controller_id: str = "mujoco",
+        since_ts_ms: int | None = None,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        """Read controller/desktop logs and return normalized lifecycle events."""
+        if not controller_id.strip():
+            return {"error": "controller_id must be non-empty"}
+        safe_limit = max(1, min(int(limit), 2000))
+        session_dir = self._latest_runtime_session_dir()
+        if session_dir is None:
+            return {
+                "controller_id": controller_id,
+                "events": [],
+                "total_events": 0,
+                "session_dir": None,
+                "message": "No runtime log sessions found.",
+            }
+
+        desktop_log = session_dir / "neurorobotics-studio" / "neurorobotics-studio.log"
+        controller_log = session_dir / "controllers" / f"{controller_id}.log"
+        events = []
+        events.extend(
+            self._collect_lifecycle_events_from_log(
+                desktop_log,
+                source="desktop",
+                controller_id=controller_id,
+            )
+        )
+        events.extend(
+            self._collect_lifecycle_events_from_log(
+                controller_log,
+                source="controller",
+                controller_id=controller_id,
+            )
+        )
+
+        if since_ts_ms is not None:
+            since_val = int(since_ts_ms)
+            events = [
+                e for e in events
+                if e.get("timestamp_ms") is not None and int(e["timestamp_ms"]) >= since_val
+            ]
+
+        events.sort(
+            key=lambda e: (
+                int(e["timestamp_ms"]) if e.get("timestamp_ms") is not None else -1,
+                str(e.get("source", "")),
+                int(e.get("line_number", 0)),
+            )
+        )
+        if len(events) > safe_limit:
+            events = events[-safe_limit:]
+        return {
+            "controller_id": controller_id,
+            "session_dir": str(session_dir),
+            "desktop_log": str(desktop_log),
+            "controller_log": str(controller_log),
+            "since_ts_ms": since_ts_ms,
+            "limit": safe_limit,
+            "total_events": len(events),
+            "events": events,
+        }
+
+    async def get_experiment_stop_cause(
+        self,
+        controller_id: str = "mujoco",
+        since_ts_ms: int | None = None,
+        limit: int = 300,
+    ) -> dict[str, Any]:
+        """Infer likely stop cause from lifecycle event chronology."""
+        lifecycle = await self.get_controller_lifecycle_events(
+            controller_id=controller_id,
+            since_ts_ms=since_ts_ms,
+            limit=limit,
+        )
+        if "error" in lifecycle:
+            return lifecycle
+
+        events = lifecycle.get("events", [])
+        if not isinstance(events, list) or not events:
+            return {
+                **lifecycle,
+                "stop_detected": False,
+                "likely_cause": "no_stop_events_found",
+            }
+
+        stop_markers = {
+            "controller_stop_requested",
+            "experiment_stop_posted",
+            "controller_stopped",
+        }
+        stop_idx = None
+        for idx in range(len(events) - 1, -1, -1):
+            if isinstance(events[idx], dict) and events[idx].get("kind") in stop_markers:
+                stop_idx = idx
+                break
+        if stop_idx is None:
+            return {
+                **lifecycle,
+                "stop_detected": False,
+                "likely_cause": "no_stop_events_found",
+            }
+
+        stop_event = events[stop_idx]
+        evidence = [stop_event]
+        likely_cause = "manual_or_external_stop_command"
+        stop_ts = stop_event.get("timestamp_ms")
+        window_ms = 30000
+        for idx in range(stop_idx - 1, -1, -1):
+            prev = events[idx]
+            if not isinstance(prev, dict):
+                continue
+            prev_kind = str(prev.get("kind", ""))
+            prev_ts = prev.get("timestamp_ms")
+            if (
+                isinstance(stop_ts, int)
+                and isinstance(prev_ts, int)
+                and stop_ts - prev_ts > window_ms
+            ):
+                break
+            if prev_kind in {
+                "recovery_feagi_unreachable",
+                "recovery_feagi_back_online",
+                "recovery_reconnect_requested",
+                "sdk_disconnect_start",
+                "sdk_disconnect_complete",
+            }:
+                evidence.append(prev)
+                likely_cause = "recovery_reconnect_transition_then_stop"
+
+        evidence.reverse()
+        return {
+            **lifecycle,
+            "stop_detected": True,
+            "likely_cause": likely_cause,
+            "stop_event": stop_event,
+            "evidence_events": evidence,
+        }
+
     async def get_agent_joint_map(self, agent_id: str) -> dict[str, Any]:
         """Extract a focused joint-to-OPU mapping from an agent's device registrations.
 
-        Parses the ``output_units`` from the agent's device registrations
-        and produces a flat joint list with cortical area IDs, group/channel
-        indices, control modes, and angle ranges.
+        Parses both legacy ``output_units`` and current
+        ``output_units_and_decoder_properties`` registration shapes and
+        produces a flat joint list with cortical IDs, group/channel indices,
+        control modes, and value ranges when provided.
 
         Args:
             agent_id: Agent identifier (from ``get_registered_agents``).
@@ -2603,6 +3019,26 @@ class FeagiClient:
         output_units = dev_reg.get("output_units", {})
         if not isinstance(output_units, dict):
             output_units = {}
+        output_units_decoders = dev_reg.get("output_units_and_decoder_properties", {})
+        if not isinstance(output_units_decoders, dict):
+            output_units_decoders = {}
+
+        area_index_by_unit: dict[int, list[dict[str, Any]]] = {}
+        for area in await self.list_cortical_areas():
+            if not isinstance(area, dict):
+                continue
+            if str(area.get("cortical_group", "")).upper() != "OPU":
+                continue
+            unit_id = area.get("unit_id")
+            if not isinstance(unit_id, int):
+                continue
+            area_index_by_unit.setdefault(unit_id, []).append(area)
+        for unit_areas in area_index_by_unit.values():
+            unit_areas.sort(
+                key=lambda a: int(a.get("subunit_id"))
+                if isinstance(a.get("subunit_id"), int)
+                else 0
+            )
 
         joints: list[dict[str, Any]] = []
         opu_cortical_ids: set[str] = set()
@@ -2622,12 +3058,21 @@ class FeagiClient:
                 for channel_idx, channel_data in channels.items():
                     if not isinstance(channel_data, dict):
                         continue
+                    normalized_channel = (
+                        int(channel_idx)
+                        if str(channel_idx).isdigit()
+                        else channel_idx
+                    )
+                    joint_name = channel_data.get(
+                        "custom_name",
+                        channel_data.get("name", f"joint_{channel_idx}"),
+                    )
                     joint: dict[str, Any] = {
                         "device_type": device_type,
                         "group_id": group_id,
-                        "channel_index": int(channel_idx) if str(channel_idx).isdigit() else channel_idx,
+                        "channel_index": normalized_channel,
                         "cortical_id": cortical_id,
-                        "joint_name": channel_data.get("custom_name", channel_data.get("name", f"joint_{channel_idx}")),
+                        "joint_name": joint_name,
                         "control_mode": channel_data.get("control_mode", "unknown"),
                     }
                     min_val = channel_data.get("min_value")
@@ -2636,6 +3081,115 @@ class FeagiClient:
                         joint["min_value"] = min_val
                     if max_val is not None:
                         joint["max_value"] = max_val
+                    joints.append(joint)
+
+        subtype_hint_by_device: dict[str, str] = {
+            "PositionalServo": "opse",
+            "SpatialPointer": "optr",
+            "RotaryServo": "opse",
+            "MiscData": "omis",
+        }
+        for device_type, group_entries in output_units_decoders.items():
+            if not isinstance(group_entries, list):
+                continue
+            subtype_hint = subtype_hint_by_device.get(device_type, "")
+            for entry_idx, entry in enumerate(group_entries):
+                if not isinstance(entry, list) or not entry:
+                    continue
+                meta = entry[0]
+                decoder_cfg = entry[1] if len(entry) > 1 else {}
+                if not isinstance(meta, dict):
+                    continue
+
+                cortical_id = ""
+                raw_cortical_id = meta.get("cortical_id")
+                if isinstance(raw_cortical_id, str):
+                    cortical_id = raw_cortical_id
+
+                unit_index = meta.get("cortical_unit_index")
+                candidate_areas: list[dict[str, Any]] = []
+                if isinstance(unit_index, int):
+                    candidate_areas = area_index_by_unit.get(unit_index, [])
+                if not cortical_id and candidate_areas:
+                    if subtype_hint:
+                        subtype_matches = [
+                            a
+                            for a in candidate_areas
+                            if str(a.get("cortical_subtype", "")).lower() == subtype_hint
+                        ]
+                    else:
+                        subtype_matches = candidate_areas
+                    if subtype_matches:
+                        selected_area = (
+                            subtype_matches[entry_idx]
+                            if entry_idx < len(subtype_matches)
+                            else subtype_matches[0]
+                        )
+                        selected_cortical_id = selected_area.get("cortical_id")
+                        if isinstance(selected_cortical_id, str):
+                            cortical_id = selected_cortical_id
+                if cortical_id:
+                    opu_cortical_ids.add(cortical_id)
+
+                io_flags = meta.get("io_configuration_flags", {})
+                control_mode = "unknown"
+                if isinstance(io_flags, dict):
+                    frame_mode = io_flags.get("frame_change_handling")
+                    if isinstance(frame_mode, str) and frame_mode:
+                        control_mode = frame_mode
+
+                min_value = None
+                max_value = None
+                if isinstance(decoder_cfg, dict):
+                    for range_key in ("min", "min_value", "minimum"):
+                        maybe_min = _extract_wrapped_value(decoder_cfg.get(range_key))
+                        if isinstance(maybe_min, (int, float)):
+                            min_value = float(maybe_min)
+                            break
+                    for range_key in ("max", "max_value", "maximum"):
+                        maybe_max = _extract_wrapped_value(decoder_cfg.get(range_key))
+                        if isinstance(maybe_max, (int, float)):
+                            max_value = float(maybe_max)
+                            break
+
+                device_grouping = meta.get("device_grouping", [])
+                if not isinstance(device_grouping, list):
+                    device_grouping = []
+                for channel_idx, channel in enumerate(device_grouping):
+                    if not isinstance(channel, dict):
+                        continue
+                    channel_index: int | str = channel_idx
+                    override = channel.get("channel_index_override")
+                    if isinstance(override, int):
+                        channel_index = override
+
+                    device_props = channel.get("device_properties", {})
+                    if not isinstance(device_props, dict):
+                        device_props = {}
+                    name_candidates = [
+                        _extract_wrapped_value(device_props.get("joint_name")),
+                        _extract_wrapped_value(device_props.get("source_entity")),
+                        channel.get("friendly_name"),
+                        meta.get("friendly_name"),
+                    ]
+                    joint_name = next(
+                        (str(name) for name in name_candidates if isinstance(name, str) and name),
+                        f"{device_type}_{channel_idx}",
+                    )
+
+                    group_id: int | str = unit_index if isinstance(unit_index, int) else "unknown"
+                    joint: dict[str, Any] = {
+                        "device_type": device_type,
+                        "group_id": group_id,
+                        "channel_index": channel_index,
+                        "cortical_id": cortical_id,
+                        "joint_name": joint_name,
+                        "control_mode": control_mode,
+                    }
+                    if min_value is not None:
+                        joint["min_value"] = min_value
+                    if max_value is not None:
+                        joint["max_value"] = max_value
                     joints.append(joint)
 
         return {

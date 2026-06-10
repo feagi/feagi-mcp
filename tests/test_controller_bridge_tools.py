@@ -187,7 +187,8 @@ class TestSendMotorCommand:
         assert result["success"] is True
         assert result["joint_name"] == "joint_1"
         assert result["target_value"] == 90.0
-        assert result["voxel_coordinate"][0] == 4  # 90/180 * 9 = 4.5 -> round to 4 (banker's rounding)
+        # 90/180 * 9 = 4.5 -> round to 4 (banker's rounding)
+        assert result["voxel_coordinate"][0] == 4
         assert result["cortical_id"] == "o_sm_0"
 
     @pytest.mark.asyncio

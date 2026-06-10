@@ -13,8 +13,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from feagi_mcp.feagi_client import FeagiClient
@@ -271,6 +272,52 @@ class TestAgentAndMonitoring:
         assert "error" in result
 
 
+class TestConnectivityDiagnostics:
+    @pytest.mark.asyncio
+    async def test_get_registered_agents_classifies_connect_errors(self, mock_client):
+        mock_client._client.get.side_effect = httpx.ConnectError("boom")
+        result = await mock_client.get_registered_agents()
+        assert result["error"] == "request_failed"
+        assert result["error_type"] == "connect_error"
+        assert result["endpoint"] == "/v1/agent/list"
+
+    @pytest.mark.asyncio
+    async def test_list_agent_capabilities_all_classifies_connect_errors(self, mock_client):
+        mock_client._client.get.side_effect = httpx.ConnectError("boom")
+        result = await mock_client.list_agent_capabilities_all()
+        assert result["error"] == "request_failed"
+        assert result["error_type"] == "connect_error"
+        assert result["endpoint"] == "/v1/agent/capabilities/all"
+
+    @pytest.mark.asyncio
+    async def test_get_feagi_link_health_aggregates_controller_state(self, mock_client):
+        mock_client.health_check = AsyncMock(return_value={"status": "ok"})
+        mock_client.get_registered_agents = AsyncMock(
+            return_value={"agent_ids": ["mujoco_agent"], "count": 1}
+        )
+        mock_client.list_agent_capabilities_all = AsyncMock(return_value={"mujoco_agent": {}})
+        mock_client.get_burst_engine_config = AsyncMock(return_value={"is_running": True})
+        mock_client.list_controller_bridges = AsyncMock(
+            return_value={
+                "controllers": [
+                    {
+                        "controller_id": "mujoco",
+                        "agent_registered": True,
+                        "matching_agent_ids": ["mujoco_agent"],
+                    }
+                ]
+            }
+        )
+
+        result = await mock_client.get_feagi_link_health("mujoco")
+        assert result["feagi_reachable"] is True
+        assert result["agent_registry_ok"] is True
+        assert result["controller_descriptor_found"] is True
+        assert result["controller_agent_registered"] is True
+        assert result["controller_matching_agent_ids"] == ["mujoco_agent"]
+        assert result["errors"] == {}
+
+
 class TestMonitorActivityLifetimeStats:
     """Verify lifetime fire-count enrichment that disambiguates 'silent now'
     from 'never fired' (the cartpole-detector misdiagnosis case)."""
@@ -495,3 +542,82 @@ class TestSnapshotManager:
         bad_path.write_text(json.dumps({"label": "bad"}), encoding="utf-8")
         with pytest.raises(ValueError):
             manager.load("bad")
+
+
+class TestControllerLifecycleDiagnostics:
+    @staticmethod
+    def _write_runtime_logs(runtime_root: Path) -> None:
+        session_dir = (
+            runtime_root
+            / "logs"
+            / "neurorobotics-studio"
+            / "fds_runtime_logs"
+            / "session_20260607_024823"
+        )
+        desktop_dir = session_dir / "neurorobotics-studio"
+        controller_dir = session_dir / "controllers"
+        desktop_dir.mkdir(parents=True, exist_ok=True)
+        controller_dir.mkdir(parents=True, exist_ok=True)
+
+        desktop_lines = [
+            "2026-06-07T17:06:57.351743Z INFO Stopping controller: mujoco",
+            "2026-06-07T17:06:57.382534Z INFO Controller stopped",
+            (
+                "2026-06-07T17:06:57.442948Z DEBUG "
+                "POST /v1/public/global/desktop/experiment/run/stop"
+            ),
+            (
+                "2026-06-07T17:06:57.383186Z INFO "
+                "MCP introspection: cleared descriptor for mujoco"
+            ),
+        ]
+        controller_lines = [
+            (
+                "2026-06-07 13:06:38,614 [INFO] [RECOVERY] "
+                "Observed health event: feagi_unreachable"
+            ),
+            (
+                "2026-06-07 13:06:57,125 [INFO] [RECOVERY] "
+                "Reconnect requested (reason=feagi back online)"
+            ),
+            "2026-06-07T17:06:57.125563Z INFO disconnect: start",
+            "2026-06-07T17:06:57.145693Z INFO connect: complete",
+        ]
+        (desktop_dir / "neurorobotics-studio.log").write_text(
+            "\n".join(desktop_lines),
+            encoding="utf-8",
+        )
+        (controller_dir / "mujoco.log").write_text(
+            "\n".join(controller_lines),
+            encoding="utf-8",
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_controller_lifecycle_events(self, tmp_path: Path) -> None:
+        self._write_runtime_logs(tmp_path)
+        client = FeagiClient()
+        with patch.dict("os.environ", {"FEAGI_RUNTIME_ROOT": str(tmp_path)}):
+            result = await client.get_controller_lifecycle_events("mujoco", limit=20)
+        assert result["controller_id"] == "mujoco"
+        assert result["total_events"] >= 6
+        kinds = {event["kind"] for event in result["events"]}
+        assert "controller_stop_requested" in kinds
+        assert "experiment_stop_posted" in kinds
+        assert "recovery_feagi_unreachable" in kinds
+
+    @pytest.mark.asyncio
+    async def test_get_experiment_stop_cause_detects_recovery_transition(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        self._write_runtime_logs(tmp_path)
+        client = FeagiClient()
+        with patch.dict("os.environ", {"FEAGI_RUNTIME_ROOT": str(tmp_path)}):
+            result = await client.get_experiment_stop_cause("mujoco", limit=50)
+        assert result["stop_detected"] is True
+        assert result["likely_cause"] == "recovery_reconnect_transition_then_stop"
+        assert result["stop_event"]["kind"] in {
+            "controller_stop_requested",
+            "experiment_stop_posted",
+            "controller_stopped",
+        }

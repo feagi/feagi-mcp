@@ -77,6 +77,102 @@ class TestAgentIntrospection:
         assert "device_registrations" in result
         assert "output_units_and_decoder_properties" in result["device_registrations"]
 
+    @pytest.mark.asyncio
+    async def test_get_agent_device_registrations_falls_back_to_capabilities_level(
+        self, mock_client
+    ):
+        """Top-level capability registrations are normalized into device_registrations."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "test_agent_id": {
+                "agent_name": "Lite6",
+                "capabilities": {
+                    "motor": True,
+                    "device_registrations": {},
+                    "output_units_and_decoder_properties": {
+                        "SpatialPointer": [[[{"cortical_unit_index": 1}, {}]]]
+                    },
+                },
+            }
+        }
+        mock_client._client.get.return_value = mock_response
+
+        result = await mock_client.get_agent_device_registrations("test_agent_id")
+
+        dev_reg = result["device_registrations"]
+        assert "output_units_and_decoder_properties" in dev_reg
+
+
+class TestAgentJointMap:
+    """Joint-map extraction from legacy and current registration payloads."""
+
+    @pytest.mark.asyncio
+    async def test_get_agent_joint_map_parses_decoder_properties_shape(self, mock_client):
+        """Extract joints from output_units_and_decoder_properties payloads."""
+        mock_client.get_agent_device_registrations = AsyncMock(
+            return_value={
+                "agent_id": "agent_a",
+                "device_registrations": {
+                    "output_units_and_decoder_properties": {
+                        "PositionalServo": [
+                            [
+                                {
+                                    "cortical_unit_index": 0,
+                                    "io_configuration_flags": {
+                                        "frame_change_handling": "Absolute"
+                                    },
+                                    "device_grouping": [
+                                        {
+                                            "channel_index_override": None,
+                                            "device_properties": {
+                                                "joint_name": {
+                                                    "type": "String",
+                                                    "value": "joint1",
+                                                }
+                                            },
+                                            "friendly_name": "joint1",
+                                        },
+                                        {
+                                            "channel_index_override": 5,
+                                            "device_properties": {
+                                                "joint_name": {
+                                                    "type": "String",
+                                                    "value": "joint6",
+                                                }
+                                            },
+                                            "friendly_name": "joint6",
+                                        },
+                                    ],
+                                },
+                                {},
+                            ]
+                        ]
+                    }
+                },
+            }
+        )
+        mock_client.list_cortical_areas = AsyncMock(
+            return_value=[
+                {
+                    "cortical_id": "b3BzZQEAAAA=",
+                    "cortical_group": "OPU",
+                    "cortical_subtype": "opse",
+                    "unit_id": 0,
+                    "subunit_id": 0,
+                }
+            ]
+        )
+
+        result = await mock_client.get_agent_joint_map("agent_a")
+
+        assert result["total_joints"] == 2
+        assert result["opu_cortical_ids"] == ["b3BzZQEAAAA="]
+        assert result["joints"][0]["joint_name"] == "joint1"
+        assert result["joints"][0]["control_mode"] == "Absolute"
+        assert result["joints"][0]["cortical_id"] == "b3BzZQEAAAA="
+        assert result["joints"][1]["channel_index"] == 5
+
 
 class TestGenomeEditing:
     """Test genome editing tools."""
