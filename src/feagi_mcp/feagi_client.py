@@ -1059,6 +1059,24 @@ class FeagiClient:
             logger.error(f"get_burst_engine_status failed: {e}")
             return {"error": str(e)}
 
+    async def get_network_connection_info(self) -> dict[str, Any]:
+        """Get FEAGI's active networking details (GET /v1/network/connection_info).
+
+        Reports the ZMQ/WebSocket hosts, ports, and ready-to-use endpoint URLs that
+        agents connect to (registration, sensory, motor, visualization), plus
+        ``stream_status`` indicating whether the data streams are live. This is the
+        authoritative source for the agent registration endpoint instead of guessing
+        ports.
+        """
+        endpoint = "/v1/network/connection_info"
+        try:
+            response = await self._client.get(f"{self.base_url}{endpoint}")
+        except Exception as e:  # noqa: BLE001 - normalized into a diagnostic payload
+            return self._request_exception_payload(endpoint=endpoint, exception=e)
+        if response.status_code != 200:
+            return self._http_failure_payload(endpoint=endpoint, response=response)
+        return _as_json_dict(response.json())
+
     async def get_runtime_metrics(self) -> dict[str, Any]:
         """Get comprehensive runtime metrics."""
         try:

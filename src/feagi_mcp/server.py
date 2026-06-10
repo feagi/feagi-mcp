@@ -547,6 +547,66 @@ async def get_burst_engine_status() -> dict[str, Any]:
 
 
 @mcp.tool()
+async def get_agent_connection_endpoints() -> dict[str, Any]:
+    """Get the live FEAGI agent connection endpoints (ZMQ/WebSocket) and burst rate.
+
+    Resolves where agents/connectors actually connect — registration, sensory, motor,
+    and visualization endpoints — straight from FEAGI's ``/v1/network/connection_info``,
+    so callers do not have to guess ZMQ ports. The result is enriched with the live burst
+    ``frequency_hz`` (from the burst engine) and a ready-to-use ``remote_runtime`` block
+    for driving a closed loop against this brain.
+
+    Primary use: configuring the open ``feagi-trainer`` remote runtime. Feed
+    ``remote_runtime.registration_endpoint`` to ``FEAGI_TRAINER_LIVE_REGISTRATION_ENDPOINT``
+    and ``remote_runtime.burst_frequency_hz`` to ``FEAGI_TRAINER_LIVE_BURST_HZ``. FEAGI
+    returns the per-capability sensory/motor data endpoints during registration, so only
+    the registration endpoint and burst rate are required to start.
+
+    Returns:
+        ``connection_info`` (raw payload: ``zmq``/``websocket`` hosts, ports, endpoints,
+        and ``stream_status``), ``burst`` (raw burst status), and a derived
+        ``remote_runtime`` convenience block: ``registration_endpoint``,
+        ``sensory_endpoint``, ``motor_endpoint``, ``burst_frequency_hz``, ``zmq_enabled``,
+        and ``data_streams_started``. Fields that FEAGI did not report are ``None``.
+    """
+    connection_info = await feagi.get_network_connection_info()
+    burst = await feagi.get_burst_engine_status()
+
+    remote_runtime: dict[str, Any] = {
+        "registration_endpoint": None,
+        "sensory_endpoint": None,
+        "motor_endpoint": None,
+        "burst_frequency_hz": None,
+        "zmq_enabled": None,
+        "data_streams_started": None,
+    }
+
+    if isinstance(connection_info, dict) and "error" not in connection_info:
+        zmq_info = connection_info.get("zmq")
+        if isinstance(zmq_info, dict):
+            remote_runtime["zmq_enabled"] = zmq_info.get("enabled")
+            endpoints = zmq_info.get("endpoints")
+            if isinstance(endpoints, dict):
+                remote_runtime["registration_endpoint"] = endpoints.get("registration")
+                remote_runtime["sensory_endpoint"] = endpoints.get("sensory")
+                remote_runtime["motor_endpoint"] = endpoints.get("motor")
+        stream_status = connection_info.get("stream_status")
+        if isinstance(stream_status, dict):
+            remote_runtime["data_streams_started"] = stream_status.get(
+                "zmq_data_streams_started"
+            )
+
+    if isinstance(burst, dict):
+        remote_runtime["burst_frequency_hz"] = burst.get("frequency_hz")
+
+    return {
+        "connection_info": connection_info,
+        "burst": burst,
+        "remote_runtime": remote_runtime,
+    }
+
+
+@mcp.tool()
 async def get_runtime_metrics() -> dict[str, Any]:
     """Get comprehensive runtime metrics.
 

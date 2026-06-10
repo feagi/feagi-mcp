@@ -564,3 +564,105 @@ class TestBrainVisualizerRouter:
         mock_client._client.get.assert_called_once_with(
             "http://localhost:8000/v1/system/health_check",
         )
+
+
+class TestNetworkConnectionInfo:
+    """GET /v1/network/connection_info via FeagiClient.get_network_connection_info."""
+
+    @pytest.mark.asyncio
+    async def test_returns_parsed_payload(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "zmq": {
+                "enabled": True,
+                "host": "127.0.0.1",
+                "endpoints": {
+                    "registration": "tcp://127.0.0.1:30001",
+                    "sensory": "tcp://127.0.0.1:5558",
+                    "motor": "tcp://127.0.0.1:5564",
+                },
+            },
+            "stream_status": {"zmq_data_streams_started": True},
+        }
+        mock_client._client.get.return_value = mock_response
+
+        result = await mock_client.get_network_connection_info()
+
+        assert result["zmq"]["endpoints"]["registration"] == "tcp://127.0.0.1:30001"
+        mock_client._client.get.assert_called_once_with(
+            "http://localhost:8000/v1/network/connection_info",
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_200_returns_error_payload(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_response.text = "boom"
+        mock_client._client.get.return_value = mock_response
+
+        result = await mock_client.get_network_connection_info()
+
+        assert result["error"] == "HTTP 500"
+        assert result["endpoint"] == "/v1/network/connection_info"
+
+
+class TestGetAgentConnectionEndpointsTool:
+    """MCP tool that surfaces ZMQ endpoints + burst rate for the remote runtime."""
+
+    @pytest.mark.asyncio
+    async def test_derives_remote_runtime_block(self, monkeypatch):
+        from feagi_mcp import server
+
+        async def fake_connection_info():
+            return {
+                "zmq": {
+                    "enabled": True,
+                    "endpoints": {
+                        "registration": "tcp://127.0.0.1:30001",
+                        "sensory": "tcp://127.0.0.1:5558",
+                        "motor": "tcp://127.0.0.1:5564",
+                    },
+                },
+                "stream_status": {"zmq_data_streams_started": True},
+            }
+
+        async def fake_burst_status():
+            return {"active": True, "paused": False, "frequency_hz": 15.0}
+
+        monkeypatch.setattr(
+            server.feagi, "get_network_connection_info", fake_connection_info
+        )
+        monkeypatch.setattr(server.feagi, "get_burst_engine_status", fake_burst_status)
+
+        result = await server.get_agent_connection_endpoints()
+
+        remote = result["remote_runtime"]
+        assert remote["registration_endpoint"] == "tcp://127.0.0.1:30001"
+        assert remote["sensory_endpoint"] == "tcp://127.0.0.1:5558"
+        assert remote["motor_endpoint"] == "tcp://127.0.0.1:5564"
+        assert remote["burst_frequency_hz"] == 15.0
+        assert remote["zmq_enabled"] is True
+        assert remote["data_streams_started"] is True
+
+    @pytest.mark.asyncio
+    async def test_tolerates_connection_info_error(self, monkeypatch):
+        from feagi_mcp import server
+
+        async def fake_connection_info():
+            return {"error": "HTTP 500", "endpoint": "/v1/network/connection_info"}
+
+        async def fake_burst_status():
+            return {"frequency_hz": 15.0}
+
+        monkeypatch.setattr(
+            server.feagi, "get_network_connection_info", fake_connection_info
+        )
+        monkeypatch.setattr(server.feagi, "get_burst_engine_status", fake_burst_status)
+
+        result = await server.get_agent_connection_endpoints()
+
+        assert result["connection_info"]["error"] == "HTTP 500"
+        # Endpoints unknown, but burst rate still surfaced.
+        assert result["remote_runtime"]["registration_endpoint"] is None
+        assert result["remote_runtime"]["burst_frequency_hz"] == 15.0
