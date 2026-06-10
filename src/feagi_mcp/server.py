@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -332,6 +333,79 @@ async def load_barebones_genome() -> dict[str, Any]:
     """
     result = await feagi.load_barebones_genome()
     return result
+
+
+@mcp.tool()
+async def load_genome_from_file(path: str) -> dict[str, Any]:
+    """Load (provision) a genome into the live FEAGI from a local JSON file path.
+
+    Reads the genome JSON file *inside the MCP server process* and uploads it to FEAGI,
+    replacing the current genome. Prefer this over ``upload_genome`` whenever the genome
+    lives on disk: only the file path crosses the model boundary, not the (often very large)
+    genome JSON, which avoids excessive token use.
+
+    Use this to provision a known architecture (e.g. an IPU/OPU layout a Trainer run binds to)
+    before driving a closed-loop run.
+
+    Args:
+        path: Filesystem path to a genome JSON file (absolute, or relative to the MCP server's
+            working directory). ``~`` is expanded.
+
+    Returns:
+        A compact status object: ``success``, the resolved ``path``, a derived
+        ``genome_title`` / ``cortical_area_count`` summary, and the FEAGI ``upload_result``.
+        On a local read/parse failure, ``success`` is ``false`` with an explicit ``error`` code
+        (``file_not_found`` / ``not_a_file`` / ``invalid_json`` / ``io_error``); the genome is
+        not uploaded.
+    """
+    genome_path = Path(path).expanduser()
+    if not genome_path.exists():
+        return {"success": False, "error": "file_not_found", "path": str(genome_path)}
+    if not genome_path.is_file():
+        return {"success": False, "error": "not_a_file", "path": str(genome_path)}
+
+    try:
+        raw = genome_path.read_text(encoding="utf-8")
+    except OSError as e:
+        return {
+            "success": False,
+            "error": "io_error",
+            "path": str(genome_path),
+            "message": str(e),
+        }
+
+    try:
+        genome_data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        return {
+            "success": False,
+            "error": "invalid_json",
+            "path": str(genome_path),
+            "message": str(e),
+        }
+
+    if not isinstance(genome_data, dict):
+        return {
+            "success": False,
+            "error": "invalid_genome",
+            "path": str(genome_path),
+            "message": "genome root must be a JSON object",
+        }
+
+    upload_result = await feagi.upload_genome(genome_data)
+
+    # Derive a small summary so the caller gets confirmation without echoing the full genome.
+    blueprint = genome_data.get("blueprint")
+    cortical_area_count = len(blueprint) if isinstance(blueprint, dict) else None
+    success = bool(upload_result.get("success", "error" not in upload_result))
+
+    return {
+        "success": success,
+        "path": str(genome_path),
+        "genome_title": genome_data.get("genome_title"),
+        "cortical_area_count": cortical_area_count,
+        "upload_result": upload_result,
+    }
 
 
 @mcp.tool()

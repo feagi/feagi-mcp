@@ -1,5 +1,6 @@
 """Test new MCP tools for agent introspection and genome editing."""
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -605,6 +606,77 @@ class TestNetworkConnectionInfo:
 
         assert result["error"] == "HTTP 500"
         assert result["endpoint"] == "/v1/network/connection_info"
+
+
+class TestLoadGenomeFromFileTool:
+    """MCP tool that provisions a genome from a local file path."""
+
+    @pytest.mark.asyncio
+    async def test_uploads_file_and_returns_summary(self, monkeypatch, tmp_path):
+        from feagi_mcp import server
+
+        genome = {
+            "genome_title": "iris_classifier",
+            "blueprint": {"iv00_C": {}, "o____C": {}},
+        }
+        genome_file = tmp_path / "iris.genome.json"
+        genome_file.write_text(json.dumps(genome), encoding="utf-8")
+
+        captured = {}
+
+        async def fake_upload(data):
+            captured["data"] = data
+            return {"success": True, "cortical_area_count": 2}
+
+        monkeypatch.setattr(server.feagi, "upload_genome", fake_upload)
+
+        result = await server.load_genome_from_file(str(genome_file))
+
+        assert result["success"] is True
+        assert result["genome_title"] == "iris_classifier"
+        assert result["cortical_area_count"] == 2
+        assert result["upload_result"]["success"] is True
+        # The full genome was uploaded, not just the summary.
+        assert captured["data"] == genome
+
+    @pytest.mark.asyncio
+    async def test_missing_file_returns_error_without_uploading(self, monkeypatch, tmp_path):
+        from feagi_mcp import server
+
+        called = {"uploaded": False}
+
+        async def fake_upload(_data):
+            called["uploaded"] = True
+            return {"success": True}
+
+        monkeypatch.setattr(server.feagi, "upload_genome", fake_upload)
+
+        result = await server.load_genome_from_file(str(tmp_path / "missing.json"))
+
+        assert result["success"] is False
+        assert result["error"] == "file_not_found"
+        assert called["uploaded"] is False
+
+    @pytest.mark.asyncio
+    async def test_invalid_json_returns_error_without_uploading(self, monkeypatch, tmp_path):
+        from feagi_mcp import server
+
+        called = {"uploaded": False}
+
+        async def fake_upload(_data):
+            called["uploaded"] = True
+            return {"success": True}
+
+        monkeypatch.setattr(server.feagi, "upload_genome", fake_upload)
+
+        bad_file = tmp_path / "bad.json"
+        bad_file.write_text("{ not valid json", encoding="utf-8")
+
+        result = await server.load_genome_from_file(str(bad_file))
+
+        assert result["success"] is False
+        assert result["error"] == "invalid_json"
+        assert called["uploaded"] is False
 
 
 class TestGetAgentConnectionEndpointsTool:
