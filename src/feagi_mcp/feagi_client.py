@@ -18,6 +18,7 @@ from feagi_mcp.introspection_discovery import (
     discover_all_endpoints,
     discover_endpoint,
 )
+from feagi_mcp.io_cortical_id_encode import encode_io_cortical_id
 from feagi_mcp.placement_policy import (
     check_min_separation_to_existing,
     check_origin_exclusion,
@@ -46,6 +47,42 @@ def _as_json_list_str(data: Any) -> list[str]:
     if isinstance(data, list):
         return [str(x) for x in data]
     return []
+
+
+def _find_actual_coordinates(result: dict[str, Any]) -> list[int] | None:
+    """Extract the placed ``coordinates_3d`` from a create-area response, if present.
+
+    Handles both the IPU/OPU shape (``{"areas": [{"coordinates_3d": [...]}]}``) and a
+    flat ``coordinates_3d`` at the top level. Returns ``None`` when not reported.
+    """
+    coords = result.get("coordinates_3d")
+    if coords is None:
+        areas = result.get("areas")
+        if isinstance(areas, list) and areas and isinstance(areas[0], dict):
+            coords = areas[0].get("coordinates_3d")
+    if isinstance(coords, list) and len(coords) == 3:
+        return [int(c) for c in coords]
+    return None
+
+
+def _annotate_requested_placement(
+    result: dict[str, Any], requested: list[int]
+) -> None:
+    """Attach a ``placement`` block reporting requested vs actual coordinates.
+
+    FEAGI auto-places IPU/OPU areas, so the requested ``position`` is frequently overridden.
+    Surfacing both makes that explicit instead of silently discarding the caller's intent.
+    """
+    actual = _find_actual_coordinates(result)
+    result["placement"] = {
+        "requested": list(requested),
+        "actual": actual,
+        "relocated": actual is not None and actual != list(requested),
+        "note": (
+            "FEAGI auto-places IPU/OPU areas; the requested position may be overridden. "
+            "Use update_cortical_area to move a placed area if a specific location is required."
+        ),
+    }
 
 
 def _normalize_cortical_area_list_payload(data: Any) -> list[dict[str, Any]]:
@@ -1354,11 +1391,178 @@ class FeagiClient:
                 )
 
             if response.status_code == 200:
-                return _as_json_dict(response.json())
+                result = _as_json_dict(response.json())
+                _annotate_requested_placement(result, position)
+                return result
             return {"error": f"HTTP {response.status_code}", "message": response.text}
         except Exception as e:
             logger.error(f"create_cortical_area failed: {e}")
             return {"error": str(e)}
+
+    async def create_io_area_for_unit(
+        self,
+        name: str,
+        subtype: str,
+        channels: int,
+        depth: int,
+        variant: str = "percentage",
+        framing: str = "absolute",
+        positioning: str = "linear",
+        unit_index: int = 0,
+        subunit_index: int = 0,
+        device_count: int = 1,
+        position: list[int] | None = None,
+    ) -> dict[str, Any]:
+        """Create the IPU/OPU area a sensorimotor unit binds to, deriving its canonical id.
+
+        Removes the guesswork of hand-assembling the 8-byte cortical id / configuration flag:
+        the wire id is computed (see :mod:`feagi_mcp.io_cortical_id_encode`) from the same
+        rules the Rust ``feagi-sensorimotor`` register functions use, the area is created, and
+        the server-assigned id is verified to match the computed one.
+
+        Args:
+            name: Human-readable area name (BV / genome label).
+            subtype: 4-char ``cortical_subtype`` (e.g. ``icnt`` count input, ``ocnt`` count
+                output); the first char selects input (``i``) vs output (``o``).
+            channels: Number of channels (the area's x-width per device).
+            depth: Neuron depth / bins (the area's z-extent); must match the coder's bins.
+            variant: IO configuration variant (default ``percentage`` for the count family).
+            framing: ``absolute`` or ``incremental``.
+            positioning: ``linear`` or ``fractional``.
+            unit_index: Device / group instance index (wire byte 7).
+            subunit_index: Sub-area index within the unit (wire byte 6).
+            device_count: Number of devices for the area.
+            position: Optional ``[x, y, z]`` request (FEAGI may auto-place; see ``placement``).
+
+        Returns:
+            ``{"computed_cortical_id", "config_flag", "verified", "create_result", ...}`` on
+            success, or ``{"error": ...}`` if the id cannot be encoded or creation fails.
+        """
+        encoded = encode_io_cortical_id(
+            subtype=subtype,
+            variant=variant,
+            framing=framing,
+            positioning=positioning,
+            unit_index=unit_index,
+            subunit_index=subunit_index,
+        )
+        if not encoded.get("ok"):
+            return {"error": "invalid_io_cortical_id", "message": encoded.get("error")}
+
+        cortical_type = "IPU" if encoded["io_kind"] == "sensory" else "OPU"
+        per_device_dimensions = [int(channels), 1, int(depth)]
+        create_result = await self.create_cortical_area(
+            name=name,
+            cortical_type=cortical_type,
+            dimensions=per_device_dimensions,
+            position=position if position is not None else [50, 0, 0],
+            device_count=int(device_count),
+            cortical_id=encoded["cortical_subtype"],
+            # The wire byte 7 (unit index) is sourced from the API group id.
+            group_id=int(unit_index),
+            data_type_configs_by_subunit={str(int(subunit_index)): int(encoded["config_flag"])},
+            per_device_dimensions=per_device_dimensions,
+        )
+        if isinstance(create_result, dict) and "error" in create_result:
+            return {
+                "error": "create_failed",
+                "computed_cortical_id": encoded["cortical_id"],
+                "create_result": create_result,
+            }
+
+        assigned = create_result.get("cortical_id") if isinstance(create_result, dict) else None
+        return {
+            "computed_cortical_id": encoded["cortical_id"],
+            "assigned_cortical_id": assigned,
+            "verified": assigned == encoded["cortical_id"],
+            "config_flag": encoded["config_flag"],
+            "cortical_type": cortical_type,
+            "create_result": create_result,
+        }
+
+    async def probe_area_response(
+        self,
+        stimulus_area: str,
+        stimulus_voxels: list[list[int]],
+        observe_area: str,
+        settle_ms: int = 400,
+        observe_window_ms: int = 500,
+        lifetime_neuron_cap: int = 64,
+    ) -> dict[str, Any]:
+        """Force-fire one area and measure whether a downstream area responds.
+
+        Closes the "I wired it, but does it actually fire?" gap for MCP-only workflows:
+        samples the observed area's lifetime fire counters, force-fires the stimulus voxels,
+        waits ``settle_ms`` for propagation, then re-samples. ``responded`` is True when the
+        observed area's max consecutive-fire counter increased — i.e. the stimulus drove new
+        firing through the connection under test.
+
+        Args:
+            stimulus_area: Cortical id to force-fire (e.g. the source IPU).
+            stimulus_voxels: Non-empty list of ``[x, y, z]`` voxels to fire in ``stimulus_area``.
+            observe_area: Cortical id to watch for a response (e.g. the destination OPU).
+            settle_ms: Wall-clock wait between stimulus and the after-sample (propagation time).
+            observe_window_ms: Sample window for each activity read.
+            lifetime_neuron_cap: Max neurons inspected for lifetime stats per sample.
+
+        Returns:
+            ``{"responded": bool|None, "before", "after", "delta", "stimulation", ...}``; on a
+            stimulation failure, ``{"error": "stimulation_failed", "stimulation": ...}``.
+        """
+        if not isinstance(stimulus_voxels, list) or not stimulus_voxels:
+            return {"error": "stimulus_voxels must be a non-empty list of [x, y, z]"}
+
+        def _max_fire(activity: dict[str, Any]) -> int | None:
+            stats = activity.get("lifetime_stats")
+            if isinstance(stats, dict) and "max_consecutive_fire_count" in stats:
+                value = stats.get("max_consecutive_fire_count")
+                if isinstance(value, (int, float)):
+                    return int(value)
+            return None
+
+        before = await self.monitor_activity(
+            observe_area,
+            duration_ms=observe_window_ms,
+            include_lifetime_stats=True,
+            lifetime_neuron_cap=lifetime_neuron_cap,
+        )
+        stimulation = await self.stimulate_area_batch(stimulus_area, stimulus_voxels)
+        if not (isinstance(stimulation, dict) and stimulation.get("success")):
+            return {"error": "stimulation_failed", "stimulation": stimulation}
+
+        await asyncio.sleep(settle_ms / 1000.0)
+        after = await self.monitor_activity(
+            observe_area,
+            duration_ms=observe_window_ms,
+            include_lifetime_stats=True,
+            lifetime_neuron_cap=lifetime_neuron_cap,
+        )
+
+        before_max = _max_fire(before)
+        after_max = _max_fire(after)
+        responded: bool | None
+        delta: int | None
+        if before_max is None or after_max is None:
+            responded = None
+            delta = None
+        else:
+            delta = after_max - before_max
+            responded = delta > 0
+
+        return {
+            "stimulus_area": stimulus_area,
+            "observe_area": observe_area,
+            "stimulus_voxels": stimulus_voxels,
+            "responded": responded,
+            "delta_max_consecutive_fire_count": delta,
+            "stimulation": stimulation,
+            "before": before,
+            "after": after,
+            "note": (
+                "responded is derived from the increase in the observed area's max "
+                "consecutive-fire counter; None means lifetime stats were unavailable."
+            ),
+        }
 
     async def update_cortical_area(
         self, cortical_id: str, updates: dict[str, Any]
@@ -2385,7 +2589,7 @@ class FeagiClient:
         ltp_multiplier: int = 1,
         ltd_multiplier: int = 1,
         plasticity_window: int = 10,
-        synaptic_delay_bursts: int = 0,
+        synaptic_delay_bursts: int = 1,
         morphology_scalar: list[int] | None = None,
         replace_existing: bool = False,
         plasticity_mode: str | None = None,
@@ -2416,8 +2620,8 @@ class FeagiClient:
             ltp_multiplier / ltd_multiplier: Each must fit server ``i8`` range ``-128..127``;
                 use ``plasticity_eta`` for sub-unit step sizes on the weight commit.
             ltp_multiplier / ltd_multiplier / plasticity_window / synaptic_delay_bursts:
-                Pass-through STDP parameters; defaults are sensible for an excitatory
-                Hebbian rule with no axonal delay.
+                Pass-through STDP parameters. ``synaptic_delay_bursts`` must be >= 1 (the
+                backend rejects a zero axonal delay); it defaults to 1 (one-burst delay).
             morphology_scalar: Optional ``[x,y,z]`` scalar override; usually ``None``.
             replace_existing: If True, overwrite all current mapping rules with this one.
             max_weight: Optional cap on positive weight commits; server validates.
@@ -2430,6 +2634,16 @@ class FeagiClient:
         try:
             if not isinstance(voxel_mappings, list) or not voxel_mappings:
                 return {"error": "voxel_mappings must be a non-empty list"}
+            # The backend rejects synapse regeneration with a zero axonal delay
+            # ("synaptic_delay_bursts must be >= 1"). Validate up front so we never create an
+            # orphan morphology that the subsequent mapping update would then fail to attach.
+            if int(synaptic_delay_bursts) < 1:
+                return {
+                    "error": (
+                        "synaptic_delay_bursts must be >= 1 "
+                        f"(got {synaptic_delay_bursts}); the backend rejects a zero axonal delay"
+                    )
+                }
             patterns: list[Any] = []
             for idx, vm in enumerate(voxel_mappings):
                 if not isinstance(vm, dict):

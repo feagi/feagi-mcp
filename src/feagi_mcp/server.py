@@ -13,6 +13,7 @@ from feagi_mcp.composer_simulator_packs import ComposerSimulatorPacksClient
 from feagi_mcp.config import load_config
 from feagi_mcp.cortical_id_decode import decode_cortical_id_interpretation
 from feagi_mcp.feagi_client import FeagiClient
+from feagi_mcp.io_cortical_id_encode import encode_io_cortical_id
 from feagi_mcp.placement_policy import (
     LAYOUT_XY_PLANE,
     MIN_ANCHOR_SEPARATION_VOXELS,
@@ -911,8 +912,14 @@ async def create_cortical_area(
             e.g. [1, 1, 32] for single-joint servo with 32-angle resolution
             Total X = per_device_dimensions[0] * device_count
 
+    Note:
+        FEAGI auto-places IPU/OPU areas, so ``position`` is frequently overridden. The result
+        carries a ``placement`` block reporting the requested vs actual coordinates and a
+        ``relocated`` flag. For IPU/OPU areas whose canonical wire id must match a sensorimotor
+        coder binding, prefer ``create_io_area_for_unit`` which derives the id for you.
+
     Returns:
-        Created area info with cortical_id
+        Created area info with cortical_id plus a ``placement`` summary.
     """
     result = await feagi.create_cortical_area(
         name,
@@ -930,6 +937,101 @@ async def create_cortical_area(
         skip_placement_validation,
     )
     return result
+
+
+@mcp.tool()
+async def compute_io_cortical_id(
+    subtype: str,
+    variant: str = "percentage",
+    framing: str = "absolute",
+    positioning: str = "linear",
+    unit_index: int = 0,
+    subunit_index: int = 0,
+) -> dict[str, Any]:
+    """Derive the canonical 8-byte IPU/OPU cortical id for a sensorimotor unit (no live call).
+
+    Mirrors the Rust ``feagi-sensorimotor`` id derivation so a caller (e.g. a Trainer binding
+    profile, or before ``create_cortical_area``) gets the exact base64 wire id and configuration
+    flag a count/percentage IO unit resolves to — without probing a live brain or reverse-
+    engineering bytes. This is the inverse of ``decode_cortical_id``.
+
+    Args:
+        subtype: 4-char ``cortical_subtype`` (e.g. ``icnt`` count input, ``ocnt`` count output);
+            first char selects input (``i``) vs output (``o``).
+        variant: Configuration variant (default ``percentage``; also ``boolean``,
+            ``percentage_2d/3d/4d``, ``signed_percentage*``, ``cartesian_plane``, ``misc``).
+        framing: ``absolute`` or ``incremental``.
+        positioning: ``linear`` or ``fractional`` (percentage-family variants only).
+        unit_index: Device / group instance index (wire byte 7).
+        subunit_index: Sub-area index within the unit (wire byte 6).
+
+    Returns:
+        ``{"ok": True, "cortical_id": <base64>, "config_flag": <int>, ...}`` or
+        ``{"ok": False, "error": ...}``.
+    """
+    return encode_io_cortical_id(
+        subtype=subtype,
+        variant=variant,
+        framing=framing,
+        positioning=positioning,
+        unit_index=unit_index,
+        subunit_index=subunit_index,
+    )
+
+
+@mcp.tool()
+async def create_io_area_for_unit(
+    name: str,
+    subtype: str,
+    channels: int,
+    depth: int,
+    variant: str = "percentage",
+    framing: str = "absolute",
+    positioning: str = "linear",
+    unit_index: int = 0,
+    subunit_index: int = 0,
+    device_count: int = 1,
+    position: list[int] | None = None,
+) -> dict[str, Any]:
+    """Create the IPU/OPU area a sensorimotor unit binds to, with its canonical id derived.
+
+    One call that (1) computes the canonical wire id + configuration flag for the unit (the
+    same derivation the Rust register functions use), (2) creates the matching IPU/OPU area,
+    and (3) verifies the server-assigned id equals the computed one. Use this to provision the
+    exact area a coder (e.g. a Trainer population encoder / class decoder, or a robot device)
+    will publish to / read from, instead of hand-picking ``cortical_id`` +
+    ``data_type_configs_by_subunit`` for ``create_cortical_area``.
+
+    Args:
+        name: Human-readable area name (BV / genome label).
+        subtype: 4-char ``cortical_subtype`` (e.g. ``icnt`` count input, ``ocnt`` count output).
+        channels: Number of channels (the area's x-width per device).
+        depth: Neuron depth / bins (z-extent); must match the coder's bins.
+        variant: IO configuration variant (default ``percentage`` for the count family).
+        framing: ``absolute`` or ``incremental``.
+        positioning: ``linear`` or ``fractional``.
+        unit_index: Device / group instance index (wire byte 7).
+        subunit_index: Sub-area index within the unit (wire byte 6).
+        device_count: Number of devices for the area.
+        position: Optional ``[x, y, z]`` request (FEAGI may auto-place; see ``placement``).
+
+    Returns:
+        ``{"computed_cortical_id", "assigned_cortical_id", "verified", "config_flag",
+        "create_result"}`` on success, or ``{"error": ...}``.
+    """
+    return await feagi.create_io_area_for_unit(
+        name=name,
+        subtype=subtype,
+        channels=channels,
+        depth=depth,
+        variant=variant,
+        framing=framing,
+        positioning=positioning,
+        unit_index=unit_index,
+        subunit_index=subunit_index,
+        device_count=device_count,
+        position=position,
+    )
 
 
 @mcp.tool()
@@ -1794,7 +1896,7 @@ async def build_reflex_mapping(
     ltp_multiplier: int = 1,
     ltd_multiplier: int = 1,
     plasticity_window: int = 10,
-    synaptic_delay_bursts: int = 0,
+    synaptic_delay_bursts: int = 1,
     morphology_scalar: list[int] | None = None,
     replace_existing: bool = False,
     plasticity_mode: str | None = None,
@@ -1821,6 +1923,10 @@ async def build_reflex_mapping(
     ``"!"``) are supported in any axis. By default the new mapping is appended to
     existing rules between the two areas; pass ``replace_existing=True`` to wipe
     them first.
+
+    ``synaptic_delay_bursts`` must be >= 1 (the backend rejects a zero axonal delay during
+    synapse regeneration); it defaults to 1. A value < 1 is rejected up front, before the
+    morphology is created, so no orphan morphology is left behind.
 
     Plasticity controls:
         ``plasticity_flag`` enables learning on the mapping (legacy STDP path).
@@ -1901,6 +2007,46 @@ async def auto_polarity_probe(
         settle_ms=settle_ms,
         include_mujoco_physics=include_mujoco_physics,
         controller_id=controller_id,
+    )
+
+
+@mcp.tool()
+async def probe_area_response(
+    stimulus_area: str,
+    stimulus_voxels: list[list[int]],
+    observe_area: str,
+    settle_ms: int = 400,
+    observe_window_ms: int = 500,
+    lifetime_neuron_cap: int = 64,
+) -> dict[str, Any]:
+    """Force-fire one cortical area and measure whether a downstream area responds.
+
+    Validates a connection end-to-end without an embodiment agent: it samples the observed
+    area's lifetime fire counters, force-fires ``stimulus_voxels`` in ``stimulus_area``, waits
+    ``settle_ms`` for propagation, then re-samples. ``responded`` is True when the observed
+    area's max consecutive-fire counter increased. Use this after wiring a mapping (e.g. with
+    ``build_reflex_mapping`` / ``update_cortical_mapping``) to confirm the circuit actually
+    drives the destination before relying on it.
+
+    Args:
+        stimulus_area: Cortical id to force-fire (e.g. the source IPU).
+        stimulus_voxels: Non-empty list of ``[x, y, z]`` voxels to fire in ``stimulus_area``.
+        observe_area: Cortical id to watch for a response (e.g. the destination OPU).
+        settle_ms: Wall-clock wait between stimulus and the after-sample.
+        observe_window_ms: Sample window (ms) for each activity read.
+        lifetime_neuron_cap: Max neurons inspected for lifetime stats per sample.
+
+    Returns:
+        ``{"responded": bool|None, "delta_max_consecutive_fire_count", "before", "after",
+        "stimulation"}`` or ``{"error": ...}`` on a stimulation failure.
+    """
+    return await feagi.probe_area_response(
+        stimulus_area=stimulus_area,
+        stimulus_voxels=stimulus_voxels,
+        observe_area=observe_area,
+        settle_ms=settle_ms,
+        observe_window_ms=observe_window_ms,
+        lifetime_neuron_cap=lifetime_neuron_cap,
     )
 
 

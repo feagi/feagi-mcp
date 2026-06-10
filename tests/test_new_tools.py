@@ -738,3 +738,155 @@ class TestGetAgentConnectionEndpointsTool:
         # Endpoints unknown, but burst rate still surfaced.
         assert result["remote_runtime"]["registration_endpoint"] is None
         assert result["remote_runtime"]["burst_frequency_hz"] == 15.0
+
+
+class TestBuildReflexMappingDelayValidation:
+    """Gap 1: a zero axonal delay is rejected before any morphology is created."""
+
+    @pytest.mark.asyncio
+    async def test_zero_delay_rejected_without_creating_morphology(self, mock_client):
+        mock_client.create_morphology = AsyncMock()
+        mock_client.update_cortical_mapping = AsyncMock()
+
+        result = await mock_client.build_reflex_mapping(
+            src_area_id="aWNudAEAAAA=",
+            dst_area_id="b2NudAEAAAA=",
+            morphology_name="reflex",
+            voxel_mappings=[{"src": [0, 0, 0], "dst": [0, 0, 0]}],
+            postsynaptic_current_multiplier=50,
+            synaptic_delay_bursts=0,
+        )
+
+        assert "error" in result
+        assert "synaptic_delay_bursts must be >= 1" in result["error"]
+        mock_client.create_morphology.assert_not_awaited()
+        mock_client.update_cortical_mapping.assert_not_awaited()
+
+
+class TestCreateCorticalAreaPlacement:
+    """Gap 3: requested vs actual placement is surfaced, not silently discarded."""
+
+    @pytest.mark.asyncio
+    async def test_relocation_reported(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "cortical_id": "aWNudAEAAAA=",
+            "areas": [{"cortical_id": "aWNudAEAAAA=", "coordinates_3d": [160, 0, -30]}],
+        }
+        mock_client._client.post.return_value = mock_response
+
+        result = await mock_client.create_cortical_area(
+            name="Iris_Count_Input",
+            cortical_type="IPU",
+            dimensions=[3, 1, 10],
+            position=[50, 0, 0],
+            cortical_id="icnt",
+            data_type_configs_by_subunit={"0": 1},
+            per_device_dimensions=[3, 1, 10],
+        )
+
+        assert result["placement"]["requested"] == [50, 0, 0]
+        assert result["placement"]["actual"] == [160, 0, -30]
+        assert result["placement"]["relocated"] is True
+
+
+class TestCreateIoAreaForUnit:
+    """Gap 2: the canonical id is derived and verified against the server-assigned id."""
+
+    @pytest.mark.asyncio
+    async def test_computes_and_verifies_count_input_id(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "cortical_id": "aWNudAEAAAA=",
+            "areas": [{"cortical_id": "aWNudAEAAAA=", "coordinates_3d": [160, 0, -30]}],
+        }
+        mock_client._client.post.return_value = mock_response
+
+        result = await mock_client.create_io_area_for_unit(
+            name="Iris_Count_Input",
+            subtype="icnt",
+            channels=3,
+            depth=10,
+        )
+
+        assert result["computed_cortical_id"] == "aWNudAEAAAA="
+        assert result["assigned_cortical_id"] == "aWNudAEAAAA="
+        assert result["verified"] is True
+        assert result["config_flag"] == 1
+        assert result["cortical_type"] == "IPU"
+
+    @pytest.mark.asyncio
+    async def test_invalid_subtype_does_not_create(self, mock_client):
+        mock_client._client.post = AsyncMock()
+        result = await mock_client.create_io_area_for_unit(
+            name="bad",
+            subtype="nope_too_long",
+            channels=3,
+            depth=10,
+        )
+        assert result["error"] == "invalid_io_cortical_id"
+        mock_client._client.post.assert_not_awaited()
+
+
+class TestProbeAreaResponse:
+    """Gap 4: stimulate-then-observe detects whether a connection drives the target."""
+
+    @pytest.mark.asyncio
+    async def test_detects_response_from_fire_count_increase(self, mock_client):
+        mock_client.monitor_activity = AsyncMock(
+            side_effect=[
+                {"lifetime_stats": {"max_consecutive_fire_count": 0}},
+                {"lifetime_stats": {"max_consecutive_fire_count": 4}},
+            ]
+        )
+        mock_client.stimulate_area_batch = AsyncMock(return_value={"success": True})
+
+        result = await mock_client.probe_area_response(
+            stimulus_area="aWNudAEAAAA=",
+            stimulus_voxels=[[0, 0, 9]],
+            observe_area="b2NudAEAAAA=",
+            settle_ms=1,
+        )
+
+        assert result["responded"] is True
+        assert result["delta_max_consecutive_fire_count"] == 4
+
+    @pytest.mark.asyncio
+    async def test_no_response_when_counter_unchanged(self, mock_client):
+        mock_client.monitor_activity = AsyncMock(
+            side_effect=[
+                {"lifetime_stats": {"max_consecutive_fire_count": 2}},
+                {"lifetime_stats": {"max_consecutive_fire_count": 2}},
+            ]
+        )
+        mock_client.stimulate_area_batch = AsyncMock(return_value={"success": True})
+
+        result = await mock_client.probe_area_response(
+            stimulus_area="aWNudAEAAAA=",
+            stimulus_voxels=[[0, 0, 9]],
+            observe_area="b2NudAEAAAA=",
+            settle_ms=1,
+        )
+
+        assert result["responded"] is False
+        assert result["delta_max_consecutive_fire_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_stimulation_failure_short_circuits(self, mock_client):
+        mock_client.monitor_activity = AsyncMock(
+            return_value={"lifetime_stats": {"max_consecutive_fire_count": 0}}
+        )
+        mock_client.stimulate_area_batch = AsyncMock(
+            return_value={"success": False, "error": "HTTP 400"}
+        )
+
+        result = await mock_client.probe_area_response(
+            stimulus_area="aWNudAEAAAA=",
+            stimulus_voxels=[[0, 0, 9]],
+            observe_area="b2NudAEAAAA=",
+            settle_ms=1,
+        )
+
+        assert result["error"] == "stimulation_failed"
