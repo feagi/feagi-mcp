@@ -414,6 +414,65 @@ class TestBrainVisualizerParity:
         )
 
 
+class TestValidateBrainRegionHierarchyTool:
+    """Hierarchy validation helper for BV root-region assumptions."""
+
+    @pytest.mark.asyncio
+    async def test_reports_valid_single_root_hierarchy(self, monkeypatch):
+        from feagi_mcp import server
+
+        async def fake_regions():
+            return {
+                "root-1": {
+                    "title": "Root Brain Region",
+                    "parent_region_id": None,
+                    "regions": ["child-1"],
+                },
+                "child-1": {"title": "Child", "parent_region_id": "root-1", "regions": []},
+            }
+
+        async def fake_genome():
+            return {"brain_regions_root": "root-1"}
+
+        monkeypatch.setattr(server.feagi, "get_regions_members", fake_regions)
+        monkeypatch.setattr(server.feagi, "download_genome", fake_genome)
+
+        result = await server.validate_brain_region_hierarchy()
+
+        assert result["valid"] is True
+        assert result["root_region_id"] == "root-1"
+        assert result["issues"] == []
+        assert result["missing_parent_references"] == []
+        assert result["cycles"] == []
+
+    @pytest.mark.asyncio
+    async def test_reports_missing_parent_and_cycle(self, monkeypatch):
+        from feagi_mcp import server
+
+        async def fake_regions():
+            return {
+                "A": {"title": "A", "parent_region_id": "B", "regions": []},
+                "B": {"title": "B", "parent_region_id": "A", "regions": []},
+                "C": {"title": "C", "parent_region_id": "missing-parent", "regions": []},
+            }
+
+        async def fake_genome():
+            return {}
+
+        monkeypatch.setattr(server.feagi, "get_regions_members", fake_regions)
+        monkeypatch.setattr(server.feagi, "download_genome", fake_genome)
+
+        result = await server.validate_brain_region_hierarchy()
+
+        assert result["valid"] is False
+        assert result["root_region_id"] is None
+        assert result["missing_parent_references"] == [
+            {"region_id": "C", "missing_parent_region_id": "missing-parent"}
+        ]
+        assert len(result["cycles"]) >= 1
+        assert any("No root region detected" in issue for issue in result["issues"])
+
+
 class TestStimulation:
     """Manual stimulation API."""
 

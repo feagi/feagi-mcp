@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5] - 2026-06-17
+
 ### Added
 - **`stimulate_area_batch`**: MCP tool and `FeagiClient.stimulate_area_batch` — fire many
   ``[x,y,z]`` voxels in one cortical area in a single ``manual_stimulation`` HTTP call

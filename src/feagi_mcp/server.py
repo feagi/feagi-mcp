@@ -1180,6 +1180,123 @@ async def get_brain_regions() -> dict[str, Any]:
 
 
 @mcp.tool()
+async def validate_brain_region_hierarchy() -> dict[str, Any]:
+    """Validate FEAGI brain-region hierarchy invariants used by Brain Visualizer.
+
+    Runs a lightweight consistency check against live ``region/regions_members`` and
+    reports whether the hierarchy satisfies BV expectations:
+    - exactly one root (``parent_region_id`` is null)
+    - no missing parent references
+    - no cycles in parent links
+    - optional cross-check against exported ``brain_regions_root`` metadata
+
+    Returns:
+        Summary dict with ``valid`` flag, derived ``root_region_id``, issue lists,
+        and per-region ``parent_map`` details for debugging.
+    """
+    regions_summary = await feagi.get_regions_members()
+    if not isinstance(regions_summary, dict):
+        return {"valid": False, "error": "invalid_regions_response"}
+    if regions_summary.get("error"):
+        return {"valid": False, "error": "regions_fetch_failed", "details": regions_summary}
+
+    region_ids = list(regions_summary.keys())
+    parent_map: dict[str, str | None] = {}
+    root_candidates: list[str] = []
+    missing_parent_refs: list[dict[str, str]] = []
+    non_dict_regions: list[str] = []
+
+    for region_id, raw_region in regions_summary.items():
+        if not isinstance(raw_region, dict):
+            non_dict_regions.append(str(region_id))
+            parent_map[str(region_id)] = None
+            continue
+        parent_id = raw_region.get("parent_region_id")
+        if parent_id is None:
+            parent_map[str(region_id)] = None
+            root_candidates.append(str(region_id))
+        else:
+            parent_id_str = str(parent_id)
+            parent_map[str(region_id)] = parent_id_str
+            if parent_id_str not in regions_summary:
+                missing_parent_refs.append(
+                    {"region_id": str(region_id), "missing_parent_region_id": parent_id_str}
+                )
+
+    cycle_paths: list[list[str]] = []
+    cycle_seen_signatures: set[tuple[str, ...]] = set()
+    for start in region_ids:
+        cur = str(start)
+        path: list[str] = []
+        index_by_region: dict[str, int] = {}
+        while cur is not None:
+            if cur in index_by_region:
+                cycle = path[index_by_region[cur] :] + [cur]
+                signature = tuple(cycle)
+                if signature not in cycle_seen_signatures:
+                    cycle_seen_signatures.add(signature)
+                    cycle_paths.append(cycle)
+                break
+            if cur not in parent_map:
+                break
+            index_by_region[cur] = len(path)
+            path.append(cur)
+            cur = parent_map[cur]
+
+    genome_meta_root: str | None = None
+    genome_download_error: str | None = None
+    genome = await feagi.download_genome()
+    if isinstance(genome, dict):
+        if genome.get("error"):
+            genome_download_error = str(genome.get("error"))
+        else:
+            meta_root = genome.get("brain_regions_root")
+            if isinstance(meta_root, str) and meta_root.strip():
+                genome_meta_root = meta_root.strip()
+    else:
+        genome_download_error = "invalid_genome_response"
+
+    root_region_id = root_candidates[0] if len(root_candidates) == 1 else None
+    issues: list[str] = []
+    if non_dict_regions:
+        issues.append(
+            "Some regions are not dictionaries and cannot be fully validated."
+        )
+    if len(root_candidates) == 0:
+        issues.append("No root region detected (no parent_region_id == null).")
+    elif len(root_candidates) > 1:
+        issues.append(f"Multiple root candidates detected: {len(root_candidates)}")
+    if missing_parent_refs:
+        issues.append(
+            f"Found {len(missing_parent_refs)} region(s) with missing parent references."
+        )
+    if cycle_paths:
+        issues.append(f"Detected {len(cycle_paths)} parent cycle(s) in region hierarchy.")
+    if (
+        genome_meta_root is not None
+        and root_region_id is not None
+        and genome_meta_root != root_region_id
+    ):
+        issues.append(
+            "brain_regions_root metadata does not match live root parent map."
+        )
+
+    return {
+        "valid": len(issues) == 0,
+        "region_count": len(region_ids),
+        "root_region_id": root_region_id,
+        "root_candidates": root_candidates,
+        "brain_regions_root_metadata": genome_meta_root,
+        "issues": issues,
+        "missing_parent_references": missing_parent_refs,
+        "cycles": cycle_paths,
+        "non_dict_regions": non_dict_regions,
+        "genome_download_error": genome_download_error,
+        "parent_map": parent_map,
+    }
+
+
+@mcp.tool()
 async def create_brain_region(
     title: str,
     coordinates_2d: list[int],

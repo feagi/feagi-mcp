@@ -2,7 +2,7 @@
   "name": "feagi",
   "displayName": "FEAGI Neural Monitor",
   "description": "Observe and control FEAGI neural systems for LLM-assisted circuit design",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "publisher": "neuraville",
   "categories": ["AI", "Robotics", "Science"],
   "keywords": ["feagi", "neural", "brain", "robotics", "mcp", "ai"],
