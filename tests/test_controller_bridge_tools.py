@@ -72,14 +72,18 @@ class TestListControllerBridges:
         _write_descriptor(tmp_path, "xarm", port=9002, pid=200)
         client = FeagiClient()
         with patch.dict("os.environ", {"FEAGI_RUNTIME_ROOT": str(tmp_path)}):
-            client.get_registered_agents = AsyncMock(return_value={
-                "agent_ids": ["mujoco-agent", "xarm-bridge-agent"],
-                "count": 2,
-            })
+            client.get_registered_agents = AsyncMock(
+                return_value={
+                    "agent_ids": ["mujoco-agent", "xarm-bridge-agent"],
+                    "count": 2,
+                }
+            )
             result = await client.list_controller_bridges()
         assert result["total_descriptors"] == 2
         assert len(result["controllers"]) == 2
-        mujoco = next(c for c in result["controllers"] if c["controller_id"] == "mujoco")
+        mujoco = next(
+            c for c in result["controllers"] if c["controller_id"] == "mujoco"
+        )
         assert mujoco["agent_registered"] is True
         assert "mujoco-agent" in mujoco["matching_agent_ids"]
         xarm = next(c for c in result["controllers"] if c["controller_id"] == "xarm")
@@ -90,10 +94,12 @@ class TestListControllerBridges:
         _write_descriptor(tmp_path, "mujoco", port=9001)
         client = FeagiClient()
         with patch.dict("os.environ", {"FEAGI_RUNTIME_ROOT": str(tmp_path)}):
-            client.get_registered_agents = AsyncMock(return_value={
-                "agent_ids": [],
-                "count": 0,
-            })
+            client.get_registered_agents = AsyncMock(
+                return_value={
+                    "agent_ids": [],
+                    "count": 0,
+                }
+            )
             result = await client.list_controller_bridges()
         assert result["total_descriptors"] == 1
         assert result["controllers"][0]["agent_registered"] is False
@@ -103,34 +109,36 @@ class TestGetAgentJointMap:
     @pytest.mark.asyncio
     async def test_extracts_joints_from_device_registrations(self) -> None:
         client = FeagiClient()
-        client.get_agent_device_registrations = AsyncMock(return_value={
-            "agent_id": "xarm-bridge",
-            "agent_name": "xarm-bridge",
-            "capabilities": {},
-            "device_registrations": {
-                "output_units": {
-                    "ServoMotor": {
-                        "0": {
-                            "cortical_id": "o_sm_0",
-                            "channels": {
-                                "0": {
-                                    "custom_name": "joint_1",
-                                    "control_mode": "absolute",
-                                    "min_value": -180,
-                                    "max_value": 180,
-                                },
-                                "1": {
-                                    "custom_name": "joint_2",
-                                    "control_mode": "absolute",
-                                    "min_value": -120,
-                                    "max_value": 120,
+        client.get_agent_device_registrations = AsyncMock(
+            return_value={
+                "agent_id": "xarm-bridge",
+                "agent_name": "xarm-bridge",
+                "capabilities": {},
+                "device_registrations": {
+                    "output_units": {
+                        "ServoMotor": {
+                            "0": {
+                                "cortical_id": "o_sm_0",
+                                "channels": {
+                                    "0": {
+                                        "custom_name": "joint_1",
+                                        "control_mode": "absolute",
+                                        "min_value": -180,
+                                        "max_value": 180,
+                                    },
+                                    "1": {
+                                        "custom_name": "joint_2",
+                                        "control_mode": "absolute",
+                                        "min_value": -120,
+                                        "max_value": 120,
+                                    },
                                 },
                             },
                         },
                     },
                 },
-            },
-        })
+            }
+        )
         result = await client.get_agent_joint_map("xarm-bridge")
         assert result["total_joints"] == 2
         assert result["opu_cortical_ids"] == ["o_sm_0"]
@@ -141,9 +149,11 @@ class TestGetAgentJointMap:
     @pytest.mark.asyncio
     async def test_returns_error_when_agent_not_found(self) -> None:
         client = FeagiClient()
-        client.get_agent_device_registrations = AsyncMock(return_value={
-            "error": "Agent missing not found in capabilities",
-        })
+        client.get_agent_device_registrations = AsyncMock(
+            return_value={
+                "error": "Agent missing not found in capabilities",
+            }
+        )
         result = await client.get_agent_joint_map("missing")
         assert "error" in result
 
@@ -152,37 +162,43 @@ class TestSendMotorCommand:
     @pytest.mark.asyncio
     async def test_maps_joint_to_voxel_and_stimulates(self) -> None:
         client = FeagiClient()
-        client.get_agent_device_registrations = AsyncMock(return_value={
-            "agent_id": "xarm-bridge",
-            "agent_name": "xarm-bridge",
-            "capabilities": {},
-            "device_registrations": {
-                "output_units": {
-                    "ServoMotor": {
-                        "0": {
-                            "cortical_id": "o_sm_0",
-                            "channels": {
-                                "0": {
-                                    "custom_name": "joint_1",
-                                    "control_mode": "absolute",
-                                    "min_value": 0,
-                                    "max_value": 180,
+        client.get_agent_device_registrations = AsyncMock(
+            return_value={
+                "agent_id": "xarm-bridge",
+                "agent_name": "xarm-bridge",
+                "capabilities": {},
+                "device_registrations": {
+                    "output_units": {
+                        "ServoMotor": {
+                            "0": {
+                                "cortical_id": "o_sm_0",
+                                "channels": {
+                                    "0": {
+                                        "custom_name": "joint_1",
+                                        "control_mode": "absolute",
+                                        "min_value": 0,
+                                        "max_value": 180,
+                                    },
                                 },
                             },
                         },
                     },
                 },
-            },
-        })
-        client.get_cortical_area_geometry = AsyncMock(return_value={
-            "o_sm_0": {
-                "cortical_dimensions_per_axis": {"x": 10, "y": 1, "z": 1},
-            },
-        })
-        client.stimulate_area = AsyncMock(return_value={
-            "success": True,
-            "neurons_stimulated": 1,
-        })
+            }
+        )
+        client.get_cortical_area_geometry = AsyncMock(
+            return_value={
+                "o_sm_0": {
+                    "cortical_dimensions_per_axis": {"x": 10, "y": 1, "z": 1},
+                },
+            }
+        )
+        client.stimulate_area = AsyncMock(
+            return_value={
+                "success": True,
+                "neurons_stimulated": 1,
+            }
+        )
         result = await client.send_motor_command("xarm-bridge", "joint_1", 90.0)
         assert result["success"] is True
         assert result["joint_name"] == "joint_1"
@@ -194,30 +210,34 @@ class TestSendMotorCommand:
     @pytest.mark.asyncio
     async def test_clamps_value_to_range(self) -> None:
         client = FeagiClient()
-        client.get_agent_device_registrations = AsyncMock(return_value={
-            "agent_id": "xarm",
-            "agent_name": "xarm",
-            "capabilities": {},
-            "device_registrations": {
-                "output_units": {
-                    "ServoMotor": {
-                        "0": {
-                            "cortical_id": "o_sm_0",
-                            "channels": {
-                                "0": {
-                                    "custom_name": "joint_1",
-                                    "min_value": 0,
-                                    "max_value": 180,
+        client.get_agent_device_registrations = AsyncMock(
+            return_value={
+                "agent_id": "xarm",
+                "agent_name": "xarm",
+                "capabilities": {},
+                "device_registrations": {
+                    "output_units": {
+                        "ServoMotor": {
+                            "0": {
+                                "cortical_id": "o_sm_0",
+                                "channels": {
+                                    "0": {
+                                        "custom_name": "joint_1",
+                                        "min_value": 0,
+                                        "max_value": 180,
+                                    },
                                 },
                             },
                         },
                     },
                 },
-            },
-        })
-        client.get_cortical_area_geometry = AsyncMock(return_value={
-            "o_sm_0": {"cortical_dimensions_per_axis": {"x": 10, "y": 1, "z": 1}},
-        })
+            }
+        )
+        client.get_cortical_area_geometry = AsyncMock(
+            return_value={
+                "o_sm_0": {"cortical_dimensions_per_axis": {"x": 10, "y": 1, "z": 1}},
+            }
+        )
         client.stimulate_area = AsyncMock(return_value={"success": True})
         result = await client.send_motor_command("xarm", "joint_1", 999.0)
         assert result["clamped_value"] == 180.0
@@ -226,23 +246,25 @@ class TestSendMotorCommand:
     @pytest.mark.asyncio
     async def test_returns_error_for_unknown_joint(self) -> None:
         client = FeagiClient()
-        client.get_agent_device_registrations = AsyncMock(return_value={
-            "agent_id": "xarm",
-            "agent_name": "xarm",
-            "capabilities": {},
-            "device_registrations": {
-                "output_units": {
-                    "ServoMotor": {
-                        "0": {
-                            "cortical_id": "o_sm_0",
-                            "channels": {
-                                "0": {"custom_name": "joint_1"},
+        client.get_agent_device_registrations = AsyncMock(
+            return_value={
+                "agent_id": "xarm",
+                "agent_name": "xarm",
+                "capabilities": {},
+                "device_registrations": {
+                    "output_units": {
+                        "ServoMotor": {
+                            "0": {
+                                "cortical_id": "o_sm_0",
+                                "channels": {
+                                    "0": {"custom_name": "joint_1"},
+                                },
                             },
                         },
                     },
                 },
-            },
-        })
+            }
+        )
         result = await client.send_motor_command("xarm", "nonexistent_joint", 45.0)
         assert "error" in result
         assert "available_joints" in result

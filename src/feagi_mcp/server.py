@@ -442,7 +442,9 @@ async def create_morphology(
         Multi-directional:
           {"vectors": [[1, 0, 0], [0, 1, 0], [0, 0, 1]]}
     """
-    result = await feagi.create_morphology(morphology_name, morphology_type, morphology_parameters)
+    result = await feagi.create_morphology(
+        morphology_name, morphology_type, morphology_parameters
+    )
     return result
 
 
@@ -465,7 +467,9 @@ async def get_cortical_area_geometry() -> dict[str, Any]:
 
 
 @mcp.tool()
-async def trace_signal_path(from_area: str, to_area: str, max_hops: int = 5) -> dict[str, Any]:
+async def trace_signal_path(
+    from_area: str, to_area: str, max_hops: int = 5
+) -> dict[str, Any]:
     """Trace signal propagation path between cortical areas.
 
     Finds all possible paths from source to destination area through intermediate
@@ -507,7 +511,9 @@ async def trace_signal_path(from_area: str, to_area: str, max_hops: int = 5) -> 
             paths = []
             for neighbor in connectivity_map.get(current, []):
                 paths.extend(
-                    find_paths(neighbor, target, visited.copy(), path + [current], depth + 1)
+                    find_paths(
+                        neighbor, target, visited.copy(), path + [current], depth + 1
+                    )
                 )
             return paths
 
@@ -569,7 +575,9 @@ async def validate_genome(genome_json: str) -> dict[str, Any]:
             if "dstmap-d" in key and isinstance(value, dict):
                 for dst_area in value:
                     if dst_area not in area_ids:
-                        warnings.append(f"Connection to undefined area: {dst_area} (from {key})")
+                        warnings.append(
+                            f"Connection to undefined area: {dst_area} (from {key})"
+                        )
 
     morphologies = genome.get("neuron_morphologies", {})
     if not morphologies:
@@ -1035,7 +1043,9 @@ async def create_io_area_for_unit(
 
 
 @mcp.tool()
-async def update_cortical_area(cortical_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+async def update_cortical_area(
+    cortical_id: str, updates: dict[str, Any]
+) -> dict[str, Any]:
     """Update properties of an existing cortical area.
 
     Modify neural parameters, position, dimensions, or other properties. For
@@ -1198,7 +1208,11 @@ async def validate_brain_region_hierarchy() -> dict[str, Any]:
     if not isinstance(regions_summary, dict):
         return {"valid": False, "error": "invalid_regions_response"}
     if regions_summary.get("error"):
-        return {"valid": False, "error": "regions_fetch_failed", "details": regions_summary}
+        return {
+            "valid": False,
+            "error": "regions_fetch_failed",
+            "details": regions_summary,
+        }
 
     region_ids = list(regions_summary.keys())
     parent_map: dict[str, str | None] = {}
@@ -1220,7 +1234,10 @@ async def validate_brain_region_hierarchy() -> dict[str, Any]:
             parent_map[str(region_id)] = parent_id_str
             if parent_id_str not in regions_summary:
                 missing_parent_refs.append(
-                    {"region_id": str(region_id), "missing_parent_region_id": parent_id_str}
+                    {
+                        "region_id": str(region_id),
+                        "missing_parent_region_id": parent_id_str,
+                    }
                 )
 
     cycle_paths: list[list[str]] = []
@@ -1271,7 +1288,9 @@ async def validate_brain_region_hierarchy() -> dict[str, Any]:
             f"Found {len(missing_parent_refs)} region(s) with missing parent references."
         )
     if cycle_paths:
-        issues.append(f"Detected {len(cycle_paths)} parent cycle(s) in region hierarchy.")
+        issues.append(
+            f"Detected {len(cycle_paths)} parent cycle(s) in region hierarchy."
+        )
     if (
         genome_meta_root is not None
         and root_region_id is not None
@@ -1387,7 +1406,9 @@ async def suggest_cortical_anchor_positions(
             parent_c3 = [parsed[0], parsed[1], parsed[2]]
 
     spacing = max(int(spacing_voxels), MIN_ANCHOR_SEPARATION_VOXELS)
-    layout_key = layout if isinstance(layout, str) and layout.strip() else LAYOUT_XY_PLANE
+    layout_key = (
+        layout if isinstance(layout, str) and layout.strip() else LAYOUT_XY_PLANE
+    )
     positions = suggest_anchor_positions(
         int(count),
         geom,
@@ -2407,7 +2428,9 @@ async def composer_list_simulator_packs(
     Returns:
         Composer JSON body (typically ``data`` array) plus ``http_status`` when non-success.
     """
-    return await composer_sim_packs.list_simulator_packs(engine=engine, kind=kind, state=state)
+    return await composer_sim_packs.list_simulator_packs(
+        engine=engine, kind=kind, state=state
+    )
 
 
 @mcp.tool()

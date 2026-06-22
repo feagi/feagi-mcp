@@ -109,7 +109,9 @@ class TestAgentJointMap:
     """Joint-map extraction from legacy and current registration payloads."""
 
     @pytest.mark.asyncio
-    async def test_get_agent_joint_map_parses_decoder_properties_shape(self, mock_client):
+    async def test_get_agent_joint_map_parses_decoder_properties_shape(
+        self, mock_client
+    ):
         """Extract joints from output_units_and_decoder_properties payloads."""
         mock_client.get_agent_device_registrations = AsyncMock(
             return_value={
@@ -226,7 +228,9 @@ class TestGenomeEditing:
         assert "cortical_id" in result
 
     @pytest.mark.asyncio
-    async def test_create_cortical_area_custom_requires_brain_region_id(self, mock_client):
+    async def test_create_cortical_area_custom_requires_brain_region_id(
+        self, mock_client
+    ):
         """CUSTOM/MEMORY require brain_region_id (API + client guard)."""
         result = await mock_client.create_cortical_area(
             name="TestArea",
@@ -248,7 +252,9 @@ class TestGenomeEditing:
         }
         mock_client._client.put.return_value = mock_response
 
-        result = await mock_client.update_cortical_area("test_id", {"neuron_fire_threshold": 50.0})
+        result = await mock_client.update_cortical_area(
+            "test_id", {"neuron_fire_threshold": 50.0}
+        )
 
         assert result["message"] == "Cortical area updated"
 
@@ -315,7 +321,9 @@ class TestConnectionManagement:
             }
         ]
 
-        result = await mock_client.update_cortical_mapping("cHipFL", "opose1", mapping_rules)
+        result = await mock_client.update_cortical_mapping(
+            "cHipFL", "opose1", mapping_rules
+        )
 
         assert "synapse_count" in result
 
@@ -324,7 +332,9 @@ class TestConnectionManagement:
         """Test deleting cortical mapping."""
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {"message": "Mapping deletion not yet implemented"}
+        mock_response.json.return_value = {
+            "message": "Mapping deletion not yet implemented"
+        }
         mock_client._client.delete.return_value = mock_response
 
         result = await mock_client.delete_cortical_mapping("src_area", "dst_area")
@@ -428,7 +438,11 @@ class TestValidateBrainRegionHierarchyTool:
                     "parent_region_id": None,
                     "regions": ["child-1"],
                 },
-                "child-1": {"title": "Child", "parent_region_id": "root-1", "regions": []},
+                "child-1": {
+                    "title": "Child",
+                    "parent_region_id": "root-1",
+                    "regions": [],
+                },
             }
 
         async def fake_genome():
@@ -453,7 +467,11 @@ class TestValidateBrainRegionHierarchyTool:
             return {
                 "A": {"title": "A", "parent_region_id": "B", "regions": []},
                 "B": {"title": "B", "parent_region_id": "A", "regions": []},
-                "C": {"title": "C", "parent_region_id": "missing-parent", "regions": []},
+                "C": {
+                    "title": "C",
+                    "parent_region_id": "missing-parent",
+                    "regions": [],
+                },
             }
 
         async def fake_genome():
@@ -699,7 +717,9 @@ class TestLoadGenomeFromFileTool:
         assert captured["data"] == genome
 
     @pytest.mark.asyncio
-    async def test_missing_file_returns_error_without_uploading(self, monkeypatch, tmp_path):
+    async def test_missing_file_returns_error_without_uploading(
+        self, monkeypatch, tmp_path
+    ):
         from feagi_mcp import server
 
         called = {"uploaded": False}
@@ -717,7 +737,9 @@ class TestLoadGenomeFromFileTool:
         assert called["uploaded"] is False
 
     @pytest.mark.asyncio
-    async def test_invalid_json_returns_error_without_uploading(self, monkeypatch, tmp_path):
+    async def test_invalid_json_returns_error_without_uploading(
+        self, monkeypatch, tmp_path
+    ):
         from feagi_mcp import server
 
         called = {"uploaded": False}
