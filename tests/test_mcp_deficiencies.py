@@ -344,8 +344,8 @@ class TestMonitorActivityLifetimeStats:
         """Return a side_effect callable that maps URL -> response by pattern."""
 
         async def fake_get(
-            url: str, params: dict[str, Any] | None = None
-        ):  # noqa: ARG001
+            url: str, _params: dict[str, Any] | None = None
+        ):
             if "/v1/monitoring/cortical_activity" in url:
                 return _ok(
                     {
@@ -422,8 +422,8 @@ class TestMonitorActivityLifetimeStats:
         urls_seen: list[str] = []
 
         async def fake_get(
-            url: str, params: dict[str, Any] | None = None
-        ):  # noqa: ARG001
+            url: str, _params: dict[str, Any] | None = None
+        ):
             urls_seen.append(url)
             return _ok(
                 {
@@ -472,8 +472,8 @@ class TestMonitorActivityLifetimeStats:
         return cleanly with an ``error`` recorded under ``lifetime_stats``."""
 
         async def fake_get(
-            url: str, params: dict[str, Any] | None = None
-        ):  # noqa: ARG001
+            url: str, _params: dict[str, Any] | None = None
+        ):
             if "/v1/monitoring/cortical_activity" in url:
                 return _ok(
                     {
