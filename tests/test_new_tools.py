@@ -109,9 +109,7 @@ class TestAgentJointMap:
     """Joint-map extraction from legacy and current registration payloads."""
 
     @pytest.mark.asyncio
-    async def test_get_agent_joint_map_parses_decoder_properties_shape(
-        self, mock_client
-    ):
+    async def test_get_agent_joint_map_parses_decoder_properties_shape(self, mock_client):
         """Extract joints from output_units_and_decoder_properties payloads."""
         mock_client.get_agent_device_registrations = AsyncMock(
             return_value={
@@ -122,9 +120,7 @@ class TestAgentJointMap:
                             [
                                 {
                                     "cortical_unit_index": 0,
-                                    "io_configuration_flags": {
-                                        "frame_change_handling": "Absolute"
-                                    },
+                                    "io_configuration_flags": {"frame_change_handling": "Absolute"},
                                     "device_grouping": [
                                         {
                                             "channel_index_override": None,
@@ -228,9 +224,7 @@ class TestGenomeEditing:
         assert "cortical_id" in result
 
     @pytest.mark.asyncio
-    async def test_create_cortical_area_custom_requires_brain_region_id(
-        self, mock_client
-    ):
+    async def test_create_cortical_area_custom_requires_brain_region_id(self, mock_client):
         """CUSTOM/MEMORY require brain_region_id (API + client guard)."""
         result = await mock_client.create_cortical_area(
             name="TestArea",
@@ -252,9 +246,7 @@ class TestGenomeEditing:
         }
         mock_client._client.put.return_value = mock_response
 
-        result = await mock_client.update_cortical_area(
-            "test_id", {"neuron_fire_threshold": 50.0}
-        )
+        result = await mock_client.update_cortical_area("test_id", {"neuron_fire_threshold": 50.0})
 
         assert result["message"] == "Cortical area updated"
 
@@ -321,9 +313,7 @@ class TestConnectionManagement:
             }
         ]
 
-        result = await mock_client.update_cortical_mapping(
-            "cHipFL", "opose1", mapping_rules
-        )
+        result = await mock_client.update_cortical_mapping("cHipFL", "opose1", mapping_rules)
 
         assert "synapse_count" in result
 
@@ -332,9 +322,7 @@ class TestConnectionManagement:
         """Test deleting cortical mapping."""
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "message": "Mapping deletion not yet implemented"
-        }
+        mock_response.json.return_value = {"message": "Mapping deletion not yet implemented"}
         mock_client._client.delete.return_value = mock_response
 
         result = await mock_client.delete_cortical_mapping("src_area", "dst_area")
@@ -717,9 +705,7 @@ class TestLoadGenomeFromFileTool:
         assert captured["data"] == genome
 
     @pytest.mark.asyncio
-    async def test_missing_file_returns_error_without_uploading(
-        self, monkeypatch, tmp_path
-    ):
+    async def test_missing_file_returns_error_without_uploading(self, monkeypatch, tmp_path):
         from feagi_mcp import server
 
         called = {"uploaded": False}
@@ -737,9 +723,7 @@ class TestLoadGenomeFromFileTool:
         assert called["uploaded"] is False
 
     @pytest.mark.asyncio
-    async def test_invalid_json_returns_error_without_uploading(
-        self, monkeypatch, tmp_path
-    ):
+    async def test_invalid_json_returns_error_without_uploading(self, monkeypatch, tmp_path):
         from feagi_mcp import server
 
         called = {"uploaded": False}
@@ -783,9 +767,7 @@ class TestGetAgentConnectionEndpointsTool:
         async def fake_burst_status():
             return {"active": True, "paused": False, "frequency_hz": 15.0}
 
-        monkeypatch.setattr(
-            server.feagi, "get_network_connection_info", fake_connection_info
-        )
+        monkeypatch.setattr(server.feagi, "get_network_connection_info", fake_connection_info)
         monkeypatch.setattr(server.feagi, "get_burst_engine_status", fake_burst_status)
 
         result = await server.get_agent_connection_endpoints()
@@ -808,9 +790,7 @@ class TestGetAgentConnectionEndpointsTool:
         async def fake_burst_status():
             return {"frequency_hz": 15.0}
 
-        monkeypatch.setattr(
-            server.feagi, "get_network_connection_info", fake_connection_info
-        )
+        monkeypatch.setattr(server.feagi, "get_network_connection_info", fake_connection_info)
         monkeypatch.setattr(server.feagi, "get_burst_engine_status", fake_burst_status)
 
         result = await server.get_agent_connection_endpoints()

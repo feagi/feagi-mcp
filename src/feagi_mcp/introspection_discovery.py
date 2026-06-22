@@ -83,18 +83,24 @@ def _sanitize_controller_id(controller_id: str) -> str:
     return controller_id
 
 
-def _candidate_runtime_roots(env_override: str | None = None) -> list[Path]:
+def _candidate_runtime_roots(*, env_override: str | None = None) -> list[Path]:
     """Return candidate runtime roots in lookup order.
 
-    Honors ``FEAGI_RUNTIME_ROOT`` first (overriding all defaults), then the
-    staging and production conventions used by feagi-desktop.
+    When ``env_override`` is passed explicitly (tests), only that root is searched.
+    Otherwise honors ``FEAGI_RUNTIME_ROOT`` first, then staging/production defaults.
     """
-    candidates: list[Path] = []
-    override = env_override if env_override is not None else os.environ.get("FEAGI_RUNTIME_ROOT")
-    if override:
-        override_path = Path(override).expanduser()
+    if env_override is not None:
+        override_path = Path(env_override).expanduser()
         if override_path.as_posix().strip():
-            candidates.append(override_path)
+            return [override_path]
+        return []
+
+    candidates: list[Path] = []
+    env_root = os.environ.get("FEAGI_RUNTIME_ROOT")
+    if env_root:
+        env_path = Path(env_root).expanduser()
+        if env_path.as_posix().strip():
+            candidates.append(env_path)
     home = Path.home()
     # Staging first because that's what active development uses; production
     # builds are usually installed only on end-user machines.
@@ -192,7 +198,7 @@ def discover_endpoint(
         values (matching the Rust sanitizer).
     """
     safe_id = _sanitize_controller_id(controller_id)
-    for root in _candidate_runtime_roots(env_override):
+    for root in _candidate_runtime_roots(env_override=env_override):
         path = _descriptor_path(root, safe_id)
         descriptor = _load_descriptor(path)
         if descriptor is not None:
@@ -212,7 +218,7 @@ def discover_all_endpoints(
     """
     seen: set[str] = set()
     results: list[IntrospectionEndpoint] = []
-    for root in _candidate_runtime_roots(env_override):
+    for root in _candidate_runtime_roots(env_override=env_override):
         introspection_dir = root / "controllers" / INTROSPECTION_SUBDIR
         if not introspection_dir.is_dir():
             continue
@@ -241,7 +247,7 @@ def discover_endpoint_or_raise(
     """
     found = discover_endpoint(controller_id, env_override=env_override)
     if found is None:
-        roots = ", ".join(str(p) for p in _candidate_runtime_roots(env_override))
+        roots = ", ".join(str(p) for p in _candidate_runtime_roots(env_override=env_override))
         raise FileNotFoundError(
             "No introspection descriptor found for controller "
             f"{controller_id!r}. Searched: {roots}. "

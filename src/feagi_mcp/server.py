@@ -442,9 +442,7 @@ async def create_morphology(
         Multi-directional:
           {"vectors": [[1, 0, 0], [0, 1, 0], [0, 0, 1]]}
     """
-    result = await feagi.create_morphology(
-        morphology_name, morphology_type, morphology_parameters
-    )
+    result = await feagi.create_morphology(morphology_name, morphology_type, morphology_parameters)
     return result
 
 
@@ -467,9 +465,7 @@ async def get_cortical_area_geometry() -> dict[str, Any]:
 
 
 @mcp.tool()
-async def trace_signal_path(
-    from_area: str, to_area: str, max_hops: int = 5
-) -> dict[str, Any]:
+async def trace_signal_path(from_area: str, to_area: str, max_hops: int = 5) -> dict[str, Any]:
     """Trace signal propagation path between cortical areas.
 
     Finds all possible paths from source to destination area through intermediate
@@ -511,9 +507,7 @@ async def trace_signal_path(
             paths = []
             for neighbor in connectivity_map.get(current, []):
                 paths.extend(
-                    find_paths(
-                        neighbor, target, visited.copy(), path + [current], depth + 1
-                    )
+                    find_paths(neighbor, target, visited.copy(), path + [current], depth + 1)
                 )
             return paths
 
@@ -575,9 +569,7 @@ async def validate_genome(genome_json: str) -> dict[str, Any]:
             if "dstmap-d" in key and isinstance(value, dict):
                 for dst_area in value:
                     if dst_area not in area_ids:
-                        warnings.append(
-                            f"Connection to undefined area: {dst_area} (from {key})"
-                        )
+                        warnings.append(f"Connection to undefined area: {dst_area} (from {key})")
 
     morphologies = genome.get("neuron_morphologies", {})
     if not morphologies:
@@ -675,9 +667,7 @@ async def get_agent_connection_endpoints() -> dict[str, Any]:
                 remote_runtime["motor_endpoint"] = endpoints.get("motor")
         stream_status = connection_info.get("stream_status")
         if isinstance(stream_status, dict):
-            remote_runtime["data_streams_started"] = stream_status.get(
-                "zmq_data_streams_started"
-            )
+            remote_runtime["data_streams_started"] = stream_status.get("zmq_data_streams_started")
 
     if isinstance(burst, dict):
         remote_runtime["burst_frequency_hz"] = burst.get("frequency_hz")
@@ -1043,9 +1033,7 @@ async def create_io_area_for_unit(
 
 
 @mcp.tool()
-async def update_cortical_area(
-    cortical_id: str, updates: dict[str, Any]
-) -> dict[str, Any]:
+async def update_cortical_area(cortical_id: str, updates: dict[str, Any]) -> dict[str, Any]:
     """Update properties of an existing cortical area.
 
     Modify neural parameters, position, dimensions, or other properties. For
@@ -1243,7 +1231,7 @@ async def validate_brain_region_hierarchy() -> dict[str, Any]:
     cycle_paths: list[list[str]] = []
     cycle_seen_signatures: set[tuple[str, ...]] = set()
     for start in region_ids:
-        cur = str(start)
+        cur: str | None = str(start)
         path: list[str] = []
         index_by_region: dict[str, int] = {}
         while cur is not None:
@@ -1276,29 +1264,21 @@ async def validate_brain_region_hierarchy() -> dict[str, Any]:
     root_region_id = root_candidates[0] if len(root_candidates) == 1 else None
     issues: list[str] = []
     if non_dict_regions:
-        issues.append(
-            "Some regions are not dictionaries and cannot be fully validated."
-        )
+        issues.append("Some regions are not dictionaries and cannot be fully validated.")
     if len(root_candidates) == 0:
         issues.append("No root region detected (no parent_region_id == null).")
     elif len(root_candidates) > 1:
         issues.append(f"Multiple root candidates detected: {len(root_candidates)}")
     if missing_parent_refs:
-        issues.append(
-            f"Found {len(missing_parent_refs)} region(s) with missing parent references."
-        )
+        issues.append(f"Found {len(missing_parent_refs)} region(s) with missing parent references.")
     if cycle_paths:
-        issues.append(
-            f"Detected {len(cycle_paths)} parent cycle(s) in region hierarchy."
-        )
+        issues.append(f"Detected {len(cycle_paths)} parent cycle(s) in region hierarchy.")
     if (
         genome_meta_root is not None
         and root_region_id is not None
         and genome_meta_root != root_region_id
     ):
-        issues.append(
-            "brain_regions_root metadata does not match live root parent map."
-        )
+        issues.append("brain_regions_root metadata does not match live root parent map.")
 
     return {
         "valid": len(issues) == 0,
@@ -1406,9 +1386,7 @@ async def suggest_cortical_anchor_positions(
             parent_c3 = [parsed[0], parsed[1], parsed[2]]
 
     spacing = max(int(spacing_voxels), MIN_ANCHOR_SEPARATION_VOXELS)
-    layout_key = (
-        layout if isinstance(layout, str) and layout.strip() else LAYOUT_XY_PLANE
-    )
+    layout_key = layout if isinstance(layout, str) and layout.strip() else LAYOUT_XY_PLANE
     positions = suggest_anchor_positions(
         int(count),
         geom,
@@ -2428,9 +2406,7 @@ async def composer_list_simulator_packs(
     Returns:
         Composer JSON body (typically ``data`` array) plus ``http_status`` when non-success.
     """
-    return await composer_sim_packs.list_simulator_packs(
-        engine=engine, kind=kind, state=state
-    )
+    return await composer_sim_packs.list_simulator_packs(engine=engine, kind=kind, state=state)
 
 
 @mcp.tool()

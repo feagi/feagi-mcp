@@ -77,9 +77,7 @@ def configuration_flag(
     """
     variant_key = variant.strip().lower()
     if variant_key not in _VARIANT_CODES:
-        return None, (
-            f"unsupported variant '{variant}'; supported: {sorted(_VARIANT_CODES)}"
-        )
+        return None, (f"unsupported variant '{variant}'; supported: {sorted(_VARIANT_CODES)}")
 
     framing_key = framing.strip().lower()
     if framing_key not in _FRAMING_BITS:
@@ -102,11 +100,7 @@ def configuration_flag(
 
     variant_code = _VARIANT_CODES[variant_key]
     frame_bits = _FRAMING_BITS[framing_key] if variant_key in _FRAMING_VARIANTS else 0
-    pos_bits = (
-        _POSITIONING_BITS[positioning_key]
-        if variant_key in _POSITIONING_VARIANTS
-        else 0
-    )
+    pos_bits = _POSITIONING_BITS[positioning_key] if variant_key in _POSITIONING_VARIANTS else 0
 
     flag = (
         variant_code
@@ -144,18 +138,14 @@ def encode_io_cortical_id(
 
     sub = subtype.strip()
     if len(sub) != 4:
-        result["error"] = (
-            f"subtype must be exactly 4 chars (e.g. 'icnt'); got '{subtype}'"
-        )
+        result["error"] = f"subtype must be exactly 4 chars (e.g. 'icnt'); got '{subtype}'"
         return result
     if not sub.isascii():
         result["error"] = f"subtype must be ASCII; got '{subtype}'"
         return result
     direction = sub[0].lower()
     if direction not in ("i", "o"):
-        result["error"] = (
-            f"subtype must start with 'i' (input) or 'o' (output); got '{sub}'"
-        )
+        result["error"] = f"subtype must start with 'i' (input) or 'o' (output); got '{sub}'"
         return result
 
     for label, value in (("unit_index", unit_index), ("subunit_index", subunit_index)):

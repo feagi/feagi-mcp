@@ -114,9 +114,7 @@ def _extract_wrapped_value(raw: Any) -> Any:
 class FeagiClient:
     """Client for interacting with FEAGI REST API."""
 
-    def __init__(
-        self, host: str = "localhost", port: int = 8000, timeout: float = 30.0
-    ):
+    def __init__(self, host: str = "localhost", port: int = 8000, timeout: float = 30.0):
         """Initialize FEAGI client.
 
         Args:
@@ -158,9 +156,7 @@ class FeagiClient:
         }
 
     @staticmethod
-    def _http_failure_payload(
-        *, endpoint: str, response: httpx.Response
-    ) -> dict[str, Any]:
+    def _http_failure_payload(*, endpoint: str, response: httpx.Response) -> dict[str, Any]:
         """Return a consistent non-2xx HTTP error payload."""
         return {
             "error": f"HTTP {response.status_code}",
@@ -187,9 +183,7 @@ class FeagiClient:
                 response.status_code,
             )
         except Exception as e:
-            logger.warning(
-                "health_check: system health_check failed (%s); falling back", e
-            )
+            logger.warning("health_check: system health_check failed (%s); falling back", e)
 
         try:
             response = await self._client.get(f"{self.base_url}/v1/genome/name")
@@ -287,9 +281,7 @@ class FeagiClient:
                     "message": "neuron list not a JSON array",
                 }
             total_in_area = len(neuron_ids_raw)
-            sampled_ids = [
-                str(nid) for nid in neuron_ids_raw[: max(0, int(neuron_cap))]
-            ]
+            sampled_ids = [str(nid) for nid in neuron_ids_raw[: max(0, int(neuron_cap))]]
             if not sampled_ids:
                 return {
                     "total_neurons_in_area": total_in_area,
@@ -322,9 +314,7 @@ class FeagiClient:
                     "x": p.get("x"),
                     "y": p.get("y"),
                     "z": p.get("z"),
-                    "consecutive_fire_count": int(
-                        p.get("consecutive_fire_count", 0) or 0
-                    ),
+                    "consecutive_fire_count": int(p.get("consecutive_fire_count", 0) or 0),
                     "membrane_potential": p.get("membrane_potential"),
                 }
                 for p in inspected
@@ -334,9 +324,9 @@ class FeagiClient:
                 key=lambda d: int(d.get("consecutive_fire_count", 0) or 0),
                 reverse=True,
             )
-            top_neurons = [
-                d for d in ranked if int(d.get("consecutive_fire_count", 0) or 0) > 0
-            ][:5]
+            top_neurons = [d for d in ranked if int(d.get("consecutive_fire_count", 0) or 0) > 0][
+                :5
+            ]
             return {
                 "total_neurons_in_area": total_in_area,
                 "neurons_inspected": len(inspected),
@@ -387,9 +377,7 @@ class FeagiClient:
                     if isinstance(raw, list):
                         return [str(x) for x in raw]
                 return []
-            logger.error(
-                f"list_cortical_area_names failed: HTTP {response.status_code}"
-            )
+            logger.error(f"list_cortical_area_names failed: HTTP {response.status_code}")
             return []
         except Exception as e:
             logger.error(f"list_cortical_area_names failed: {e}")
@@ -398,9 +386,7 @@ class FeagiClient:
     async def list_morphologies(self) -> dict[str, Any]:
         """Get all morphology definitions including connectivity rules."""
         try:
-            response = await self._client.get(
-                f"{self.base_url}/v1/morphology/morphologies"
-            )
+            response = await self._client.get(f"{self.base_url}/v1/morphology/morphologies")
             if response.status_code == 200:
                 return _as_json_dict(response.json())
             logger.error(f"list_morphologies failed: HTTP {response.status_code}")
@@ -649,9 +635,7 @@ class FeagiClient:
     async def get_regions_members(self) -> dict[str, Any]:
         """GET /v1/region/regions_members — brain regions and member cortical areas (BV)."""
         try:
-            response = await self._client.get(
-                f"{self.base_url}/v1/region/regions_members"
-            )
+            response = await self._client.get(f"{self.base_url}/v1/region/regions_members")
             if response.status_code == 200:
                 return _as_json_dict(response.json())
             return {
@@ -768,9 +752,7 @@ class FeagiClient:
             logger.error(f"fetch_cortical_area_properties failed: {e}")
             return {"error": str(e)}
 
-    async def fetch_multi_cortical_area_properties(
-        self, cortical_ids: list[str]
-    ) -> dict[str, Any]:
+    async def fetch_multi_cortical_area_properties(self, cortical_ids: list[str]) -> dict[str, Any]:
         """POST /v1/cortical_area/multi/cortical_area_properties — batch properties (BV)."""
         try:
             response = await self._client.post(
@@ -845,9 +827,7 @@ class FeagiClient:
     async def get_cortical_template(self) -> dict[str, Any]:
         """GET /v1/genome/cortical_template — IPU/OPU templates (BV template picker)."""
         try:
-            response = await self._client.get(
-                f"{self.base_url}/v1/genome/cortical_template"
-            )
+            response = await self._client.get(f"{self.base_url}/v1/genome/cortical_template")
             if response.status_code == 200:
                 return _as_json_dict(response.json())
             return {
@@ -1082,17 +1062,13 @@ class FeagiClient:
                             area_id = key.split("-cx-")[0].replace("_____10c-", "")
                             device_count_key = key.replace("__name-t", "devcnt-i")
                             device_count = blueprint.get(device_count_key, 0)
-                            enriched = enrich_area_with_name(
-                                area_id, value, device_count
-                            )
+                            enriched = enrich_area_with_name(area_id, value, device_count)
                             opu_areas.append(enriched)
                         elif group == "IPU":
                             area_id = key.split("-cx-")[0].replace("_____10c-", "")
                             device_count_key = key.replace("__name-t", "devcnt-i")
                             device_count = blueprint.get(device_count_key, 0)
-                            enriched = enrich_area_with_name(
-                                area_id, value, device_count
-                            )
+                            enriched = enrich_area_with_name(area_id, value, device_count)
                             ipu_areas.append(enriched)
 
                 return {
@@ -1359,13 +1335,9 @@ class FeagiClient:
         try:
             if cortical_type in ["OPU", "IPU"]:
                 if not cortical_id:
-                    return {
-                        "error": "cortical_id required for OPU/IPU (e.g. 'opse', 'isvi')"
-                    }
+                    return {"error": "cortical_id required for OPU/IPU (e.g. 'opse', 'isvi')"}
                 if data_type_configs_by_subunit is None:
-                    return {
-                        "error": "data_type_configs_by_subunit required for OPU/IPU"
-                    }
+                    return {"error": "data_type_configs_by_subunit required for OPU/IPU"}
 
                 request_data = {
                     "cortical_id": cortical_id,
@@ -1410,9 +1382,7 @@ class FeagiClient:
                     if (
                         isinstance(geom, dict)
                         and "error" not in geom
-                        and (
-                            sep_err := check_min_separation_to_existing(position, geom)
-                        )
+                        and (sep_err := check_min_separation_to_existing(position, geom))
                     ):
                         return {"error": sep_err}
 
@@ -1491,9 +1461,7 @@ class FeagiClient:
             cortical_id=encoded["cortical_subtype"],
             # The wire byte 7 (unit index) is sourced from the API group id.
             group_id=int(unit_index),
-            data_type_configs_by_subunit={
-                str(int(subunit_index)): int(encoded["config_flag"])
-            },
+            data_type_configs_by_subunit={str(int(subunit_index)): int(encoded["config_flag"])},
             per_device_dimensions=per_device_dimensions,
         )
         if isinstance(create_result, dict) and "error" in create_result:
@@ -1503,11 +1471,7 @@ class FeagiClient:
                 "create_result": create_result,
             }
 
-        assigned = (
-            create_result.get("cortical_id")
-            if isinstance(create_result, dict)
-            else None
-        )
+        assigned = create_result.get("cortical_id") if isinstance(create_result, dict) else None
         return {
             "computed_cortical_id": encoded["cortical_id"],
             "assigned_cortical_id": assigned,
@@ -1640,9 +1604,7 @@ class FeagiClient:
             logger.error(f"delete_cortical_area failed: {e}")
             return {"error": str(e)}
 
-    async def get_cortical_mapping(
-        self, src_area: str, dst_area: str
-    ) -> dict[str, Any]:
+    async def get_cortical_mapping(self, src_area: str, dst_area: str) -> dict[str, Any]:
         """Get cortical mapping configuration between two areas."""
         try:
             response = await self._client.post(
@@ -1681,9 +1643,7 @@ class FeagiClient:
             logger.error(f"update_cortical_mapping failed: {e}")
             return {"error": str(e)}
 
-    async def delete_cortical_mapping(
-        self, src_area: str, dst_area: str
-    ) -> dict[str, Any]:
+    async def delete_cortical_mapping(self, src_area: str, dst_area: str) -> dict[str, Any]:
         """Delete connections between two cortical areas."""
         try:
             response = await self._client.delete(
@@ -1730,9 +1690,7 @@ class FeagiClient:
             return None
         return {str(k): str(v) for k, v in query.items()}
 
-    def _response_to_payload(
-        self, response: httpx.Response
-    ) -> dict[str, Any] | list[Any] | Any:
+    def _response_to_payload(self, response: httpx.Response) -> dict[str, Any] | list[Any] | Any:
         if not (200 <= response.status_code < 300):
             return {
                 "error": f"HTTP {response.status_code}",
@@ -1822,9 +1780,7 @@ class FeagiClient:
             elif spec.method == "PUT":
                 response = await self._client.put(url, json=json_body, **kwargs)
             elif spec.method == "DELETE":
-                response = await self._client.request(
-                    "DELETE", url, json=json_body, **kwargs
-                )
+                response = await self._client.request("DELETE", url, json=json_body, **kwargs)
             else:
                 return {"error": "unsupported_method", "method": spec.method}
 
@@ -1877,9 +1833,7 @@ class FeagiClient:
             logger.error("get_motor_snapshot_last failed: %s", e)
             return {"error": str(e)}
 
-    async def get_sensor_snapshot_last(
-        self, cortical_id: str | None = None
-    ) -> dict[str, Any]:
+    async def get_sensor_snapshot_last(self, cortical_id: str | None = None) -> dict[str, Any]:
         """GET /v1/input/sensor_snapshot/last - latest sensory input decoded this burst.
 
         Args:
@@ -1960,9 +1914,7 @@ class FeagiClient:
     async def get_burst_counter(self) -> dict[str, Any]:
         """GET /v1/burst_engine/burst_counter - current burst index."""
         try:
-            response = await self._client.get(
-                f"{self.base_url}/v1/burst_engine/burst_counter"
-            )
+            response = await self._client.get(f"{self.base_url}/v1/burst_engine/burst_counter")
             if response.status_code == 200:
                 return {"burst_counter": int(response.json())}
             return {
@@ -2055,9 +2007,7 @@ class FeagiClient:
     async def resume_burst_engine(self) -> dict[str, Any]:
         """POST /v1/burst_engine/resume - resume after a hold."""
         try:
-            response = await self._client.post(
-                f"{self.base_url}/v1/burst_engine/resume"
-            )
+            response = await self._client.post(f"{self.base_url}/v1/burst_engine/resume")
             if response.status_code == 200:
                 return _as_json_dict(response.json())
             return {
@@ -2188,9 +2138,7 @@ class FeagiClient:
             }
         try:
             if dir_n == "both":
-                r_out = await self._client.get(
-                    f"{self.base_url}/v1/connectome/{area}/synapses"
-                )
+                r_out = await self._client.get(f"{self.base_url}/v1/connectome/{area}/synapses")
                 r_in = await self._client.get(
                     f"{self.base_url}/v1/connectome/{area}/synapses/incoming"
                 )
@@ -2278,9 +2226,7 @@ class FeagiClient:
             logger.error("list_agent_capabilities_all failed: %s", e)
             return self._request_exception_payload(endpoint=endpoint, exception=e)
 
-    async def get_feagi_link_health(
-        self, controller_id: str = "mujoco"
-    ) -> dict[str, Any]:
+    async def get_feagi_link_health(self, controller_id: str = "mujoco") -> dict[str, Any]:
         """Aggregate FEAGI reachability + registration + bridge diagnostics.
 
         This is a focused health snapshot for embodiment debugging. It does not
@@ -2301,14 +2247,12 @@ class FeagiClient:
 
         registered_agent_ids = (
             list(agents_res.get("agent_ids", []))
-            if isinstance(agents_res, dict)
-            and isinstance(agents_res.get("agent_ids"), list)
+            if isinstance(agents_res, dict) and isinstance(agents_res.get("agent_ids"), list)
             else []
         )
         controllers = (
             list(bridges_res.get("controllers", []))
-            if isinstance(bridges_res, dict)
-            and isinstance(bridges_res.get("controllers"), list)
+            if isinstance(bridges_res, dict) and isinstance(bridges_res.get("controllers"), list)
             else []
         )
         controller_entry = next(
@@ -2342,8 +2286,7 @@ class FeagiClient:
             "controller_id": controller_id,
             "controller_descriptor_found": controller_entry is not None,
             "controller_agent_registered": bool(
-                isinstance(controller_entry, dict)
-                and controller_entry.get("agent_registered")
+                isinstance(controller_entry, dict) and controller_entry.get("agent_registered")
             ),
             "controller_matching_agent_ids": (
                 list(controller_entry.get("matching_agent_ids", []))
@@ -2518,9 +2461,7 @@ class FeagiClient:
             offset = max(0, int(offset))
             detailed = await self.get_cortical_map_detailed()
             if not isinstance(detailed, dict) or "error" in detailed:
-                return (
-                    detailed if isinstance(detailed, dict) else {"error": "bad_payload"}
-                )
+                return detailed if isinstance(detailed, dict) else {"error": "bad_payload"}
             src_needle = (src_filter or "").strip()
             dst_needle = (dst_filter or "").strip()
 
@@ -2890,9 +2831,7 @@ class FeagiClient:
                 areas = snap.get("areas")
                 if not isinstance(areas, list) or not areas:
                     return None
-                samples = (
-                    areas[0].get("samples") if isinstance(areas[0], dict) else None
-                )
+                samples = areas[0].get("samples") if isinstance(areas[0], dict) else None
                 if not isinstance(samples, list) or not samples:
                     return None
                 total_w = 0.0
@@ -2917,17 +2856,11 @@ class FeagiClient:
 
             results: list[dict[str, Any]] = []
             for col in cols:
-                stim_payload = {
-                    opu_id: [[col, 0, int(intensity_z)]] * max(1, int(repeats))
-                }
+                stim_payload = {opu_id: [[col, 0, int(intensity_z)]] * max(1, int(repeats))}
                 stim = await self.stimulate_areas(stim_payload, mode="force_fire")
                 await asyncio.sleep(max(0, int(settle_ms)) / 1000.0)
                 post_z = await _sensor_centroid_z()
-                shift = (
-                    None
-                    if baseline_z is None or post_z is None
-                    else (post_z - baseline_z)
-                )
+                shift = None if baseline_z is None or post_z is None else (post_z - baseline_z)
                 row: dict[str, Any] = {
                     "stim_xyz": [col, 0, int(intensity_z)],
                     "stimulation_result": stim,
@@ -2936,10 +2869,8 @@ class FeagiClient:
                     "observed_z_shift": shift,
                 }
                 if include_mujoco_physics:
-                    row["mujoco_physics_after"] = (
-                        await self.embodiment_get_physics_state(
-                            controller_id=controller_id
-                        )
+                    row["mujoco_physics_after"] = await self.embodiment_get_physics_state(
+                        controller_id=controller_id
                     )
                 results.append(row)
 
@@ -3006,9 +2937,7 @@ class FeagiClient:
                 "started_at": desc.started_at,
                 "descriptor_path": desc.descriptor_path,
             }
-            matching_agents = [
-                a for a in agent_ids if desc.controller_id.lower() in a.lower()
-            ]
+            matching_agents = [a for a in agent_ids if desc.controller_id.lower() in a.lower()]
             entry["matching_agent_ids"] = matching_agents
             entry["agent_registered"] = len(matching_agents) > 0
             controllers.append(entry)
@@ -3192,8 +3121,7 @@ class FeagiClient:
             events = [
                 e
                 for e in events
-                if e.get("timestamp_ms") is not None
-                and int(e["timestamp_ms"]) >= since_val
+                if e.get("timestamp_ms") is not None and int(e["timestamp_ms"]) >= since_val
             ]
 
         events.sort(
@@ -3246,10 +3174,7 @@ class FeagiClient:
         }
         stop_idx = None
         for idx in range(len(events) - 1, -1, -1):
-            if (
-                isinstance(events[idx], dict)
-                and events[idx].get("kind") in stop_markers
-            ):
+            if isinstance(events[idx], dict) and events[idx].get("kind") in stop_markers:
                 stop_idx = idx
                 break
         if stop_idx is None:
@@ -3335,13 +3260,7 @@ class FeagiClient:
                 continue
             area_index_by_unit.setdefault(unit_id, []).append(area)
         for unit_areas in area_index_by_unit.values():
-            unit_areas.sort(
-                key=lambda a: (
-                    int(a.get("subunit_id"))
-                    if isinstance(a.get("subunit_id"), int)
-                    else 0
-                )
-            )
+            unit_areas.sort(key=lambda a: sid if isinstance(sid := a.get("subunit_id"), int) else 0)
 
         joints: list[dict[str, Any]] = []
         opu_cortical_ids: set[str] = set()
@@ -3416,8 +3335,7 @@ class FeagiClient:
                         subtype_matches = [
                             a
                             for a in candidate_areas
-                            if str(a.get("cortical_subtype", "")).lower()
-                            == subtype_hint
+                            if str(a.get("cortical_subtype", "")).lower() == subtype_hint
                         ]
                     else:
                         subtype_matches = candidate_areas
@@ -3475,30 +3393,26 @@ class FeagiClient:
                         meta.get("friendly_name"),
                     ]
                     joint_name = next(
-                        (
-                            str(name)
-                            for name in name_candidates
-                            if isinstance(name, str) and name
-                        ),
+                        (str(name) for name in name_candidates if isinstance(name, str) and name),
                         f"{device_type}_{channel_idx}",
                     )
 
-                    group_id: int | str = (
+                    group_id_decoder: int | str = (
                         unit_index if isinstance(unit_index, int) else "unknown"
                     )
-                    joint: dict[str, Any] = {
+                    joint_decoder: dict[str, Any] = {
                         "device_type": device_type,
-                        "group_id": group_id,
+                        "group_id": group_id_decoder,
                         "channel_index": channel_index,
                         "cortical_id": cortical_id,
                         "joint_name": joint_name,
                         "control_mode": control_mode,
                     }
                     if min_value is not None:
-                        joint["min_value"] = min_value
+                        joint_decoder["min_value"] = min_value
                     if max_value is not None:
-                        joint["max_value"] = max_value
-                    joints.append(joint)
+                        joint_decoder["max_value"] = max_value
+                    joints.append(joint_decoder)
 
         return {
             "agent_id": agent_id,
@@ -3538,9 +3452,7 @@ class FeagiClient:
             return joint_map
 
         joints = joint_map.get("joints", [])
-        matched = [
-            j for j in joints if j.get("joint_name", "").lower() == joint_name.lower()
-        ]
+        matched = [j for j in joints if j.get("joint_name", "").lower() == joint_name.lower()]
         if not matched:
             available = [j.get("joint_name", "?") for j in joints]
             return {
@@ -3566,9 +3478,7 @@ class FeagiClient:
 
         area_geom = geom.get(cortical_id, {})
         if not area_geom:
-            return {
-                "error": f"Geometry not found for OPU cortical area '{cortical_id}'"
-            }
+            return {"error": f"Geometry not found for OPU cortical area '{cortical_id}'"}
 
         dim_x = int(area_geom.get("cortical_dimensions_per_axis", {}).get("x", 0))
         if dim_x <= 0:
@@ -3578,9 +3488,7 @@ class FeagiClient:
 
         val_range = max_val - min_val
         if val_range <= 0:
-            return {
-                "error": f"Invalid value range [{min_val}, {max_val}] for joint '{joint_name}'"
-            }
+            return {"error": f"Invalid value range [{min_val}, {max_val}] for joint '{joint_name}'"}
 
         clamped = max(min_val, min(max_val, target_value))
         normalized = (clamped - min_val) / val_range
@@ -3694,9 +3602,7 @@ class FeagiClient:
             "actuators": {...}, "sensors": {...}}`` (see MuJoCo introspection
             ``/v1/state`` for the full schema).
         """
-        url, descriptor = self._resolve_introspection_url(
-            introspection_url, controller_id
-        )
+        url, descriptor = self._resolve_introspection_url(introspection_url, controller_id)
         if url is None:
             return {
                 "error": "introspection_url_unavailable",
@@ -3742,9 +3648,7 @@ class FeagiClient:
             timeout_s: HTTP timeout.
             controller_id: Descriptor id for discovery.
         """
-        url, _descriptor = self._resolve_introspection_url(
-            introspection_url, controller_id
-        )
+        url, _descriptor = self._resolve_introspection_url(introspection_url, controller_id)
         if url is None:
             return {
                 "error": "introspection_url_unavailable",
@@ -3792,9 +3696,7 @@ class FeagiClient:
             timeout_s: HTTP timeout.
             controller_id: Controller bundle id used during auto-discovery.
         """
-        url, descriptor = self._resolve_introspection_url(
-            introspection_url, controller_id
-        )
+        url, descriptor = self._resolve_introspection_url(introspection_url, controller_id)
         if url is None:
             return {
                 "error": "introspection_url_unavailable",
@@ -3806,13 +3708,9 @@ class FeagiClient:
         try:
             payload: dict[str, Any] = {}
             if joint_qpos:
-                payload["joint_qpos"] = {
-                    str(k): float(v) for k, v in joint_qpos.items()
-                }
+                payload["joint_qpos"] = {str(k): float(v) for k, v in joint_qpos.items()}
             if joint_qvel:
-                payload["joint_qvel"] = {
-                    str(k): float(v) for k, v in joint_qvel.items()
-                }
+                payload["joint_qvel"] = {str(k): float(v) for k, v in joint_qvel.items()}
             if not payload:
                 return {"error": "joint_qpos or joint_qvel must be provided"}
             full_url = url.rstrip("/") + "/v1/set_state"
@@ -3822,9 +3720,7 @@ class FeagiClient:
                 payload_out = _as_json_dict(response.json()) or {"status": "ok"}
                 if descriptor is not None:
                     payload_out.setdefault("_introspection_source", "auto-discovered")
-                    payload_out.setdefault(
-                        "_descriptor_path", descriptor.descriptor_path
-                    )
+                    payload_out.setdefault("_descriptor_path", descriptor.descriptor_path)
                 return payload_out
             return {
                 "error": f"HTTP {response.status_code}",

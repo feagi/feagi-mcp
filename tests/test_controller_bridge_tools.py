@@ -81,9 +81,7 @@ class TestListControllerBridges:
             result = await client.list_controller_bridges()
         assert result["total_descriptors"] == 2
         assert len(result["controllers"]) == 2
-        mujoco = next(
-            c for c in result["controllers"] if c["controller_id"] == "mujoco"
-        )
+        mujoco = next(c for c in result["controllers"] if c["controller_id"] == "mujoco")
         assert mujoco["agent_registered"] is True
         assert "mujoco-agent" in mujoco["matching_agent_ids"]
         xarm = next(c for c in result["controllers"] if c["controller_id"] == "xarm")

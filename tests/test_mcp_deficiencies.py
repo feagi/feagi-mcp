@@ -161,16 +161,12 @@ class TestBurstEngineControl:
         mock_client._client.post.return_value = _ok({"message": "Hold ack"})
         pause = await mock_client.pause_burst_engine()
         assert pause["message"] == "Hold ack"
-        assert mock_client._client.post.call_args.args[0].endswith(
-            "/v1/burst_engine/hold"
-        )
+        assert mock_client._client.post.call_args.args[0].endswith("/v1/burst_engine/hold")
 
         mock_client._client.post.return_value = _ok({"message": "Resumed"})
         resume = await mock_client.resume_burst_engine()
         assert resume["message"] == "Resumed"
-        assert mock_client._client.post.call_args.args[0].endswith(
-            "/v1/burst_engine/resume"
-        )
+        assert mock_client._client.post.call_args.args[0].endswith("/v1/burst_engine/resume")
 
 
 class TestNeuronInspection:
@@ -243,17 +239,13 @@ class TestNeuronInspection:
         assert result["incoming"] == ins
         assert mock_client._client.get.call_count == 2
         urls = [c[0][0] for c in mock_client._client.get.call_args_list]
-        assert any(
-            str(u).endswith("/synapses") and "/incoming" not in str(u) for u in urls
-        )
+        assert any(str(u).endswith("/synapses") and "/incoming" not in str(u) for u in urls)
         assert any("/synapses/incoming" in str(u) for u in urls)
 
 
 class TestAgentAndMonitoring:
     @pytest.mark.asyncio
-    async def test_list_agent_capabilities_all_includes_registrations(
-        self, mock_client
-    ):
+    async def test_list_agent_capabilities_all_includes_registrations(self, mock_client):
         mock_client._client.get.return_value = _ok({"agent_a": {"capabilities": {}}})
         result = await mock_client.list_agent_capabilities_all()
         assert "agent_a" in result
@@ -268,9 +260,7 @@ class TestAgentAndMonitoring:
                 {"firing_rate": 2.0},
             ]
         )
-        result = await mock_client.monitor_activity_batch(
-            ["area_a", "area_b"], duration_ms=200
-        )
+        result = await mock_client.monitor_activity_batch(["area_a", "area_b"], duration_ms=200)
         assert result["area_count"] == 2
         assert result["results"]["area_a"] == {"firing_rate": 1.0}
         assert result["results"]["area_b"] == {"firing_rate": 2.0}
@@ -292,9 +282,7 @@ class TestConnectivityDiagnostics:
         assert result["endpoint"] == "/v1/agent/list"
 
     @pytest.mark.asyncio
-    async def test_list_agent_capabilities_all_classifies_connect_errors(
-        self, mock_client
-    ):
+    async def test_list_agent_capabilities_all_classifies_connect_errors(self, mock_client):
         mock_client._client.get.side_effect = httpx.ConnectError("boom")
         result = await mock_client.list_agent_capabilities_all()
         assert result["error"] == "request_failed"
@@ -307,12 +295,8 @@ class TestConnectivityDiagnostics:
         mock_client.get_registered_agents = AsyncMock(
             return_value={"agent_ids": ["mujoco_agent"], "count": 1}
         )
-        mock_client.list_agent_capabilities_all = AsyncMock(
-            return_value={"mujoco_agent": {}}
-        )
-        mock_client.get_burst_engine_config = AsyncMock(
-            return_value={"is_running": True}
-        )
+        mock_client.list_agent_capabilities_all = AsyncMock(return_value={"mujoco_agent": {}})
+        mock_client.get_burst_engine_config = AsyncMock(return_value={"is_running": True})
         mock_client.list_controller_bridges = AsyncMock(
             return_value={
                 "controllers": [
@@ -338,14 +322,10 @@ class TestMonitorActivityLifetimeStats:
     """Verify lifetime fire-count enrichment that disambiguates 'silent now'
     from 'never fired' (the cartpole-detector misdiagnosis case)."""
 
-    def _build_url_dispatcher(
-        self, *, area_id: str, neuron_props: dict[int, dict[str, Any]]
-    ):
+    def _build_url_dispatcher(self, *, area_id: str, neuron_props: dict[int, dict[str, Any]]):
         """Return a side_effect callable that maps URL -> response by pattern."""
 
-        async def fake_get(
-            url: str, _params: dict[str, Any] | None = None
-        ):
+        async def fake_get(url: str, **_kwargs: Any):
             if "/v1/monitoring/cortical_activity" in url:
                 return _ok(
                     {
@@ -421,9 +401,7 @@ class TestMonitorActivityLifetimeStats:
         per-neuron property calls."""
         urls_seen: list[str] = []
 
-        async def fake_get(
-            url: str, _params: dict[str, Any] | None = None
-        ):
+        async def fake_get(url: str, **_kwargs: Any):
             urls_seen.append(url)
             return _ok(
                 {
@@ -458,9 +436,7 @@ class TestMonitorActivityLifetimeStats:
         mock_client._client.get.side_effect = self._build_url_dispatcher(
             area_id="big", neuron_props=neuron_props
         )
-        result = await mock_client.monitor_activity(
-            "big", duration_ms=100, lifetime_neuron_cap=3
-        )
+        result = await mock_client.monitor_activity("big", duration_ms=100, lifetime_neuron_cap=3)
         stats = result["lifetime_stats"]
         assert stats["total_neurons_in_area"] == 10
         assert stats["neurons_inspected"] == 3
@@ -471,9 +447,7 @@ class TestMonitorActivityLifetimeStats:
         """If the lifetime-stats fan-out fails, the primary payload must still
         return cleanly with an ``error`` recorded under ``lifetime_stats``."""
 
-        async def fake_get(
-            url: str, _params: dict[str, Any] | None = None
-        ):
+        async def fake_get(url: str, **_kwargs: Any):
             if "/v1/monitoring/cortical_activity" in url:
                 return _ok(
                     {
@@ -592,16 +566,10 @@ class TestControllerLifecycleDiagnostics:
                 "2026-06-07T17:06:57.442948Z DEBUG "
                 "POST /v1/public/global/desktop/experiment/run/stop"
             ),
-            (
-                "2026-06-07T17:06:57.383186Z INFO "
-                "MCP introspection: cleared descriptor for mujoco"
-            ),
+            ("2026-06-07T17:06:57.383186Z INFO MCP introspection: cleared descriptor for mujoco"),
         ]
         controller_lines = [
-            (
-                "2026-06-07 13:06:38,614 [INFO] [RECOVERY] "
-                "Observed health event: feagi_unreachable"
-            ),
+            ("2026-06-07 13:06:38,614 [INFO] [RECOVERY] Observed health event: feagi_unreachable"),
             (
                 "2026-06-07 13:06:57,125 [INFO] [RECOVERY] "
                 "Reconnect requested (reason=feagi back online)"
