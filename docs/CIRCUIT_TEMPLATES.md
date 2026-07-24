@@ -17,13 +17,10 @@ Pre-built neural circuit patterns that can be used as building blocks for comple
         "leak_coefficient": 18.0,
         "post_synaptic_current": 12.0,
         "post_synaptic_current_max": 60.0,
-        "refractory_period": 1
+        "refractory_period": 1,
     },
-    "self_connection": {
-        "morphology": "cpg_ring",
-        "weight": 12.0
-    },
-    "behavior": "Oscillates at ~5Hz, generates rhythmic output"
+    "self_connection": {"morphology": "cpg_ring", "weight": 12.0},
+    "behavior": "Oscillates at ~5Hz, generates rhythmic output",
 }
 ```
 
@@ -49,18 +46,14 @@ Two CPGs with mutual inhibition for coordinated movement.
     "cpg_a": {
         "name": "CPG_Phase_A",
         "oscillation": "5Hz ring",
-        "connections": {
-            "to_cpg_b": {"morphology": "block_to_block", "weight": -4.0}
-        }
+        "connections": {"to_cpg_b": {"morphology": "block_to_block", "weight": -4.0}},
     },
     "cpg_b": {
-        "name": "CPG_Phase_B", 
+        "name": "CPG_Phase_B",
         "oscillation": "5Hz ring",
-        "connections": {
-            "to_cpg_a": {"morphology": "block_to_block", "weight": -4.0}
-        }
+        "connections": {"to_cpg_a": {"morphology": "block_to_block", "weight": -4.0}},
     },
-    "behavior": "180° phase offset, ideal for diagonal gait pairs"
+    "behavior": "180° phase offset, ideal for diagonal gait pairs",
 }
 ```
 
@@ -86,22 +79,10 @@ Translate CPG phases into joint commands.
     "dimensions": [3, 1, 10],  # 3 joints (hip-x, hip-y, knee)
     "input": "CPG output (5-phase)",
     "morphologies": [
-        {
-            "name": "cpg_to_hip_x",
-            "weight": 18.0,
-            "effect": "Forward/backward swing"
-        },
-        {
-            "name": "cpg_to_hip_y", 
-            "weight": 20.0,
-            "effect": "Lateral swing"
-        },
-        {
-            "name": "cpg_to_knee",
-            "weight": 22.0,
-            "effect": "Knee flexion/extension"
-        }
-    ]
+        {"name": "cpg_to_hip_x", "weight": 18.0, "effect": "Forward/backward swing"},
+        {"name": "cpg_to_hip_y", "weight": 20.0, "effect": "Lateral swing"},
+        {"name": "cpg_to_knee", "weight": 22.0, "effect": "Knee flexion/extension"},
+    ],
 }
 ```
 
@@ -127,25 +108,25 @@ Integrate sensory feedback with motor control.
         "name": "Joint_Position_IPU",
         "type": "IPU",
         "device_count": 12,
-        "measures": "Current joint angles"
+        "measures": "Current joint angles",
     },
     "error_computer": {
         "name": "Position_Error",
         "type": "CUSTOM",
         "dimensions": [12, 1, 10],
-        "computes": "Target - Actual position"
+        "computes": "Target - Actual position",
     },
     "controller": {
         "name": "PID_Controller",
         "type": "CUSTOM",
-        "applies": "Proportional correction"
+        "applies": "Proportional correction",
     },
     "motor": {
         "name": "Joint_Control_OPU",
         "type": "OPU",
         "device_count": 12,
-        "outputs": "Corrected joint commands"
-    }
+        "outputs": "Corrected joint commands",
+    },
 }
 ```
 
@@ -166,14 +147,14 @@ Start/stop behavior on command.
     "trigger": {
         "name": "BehaviorTrigger",
         "dimensions": [1, 1, 1],
-        "activation": "External stimulation or sensor event"
+        "activation": "External stimulation or sensor event",
     },
     "gate": {
         "name": "MotorGate",
         "dimensions": [12, 1, 10],
         "function": "Multiply CPG output by trigger state",
-        "behavior": "Enables/disables motor output"
-    }
+        "behavior": "Enables/disables motor output",
+    },
 }
 ```
 

@@ -133,6 +133,7 @@ python examples/circuit_design.py
 
 ```python
 import logging
+
 logging.basicConfig(level=logging.DEBUG)
 ```
 
@@ -142,9 +143,11 @@ logging.basicConfig(level=logging.DEBUG)
 from feagi_mcp.server import monitor_activity, get_connectivity
 import asyncio
 
+
 async def test():
     result = await monitor_activity("cCPGa_", 1000)
     print(result)
+
 
 asyncio.run(test())
 ```

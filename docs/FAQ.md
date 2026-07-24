@@ -77,11 +77,13 @@ Yes:
 from feagi_mcp.feagi_client import FeagiClient
 import asyncio
 
+
 async def main():
     client = FeagiClient()
     result = await client.monitor_activity("cCPGa_", 1000)
     print(result)
     await client.close()
+
 
 asyncio.run(main())
 ```

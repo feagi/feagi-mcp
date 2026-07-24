@@ -146,7 +146,7 @@ status = await get_embodiment_status()
 # Returns: {"motor_cortical_id": "opose0", "device_count": 12, "last_packet_ms": 42}
 
 # 4. Debug with stimulation
-result = await stimulate_area(area_id="cStart", coords=[0,0,0], potential=1.0)
+result = await stimulate_area(area_id="cStart", coords=[0, 0, 0], potential=1.0)
 # Trigger walking behavior for testing
 ```
 

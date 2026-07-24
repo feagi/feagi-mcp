@@ -70,12 +70,11 @@ Always use type hints:
 
 ```python
 # Good
-async def monitor_activity(area_id: str, duration_ms: int) -> dict[str, Any]:
-    ...
+async def monitor_activity(area_id: str, duration_ms: int) -> dict[str, Any]: ...
+
 
 # Bad
-async def monitor_activity(area_id, duration_ms):
-    ...
+async def monitor_activity(area_id, duration_ms): ...
 ```
 
 ## Testing
@@ -87,6 +86,7 @@ Place tests in `tests/` directory:
 ```python
 import pytest
 from feagi_mcp.server import my_new_tool
+
 
 @pytest.mark.asyncio
 async def test_my_new_tool():
@@ -124,17 +124,16 @@ In `src/feagi_mcp/feagi_client.py`:
 ```python
 async def my_new_api_call(self, param: str) -> dict[str, Any]:
     """Call FEAGI API endpoint.
-    
+
     Args:
         param: Parameter description
-        
+
     Returns:
         API response data
     """
     try:
         response = await self._client.get(
-            f"{self.base_url}/v1/new_endpoint",
-            params={"param": param}
+            f"{self.base_url}/v1/new_endpoint", params={"param": param}
         )
         if response.status_code == 200:
             return response.json()

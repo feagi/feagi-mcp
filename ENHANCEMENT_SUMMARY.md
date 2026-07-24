@@ -92,17 +92,17 @@ areas = await list_opu_areas()
 areas = await list_opu_areas_with_metadata()
 # Returns:
 [
-  {
-    "id": "b21vdAUAAAA=",
-    "area_type": "omot",
-    "category": "motor_control",
-    "purpose": "Controls general motor outputs and movement actuators",
-    "capabilities": ["velocity_control", "direction_control"],
-    "supported_devices": ["dc_motor", "stepper_motor"],
-    "data_format": "velocity_commands",
-    "typical_use": "Wheel motors, linear actuators",
-    "device_count": 5
-  }
+    {
+        "id": "b21vdAUAAAA=",
+        "area_type": "omot",
+        "category": "motor_control",
+        "purpose": "Controls general motor outputs and movement actuators",
+        "capabilities": ["velocity_control", "direction_control"],
+        "supported_devices": ["dc_motor", "stepper_motor"],
+        "data_format": "velocity_commands",
+        "typical_use": "Wheel motors, linear actuators",
+        "device_count": 5,
+    }
 ]
 # Clear, actionable information!
 ```

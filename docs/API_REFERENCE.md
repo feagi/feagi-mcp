@@ -14,8 +14,8 @@ Check FEAGI server connectivity and retrieve basic status.
 ```python
 {
     "status": "ok" | "error",
-    "genome_name": str,          # Name of loaded genome
-    "message": str               # Error message if failed
+    "genome_name": str,  # Name of loaded genome
+    "message": str,  # Error message if failed
 }
 ```
 
@@ -45,11 +45,11 @@ Monitor real-time neural activity in a cortical area.
 **Returns:**
 ```python
 {
-    "firing_rate": float,           # Average Hz
-    "active_neurons": list[int],    # Indices of firing neurons
-    "spike_timestamps": list[float], # Timing data
-    "period_ms": float,             # For oscillators
-    "error": str                    # If failed
+    "firing_rate": float,  # Average Hz
+    "active_neurons": list[int],  # Indices of firing neurons
+    "spike_timestamps": list[float],  # Timing data
+    "period_ms": float,  # For oscillators
+    "error": str,  # If failed
 }
 ```
 
@@ -84,20 +84,20 @@ Examine synaptic connections between two cortical areas.
 {
     "connected": bool,
     "synapse_count": int,
-    "connections": list[dict],      # Connection details
+    "connections": list[dict],  # Connection details
     "src_area": str,
     "dst_area": str,
-    "error": str                    # If failed
+    "error": str,  # If failed
 }
 ```
 
 **Connection details:**
 ```python
 {
-    "morphology_id": str,           # e.g., "cpg_to_hip_x"
-    "morphology_scalar": list[int], # [x, y, z] scaling
+    "morphology_id": str,  # e.g., "cpg_to_hip_x"
+    "morphology_scalar": list[int],  # [x, y, z] scaling
     "postSynapticCurrent_multiplier": float,  # Synaptic weight
-    "plasticity_flag": bool
+    "plasticity_flag": bool,
 }
 ```
 
@@ -138,9 +138,9 @@ Find all possible paths between two cortical areas through intermediate connecti
     "from_area": str,
     "to_area": str,
     "paths_found": int,
-    "paths": list[list[str]],       # Each path is list of area IDs
+    "paths": list[list[str]],  # Each path is list of area IDs
     "connected": bool,
-    "error": str
+    "error": str,
 }
 ```
 
@@ -176,14 +176,14 @@ List all cortical areas in the current genome.
 ```python
 [
     {
-        "name": str,                # Human-readable name
-        "cortical_id": str,         # Short ID (e.g., "cCPGa_")
-        "cortical_group": str,      # IPU, OPU, CUSTOM, CORE, MEMORY
-        "dimensions": list[int],    # [x, y, z]
-        "device_count": int,        # For IPU/OPU
-        "neuron_count": int
+        "name": str,  # Human-readable name
+        "cortical_id": str,  # Short ID (e.g., "cCPGa_")
+        "cortical_group": str,  # IPU, OPU, CUSTOM, CORE, MEMORY
+        "dimensions": list[int],  # [x, y, z]
+        "device_count": int,  # For IPU/OPU
+        "neuron_count": int,
     },
-    ...
+    ...,
 ]
 ```
 
@@ -267,12 +267,7 @@ Inject spikes or continuous potential into specific neurons for testing.
 
 **Returns:**
 ```python
-{
-    "success": bool,
-    "neurons_activated": int,
-    "message": str,
-    "error": str
-}
+{"success": bool, "neurons_activated": int, "message": str, "error": str}
 ```
 
 **Example:**
@@ -302,20 +297,20 @@ Get status of connected controllers and their I/O mappings.
 ```python
 {
     "status": str,
-    "opu_areas": list[dict],        # Motor output areas
-    "ipu_areas": list[dict],        # Sensory input areas
-    "connected_agents": list[dict], # Active controllers
-    "message": str
+    "opu_areas": list[dict],  # Motor output areas
+    "ipu_areas": list[dict],  # Sensory input areas
+    "connected_agents": list[dict],  # Active controllers
+    "message": str,
 }
 ```
 
 **OPU/IPU structure:**
 ```python
 {
-    "name": str,                    # Human-readable name
-    "id": str,                      # Cortical ID
-    "device_count": int,            # Number of channels
-    "last_activity_ms": int         # Time since last packet
+    "name": str,  # Human-readable name
+    "id": str,  # Cortical ID
+    "device_count": int,  # Number of channels
+    "last_activity_ms": int,  # Time since last packet
 }
 ```
 
@@ -350,11 +345,7 @@ Get metadata about the currently loaded genome.
 
 **Returns:**
 ```python
-{
-    "genome_name": str,
-    "status": str,
-    "error": str
-}
+{"genome_name": str, "status": str, "error": str}
 ```
 
 ---
@@ -370,12 +361,12 @@ Download the complete genome configuration.
 {
     "genome_title": str,
     "version": str,
-    "blueprint": dict,              # All cortical areas and connections
-    "neuron_morphologies": dict,    # Synapse patterns
-    "brain_regions": dict,          # Hierarchical grouping
-    "physiology": dict,             # Global parameters
-    "stats": dict,                  # Counts and metrics
-    "error": str
+    "blueprint": dict,  # All cortical areas and connections
+    "neuron_morphologies": dict,  # Synapse patterns
+    "brain_regions": dict,  # Hierarchical grouping
+    "physiology": dict,  # Global parameters
+    "stats": dict,  # Counts and metrics
+    "error": str,
 }
 ```
 
@@ -401,7 +392,7 @@ Upload a new genome to FEAGI.
     "message": str,
     "cortical_area_count": int,
     "brain_region_count": int,
-    "error": str
+    "error": str,
 }
 ```
 
@@ -437,9 +428,9 @@ Validate genome structure without uploading.
 ```python
 {
     "valid": bool,
-    "issues": list[str],            # Critical problems
-    "warnings": list[str],          # Non-critical concerns
-    "cortical_area_count": int
+    "issues": list[str],  # Critical problems
+    "warnings": list[str],  # Non-critical concerns
+    "cortical_area_count": int,
 }
 ```
 

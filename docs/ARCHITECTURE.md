@@ -231,7 +231,7 @@ Never crash. Always return:
 {
     "error": "error_type",
     "message": "Human-readable explanation",
-    "suggestion": "How to work around this"
+    "suggestion": "How to work around this",
 }
 ```
 
@@ -298,6 +298,7 @@ async def my_tool(param: str) -> dict:
 For streaming activity data:
 ```python
 import websockets
+
 
 async def stream_activity(area_id: str):
     async with websockets.connect("ws://localhost:8000/ws/activity") as ws:

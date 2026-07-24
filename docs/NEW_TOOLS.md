@@ -91,7 +91,7 @@ mcp.create_cortical_area(
     dimensions=[3, 1, 10],
     position=[800, 400, -30],
     device_count=3,
-    properties={"grp_id": 0}
+    properties={"grp_id": 0},
 )
 ```
 
@@ -149,16 +149,18 @@ Set `skip_placement_validation=True` only if you must bypass these checks.
 mcp.update_cortical_mapping(
     src_area="cHipFL",
     dst_area="opose1",
-    mapping_rules=[{
-        "morphology_id": "all_to_all",
-        "morphology_scalar": [1, 1, 1],
-        "postSynapticCurrent_multiplier": 25.0,
-        "plasticity_flag": False,
-        "plasticity_constant": 1,
-        "ltp_multiplier": 1,
-        "ltd_multiplier": 1,
-        "plasticity_window": 0
-    }]
+    mapping_rules=[
+        {
+            "morphology_id": "all_to_all",
+            "morphology_scalar": [1, 1, 1],
+            "postSynapticCurrent_multiplier": 25.0,
+            "plasticity_flag": False,
+            "plasticity_constant": 1,
+            "ltp_multiplier": 1,
+            "ltd_multiplier": 1,
+            "plasticity_window": 0,
+        }
+    ],
 )
 ```
 

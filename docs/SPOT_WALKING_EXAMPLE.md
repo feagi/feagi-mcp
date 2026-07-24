@@ -196,8 +196,8 @@ monitor_activity("cCPGa_", 2000)  # Check CPG
 If not working:
 ```python
 get_connectivity("cCPGa_", "cHipFL")  # Verify connections
-get_area_parameters("cCPGa_")         # Inspect parameters
-trace_signal_path("cCPGa_", "opose0") # Check full path
+get_area_parameters("cCPGa_")  # Inspect parameters
+trace_signal_path("cCPGa_", "opose0")  # Check full path
 ```
 
 Adjust and re-upload until working.
@@ -272,7 +272,7 @@ upload_genome(modified)
 ```python
 get_connectivity("cHipFL", "opose0")
 # Confirm: weight now 25.0
-monitor_activity("opose0", 2000)  
+monitor_activity("opose0", 2000)
 # Check: increased firing intensity
 ```
 
@@ -303,7 +303,7 @@ AI designs:
 ```python
 # After adding areas
 get_connectivity("iipro0", "cBalCt")  # Sensor → Balance
-get_connectivity("cBalCt", "opose0")   # Balance → Motor
+get_connectivity("cBalCt", "opose0")  # Balance → Motor
 trace_signal_path("iipro0", "opose0")  # Full loop
 ```
 
@@ -311,7 +311,7 @@ trace_signal_path("iipro0", "opose0")  # Full loop
 
 ```python
 upload_genome(with_feedback)
-stimulate_area("cStart", [0,0,0], 1.0)
+stimulate_area("cStart", [0, 0, 0], 1.0)
 monitor_activity("cBalCt", 2000)
 ```
 
@@ -322,20 +322,20 @@ monitor_activity("cBalCt", 2000)
 ### Pattern 1: No Activity Anywhere
 
 ```python
-health_check()                        # FEAGI running?
-list_cortical_areas()                 # Genome loaded?
-get_area_parameters("cStart")         # Trigger exists?
-stimulate_area("cStart", [0,0,0], 1.0) # Manual trigger
-monitor_activity("cCPGa_", 1000)      # Did it start?
+health_check()  # FEAGI running?
+list_cortical_areas()  # Genome loaded?
+get_area_parameters("cStart")  # Trigger exists?
+stimulate_area("cStart", [0, 0, 0], 1.0)  # Manual trigger
+monitor_activity("cCPGa_", 1000)  # Did it start?
 ```
 
 ### Pattern 2: CPG Active, No Motor Output
 
 ```python
-monitor_activity("cCPGa_", 1000)      # CPG working ✓
-monitor_activity("cHipFL", 1000)      # Hip working?
-monitor_activity("opose0", 1000)      # Motor output?
-trace_signal_path("cCPGa_", "opose0") # Path exists?
+monitor_activity("cCPGa_", 1000)  # CPG working ✓
+monitor_activity("cHipFL", 1000)  # Hip working?
+monitor_activity("opose0", 1000)  # Motor output?
+trace_signal_path("cCPGa_", "opose0")  # Path exists?
 get_connectivity("cHipFL", "opose0")  # Connection exists?
 ```
 
@@ -343,7 +343,7 @@ get_connectivity("cHipFL", "opose0")  # Connection exists?
 
 This is embodiment-side issue, not genome:
 ```python
-get_embodiment_status()               # Controller connected?
+get_embodiment_status()  # Controller connected?
 # Then check:
 # - MuJoCo controller logs for [MOTOR-SNAPSHOT]
 # - Cortical ID matches between genome OPU and controller registration
