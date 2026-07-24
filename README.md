@@ -51,7 +51,7 @@ feagi-mcp
 export FEAGI_HOST=localhost
 export FEAGI_PORT=8000
 # Optional: Composer public API (shared simulator packs, embodiment metadata APIs, etc.)
-export FEAGI_COMPOSER_BASE_URL=https://us-staging-composer.brainsforrobots.com
+export FEAGI_COMPOSER_BASE_URL=https://staging-api.brainsforrobots.com
 feagi-mcp
 ```
 
@@ -68,7 +68,7 @@ Add to your Cursor MCP settings (`~/.cursor/mcp.json`):
       "env": {
         "FEAGI_HOST": "localhost",
         "FEAGI_PORT": "8000",
-        "FEAGI_COMPOSER_BASE_URL": "https://us-staging-composer.brainsforrobots.com"
+        "FEAGI_COMPOSER_BASE_URL": "https://staging-api.brainsforrobots.com"
       }
     }
   }

@@ -52,7 +52,7 @@ class ComposerSimulatorPacksClient:
             "error": "composer_base_url_not_configured",
             "message": (
                 "Set FEAGI_COMPOSER_BASE_URL to the Composer public API root "
-                "(e.g. https://us-staging-composer.brainsforrobots.com). "
+                "(e.g. https://staging-api.brainsforrobots.com). "
                 "Simulator pack listings are served from Composer, not FEAGI Core."
             ),
         }

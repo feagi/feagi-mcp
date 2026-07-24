@@ -170,7 +170,7 @@ mcp.update_cortical_mapping(
 
 **Purpose**: Eliminate fragile browser-curl probing of Composer for GCS-hosted MuJoCo (and other) asset packs deployed via `shared-sim/` CI.
 
-**Configuration**: Set `FEAGI_COMPOSER_BASE_URL` to the Composer HTTPS root (no trailing slash), e.g. `https://us-staging-composer.brainsforrobots.com`.
+**Configuration**: Set `FEAGI_COMPOSER_BASE_URL` to the Composer HTTPS root (no trailing slash), e.g. `https://staging-api.brainsforrobots.com`.
 
 | Tool | Maps to |
 |------|---------|
