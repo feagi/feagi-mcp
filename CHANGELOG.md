@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **Composer simulator packs**: HTTP clients follow redirects (308 from trailing-slash or
   host aliases) for list and bundle download requests.
+- **Dependencies**: cap `mcp` at `<2.0.0` — MCP 2.x removes `mcp.server.fastmcp`, which
+  this server still uses (CI/PyPI publish was resolving 2.0 and failing mypy/runtime).
 
 ## [0.0.7] - 2026-07-23
 
