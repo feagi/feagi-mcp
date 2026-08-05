@@ -22,6 +22,13 @@ def mock_client() -> ComposerSimulatorPacksClient:
     return c
 
 
+def test_client_follows_redirects_when_enabled() -> None:
+    """Composer hosts may 308; listing must follow redirects."""
+    c = ComposerSimulatorPacksClient(base_url="https://composer.example.invalid", timeout=5.0)
+    assert c._client is not None
+    assert c._client.follow_redirects is True
+
+
 @pytest.mark.asyncio
 async def test_disabled_list_returns_guidance(
     disabled_client: ComposerSimulatorPacksClient,

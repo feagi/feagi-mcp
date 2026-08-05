@@ -447,6 +447,27 @@ async def create_morphology(
 
 
 @mcp.tool()
+async def rename_morphology(
+    old_morphology_id: str,
+    new_morphology_id: str,
+) -> dict[str, Any]:
+    """Rename a custom morphology (connectivity rule).
+
+    Propagates the new id into cortical mappings on the FEAGI server. Use after creating
+    a rule with a temporary name or to align naming with circuit documentation.
+
+    Args:
+        old_morphology_id: Existing morphology name
+        new_morphology_id: New unique morphology name
+
+    Returns:
+        FEAGI status (``status``, ``old_morphology_id``, ``new_morphology_id`` on success)
+    """
+    result = await feagi.rename_morphology(old_morphology_id, new_morphology_id)
+    return result
+
+
+@mcp.tool()
 async def get_cortical_area_geometry() -> dict[str, Any]:
     """Get full geometry info for all cortical areas including dimensions and positions.
 

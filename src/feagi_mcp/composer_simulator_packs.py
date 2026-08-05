@@ -34,7 +34,12 @@ class ComposerSimulatorPacksClient:
         self._timeout = timeout
         self._client: httpx.AsyncClient | None
         if self._base:
-            self._client = httpx.AsyncClient(base_url=self._base, timeout=timeout)
+            # Composer may 308 from trailing-slash or host aliases; follow redirects.
+            self._client = httpx.AsyncClient(
+                base_url=self._base,
+                timeout=timeout,
+                follow_redirects=True,
+            )
         else:
             self._client = None
 
@@ -176,7 +181,7 @@ class ComposerSimulatorPacksClient:
             return self._disabled_error()
 
         saved: list[dict[str, Any]] = []
-        async with httpx.AsyncClient(timeout=self._timeout) as dl_http:
+        async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=True) as dl_http:
             for logical_name, file_url in files_map.items():
                 if not isinstance(logical_name, str) or not isinstance(file_url, str):
                     continue

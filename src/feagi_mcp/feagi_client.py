@@ -537,6 +537,42 @@ class FeagiClient:
             logger.error(f"create_morphology failed: {e}")
             return {"error": str(e), "success": False}
 
+    async def rename_morphology(
+        self,
+        old_morphology_id: str,
+        new_morphology_id: str,
+    ) -> dict[str, Any]:
+        """Rename a custom morphology (connectivity rule) in the genome.
+
+        Updates cortical mapping references server-side. Core morphologies cannot be renamed.
+
+        Args:
+            old_morphology_id: Current morphology name/id
+            new_morphology_id: New unique morphology name/id
+
+        Returns:
+            Status payload from FEAGI (includes old/new ids on success)
+        """
+        try:
+            payload = {
+                "old_morphology_id": old_morphology_id.strip(),
+                "new_morphology_id": new_morphology_id.strip(),
+            }
+            response = await self._client.put(
+                f"{self.base_url}/v1/morphology/rename",
+                json=payload,
+            )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+                "success": False,
+            }
+        except Exception as e:
+            logger.error(f"rename_morphology failed: {e}")
+            return {"error": str(e), "success": False}
+
     async def get_cortical_area_geometry(self) -> dict[str, Any]:
         """Get full geometry info for all cortical areas.
 

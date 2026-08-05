@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.8] - 2026-08-05
+
+### Added
+- **`rename_morphology`**: MCP tool and `FeagiClient.rename_morphology` — rename custom
+  connectivity rules via `PUT /v1/morphology/rename` with cortical mapping updates on the
+  FEAGI server.
+
+### Changed
+- **Composer simulator packs**: HTTP clients follow redirects (308 from trailing-slash or
+  host aliases) for list and bundle download requests.
+
 ## [0.0.7] - 2026-07-23
 
 ## [0.0.5] - 2026-06-17

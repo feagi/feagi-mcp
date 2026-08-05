@@ -801,6 +801,74 @@ class TestGetAgentConnectionEndpointsTool:
         assert result["remote_runtime"]["burst_frequency_hz"] == 15.0
 
 
+class TestRenameMorphology:
+    """Dedicated MCP tool for PUT /v1/morphology/rename."""
+
+    @pytest.mark.asyncio
+    async def test_rename_morphology_success(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "status": "success",
+            "old_morphology_id": "rule_a",
+            "new_morphology_id": "rule_b",
+        }
+        mock_client._client.put.return_value = mock_response
+
+        result = await mock_client.rename_morphology("rule_a", "rule_b")
+
+        assert result["status"] == "success"
+        assert result["new_morphology_id"] == "rule_b"
+        mock_client._client.put.assert_awaited_once()
+        call_kwargs = mock_client._client.put.await_args.kwargs
+        assert call_kwargs["json"] == {
+            "old_morphology_id": "rule_a",
+            "new_morphology_id": "rule_b",
+        }
+
+    @pytest.mark.asyncio
+    async def test_rename_morphology_strips_whitespace(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"status": "success"}
+        mock_client._client.put.return_value = mock_response
+
+        await mock_client.rename_morphology("  old  ", "  new  ")
+
+        call_kwargs = mock_client._client.put.await_args.kwargs
+        assert call_kwargs["json"]["old_morphology_id"] == "old"
+        assert call_kwargs["json"]["new_morphology_id"] == "new"
+
+    @pytest.mark.asyncio
+    async def test_rename_morphology_http_error(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_response.text = "not found"
+        mock_client._client.put.return_value = mock_response
+
+        result = await mock_client.rename_morphology("missing", "new_name")
+
+        assert result["success"] is False
+        assert "HTTP 404" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_server_rename_morphology_tool(self, monkeypatch):
+        from feagi_mcp import server
+
+        async def fake_rename(old_id: str, new_id: str):
+            return {
+                "status": "success",
+                "old_morphology_id": old_id,
+                "new_morphology_id": new_id,
+            }
+
+        monkeypatch.setattr(server.feagi, "rename_morphology", fake_rename)
+
+        result = await server.rename_morphology("x", "y")
+
+        assert result["new_morphology_id"] == "y"
+
+
 class TestBuildReflexMappingDelayValidation:
     """Gap 1: a zero axonal delay is rejected before any morphology is created."""
 
