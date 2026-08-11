@@ -632,6 +632,123 @@ class TestBrainVisualizerRouter:
         )
 
 
+class TestAgentLiveness:
+    """GET /v1/agent/liveness via FeagiClient.get_agent_liveness.
+
+    Registration alone does not keep an agent connected: FEAGI reaps agents that stay
+    quiet past the heartbeat timeout, closing their sockets. These fields are what let a
+    caller tell inactivity pruning apart from a transport failure.
+    """
+
+    @pytest.mark.asyncio
+    async def test_returns_ages_and_countdown(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "heartbeat_timeout_s": 30.0,
+            "stale_check_interval_s": 0.1,
+            "count": 1,
+            "agents": [
+                {
+                    "agent_id": "abc123",
+                    "agent_name": "brain-visualizer",
+                    "manufacturer": "neuraville",
+                    "agent_version": 1,
+                    "capabilities": ["receive_neuron_visualizations"],
+                    "last_activity_age_s": 27.4,
+                    "last_command_control_age_s": 27.4,
+                    "prune_in_s": 2.6,
+                }
+            ],
+        }
+        mock_client._client.get.return_value = mock_response
+
+        result = await mock_client.get_agent_liveness()
+
+        assert result["heartbeat_timeout_s"] == 30.0
+        agent = result["agents"][0]
+        assert agent["agent_id"] == "abc123"
+        assert agent["prune_in_s"] == 2.6
+        # A command/control age tracking the activity age means the agent sends nothing
+        # of its own and is about to be reaped.
+        assert agent["last_command_control_age_s"] == agent["last_activity_age_s"]
+        mock_client._client.get.assert_called_once_with(
+            "http://localhost:8000/v1/agent/liveness",
+        )
+
+    @pytest.mark.asyncio
+    async def test_reports_no_agents_without_error(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "heartbeat_timeout_s": 30.0,
+            "stale_check_interval_s": 0.1,
+            "count": 0,
+            "agents": [],
+        }
+        mock_client._client.get.return_value = mock_response
+
+        result = await mock_client.get_agent_liveness()
+
+        assert result["count"] == 0
+        assert result["agents"] == []
+
+    @pytest.mark.asyncio
+    async def test_non_200_returns_error_payload(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_response.text = "boom"
+        mock_client._client.get.return_value = mock_response
+
+        result = await mock_client.get_agent_liveness()
+
+        assert result["error"] == "HTTP 500"
+        assert result["endpoint"] == "/v1/agent/liveness"
+
+
+class TestLogTailDisabledHint:
+    """A disabled log ring buffer must say how to enable it.
+
+    Without the hint the payload reads as "no logs exist", which invites retries against
+    an endpoint that can never return anything until FEAGI is restarted.
+    """
+
+    @pytest.mark.asyncio
+    async def test_disabled_buffer_carries_actionable_hint(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "enabled": False,
+            "capacity": 0,
+            "records": [],
+            "returned": 0,
+        }
+        mock_client._client.get.return_value = mock_response
+
+        result = await mock_client.get_log_tail()
+
+        assert result["enabled"] is False
+        assert "FEAGI_LOG_RING_BUFFER_CAPACITY" in result["hint"]
+        assert "stdout" in result["hint"]
+
+    @pytest.mark.asyncio
+    async def test_enabled_buffer_has_no_hint(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "enabled": True,
+            "capacity": 2000,
+            "records": [{"level": "INFO", "message": "burst"}],
+            "returned": 1,
+        }
+        mock_client._client.get.return_value = mock_response
+
+        result = await mock_client.get_log_tail()
+
+        assert "hint" not in result
+        assert result["returned"] == 1
+
+
 class TestNetworkConnectionInfo:
     """GET /v1/network/connection_info via FeagiClient.get_network_connection_info."""
 

@@ -99,12 +99,14 @@ class TestRuntimeTaps:
             {"enabled": False, "capacity": 0, "records": [], "returned": 0}
         )
         result = await mock_client.get_log_tail()
-        assert result == {
-            "enabled": False,
-            "capacity": 0,
-            "records": [],
-            "returned": 0,
-        }
+        # The server payload is passed through untouched, plus a hint: a disabled buffer
+        # cannot start returning records without a FEAGI restart, so the caller needs to
+        # be told to stop retrying and read the process stdout instead.
+        assert result["enabled"] is False
+        assert result["capacity"] == 0
+        assert result["records"] == []
+        assert result["returned"] == 0
+        assert "FEAGI_LOG_RING_BUFFER_CAPACITY" in result["hint"]
 
 
 class TestBurstEngineControl:

@@ -740,11 +740,43 @@ async def get_registered_agents() -> dict[str, Any]:
     stricter, session-specific notion (e.g. fully handshaken transport) and can
     read 0 when ``get_registered_agents`` and motor taps still work.
 
+    Returns only *which* agents are registered, not how long they will stay
+    registered. If an agent keeps reappearing under a new ID, call
+    ``get_agent_liveness`` — FEAGI deregisters agents that go quiet past the
+    heartbeat timeout, and that teardown closes their sockets.
+
     Returns:
         List of registered agents with their capabilities, subscriptions, and status
     """
     result = await feagi.get_registered_agents()
     return result
+
+
+@mcp.tool()
+async def get_agent_liveness() -> dict[str, Any]:
+    """How close each registered agent is to being deregistered for inactivity.
+
+    Registration does not mean an agent stays connected. FEAGI removes any agent
+    that produces no traffic for ``heartbeat_timeout_s``, and that teardown drops
+    the agent's motor and visualization publishers, which closes its sockets. The
+    client then reconnects and registers again under a **new** agent ID.
+
+    Use this whenever an agent or the Brain Visualizer disconnects on a regular
+    period. It separates two causes that otherwise look identical from outside:
+
+    - ``prune_in_s`` counting down to 0 and the agent vanishing means FEAGI reaped
+      it for inactivity; the client is not sending heartbeats.
+    - ``last_command_control_age_s`` climbing while ``last_activity_age_s`` stays
+      low means the agent sends nothing itself and is being held alive only by
+      FEAGI's outbound traffic; it will drop as soon as that traffic pauses.
+    - An agent disappearing while ``prune_in_s`` is still large points at the
+      transport, not at liveness.
+
+    Returns:
+        ``heartbeat_timeout_s``, ``stale_check_interval_s``, ``count``, and
+        ``agents`` with per-agent ages and countdown.
+    """
+    return await feagi.get_agent_liveness()
 
 
 @mcp.tool()
@@ -1697,8 +1729,10 @@ async def get_log_tail(
     """Recent FEAGI log records (`/v1/system/log_tail`).
 
     Reads the in-process tracing ring buffer maintained by feagi-observability.
-    Returns ``enabled=False`` when ``FEAGI_LOG_RING_BUFFER_CAPACITY`` is set to 0
-    or the buffer was not installed.
+    Returns ``enabled=False`` when the running FEAGI build never installed the
+    buffer or ``FEAGI_LOG_RING_BUFFER_CAPACITY`` is set to 0; in that case the
+    response carries a ``hint`` describing how to turn it on. An ``enabled=False``
+    result will not change on retry — read the FEAGI process stdout instead.
 
     Args:
         level: Minimum severity (``TRACE``/``DEBUG``/``INFO``/``WARN``/``ERROR``).

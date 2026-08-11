@@ -1932,7 +1932,18 @@ class FeagiClient:
                 params=params or None,
             )
             if response.status_code == 200:
-                return _as_json_dict(response.json())
+                payload = _as_json_dict(response.json())
+                if payload.get("enabled") is False:
+                    payload["hint"] = (
+                        "The FEAGI server has no log ring buffer installed, so no logs "
+                        "can be served. The buffer is a tracing layer registered at "
+                        "server startup: either the running build never registers it, or "
+                        "FEAGI_LOG_RING_BUFFER_CAPACITY is set to 0. Restart FEAGI with "
+                        "FEAGI_LOG_RING_BUFFER_CAPACITY unset (default 2000) on a build "
+                        "that installs the layer. Until then, read the FEAGI process "
+                        "stdout directly instead of retrying this tool."
+                    )
+                return payload
             return {
                 "error": f"HTTP {response.status_code}",
                 "message": response.text,
@@ -1940,6 +1951,30 @@ class FeagiClient:
         except Exception as e:
             logger.error("get_log_tail failed: %s", e)
             return {"error": str(e)}
+
+    async def get_agent_liveness(self) -> dict[str, Any]:
+        """GET /v1/agent/liveness - inactivity ages for every registered agent.
+
+        FEAGI deregisters agents that stay quiet longer than the heartbeat timeout, and
+        that teardown closes their motor and visualization sockets. This surfaces the
+        countdown so a periodic client reconnect can be attributed to inactivity
+        pruning rather than to a transport fault.
+
+        Returns:
+            Dict with ``heartbeat_timeout_s``, ``stale_check_interval_s``, ``count``,
+            and ``agents`` (each with ``agent_id``, ``agent_name``, ``manufacturer``,
+            ``agent_version``, ``capabilities``, ``last_activity_age_s``,
+            ``last_command_control_age_s``, and ``prune_in_s``).
+        """
+        endpoint = "/v1/agent/liveness"
+        try:
+            response = await self._client.get(f"{self.base_url}{endpoint}")
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return self._http_failure_payload(endpoint=endpoint, response=response)
+        except Exception as e:
+            logger.error("get_agent_liveness failed: %s", e)
+            return self._request_exception_payload(endpoint=endpoint, exception=e)
 
     # ------------------------------------------------------------------
     # Burst engine control & state inspection (deficiency #9 -
