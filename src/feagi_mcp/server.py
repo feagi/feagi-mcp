@@ -260,6 +260,20 @@ async def get_genome_info() -> dict[str, Any]:
 
 
 @mcp.tool()
+async def get_version_info() -> dict[str, Any]:
+    """Get FEAGI runtime and component versions (GET /v1/system/versions).
+
+    Use this to confirm the running FEAGI build identity and detect version
+    mismatches between runtime, desktop, and MCP/tooling.
+
+    Returns:
+        Version payload from FEAGI system endpoint
+    """
+    result = await feagi.get_version_info()
+    return result
+
+
+@mcp.tool()
 async def download_genome() -> dict[str, Any]:
     """Download the complete genome configuration.
 
@@ -639,6 +653,20 @@ async def get_burst_engine_status() -> dict[str, Any]:
         Burst engine status with active state, frequency, and burst count
     """
     result = await feagi.get_burst_engine_status()
+    return result
+
+
+@mcp.tool()
+async def get_fire_queue_detailed() -> dict[str, Any]:
+    """Get last-burst fire queue with neuron IDs per cortical area.
+
+    Returns deterministic, ID-level firing payload for the latest sampled burst.
+    Use this for plasticity debugging when area-level counts are not enough:
+    - identify exact neurons that fired in each area
+    - correlate fired IDs with mapping synapse endpoints
+    - inspect coordinates and membrane potentials at fire time
+    """
+    result = await feagi.get_fire_queue_detailed()
     return result
 
 
@@ -1138,6 +1166,57 @@ async def get_cortical_mapping(src_area: str, dst_area: str) -> dict[str, Any]:
     """
     result = await feagi.get_cortical_mapping(src_area, dst_area)
     return result
+
+
+@mcp.tool()
+async def diagnose_memory_twin_mapping(src_area: str, dst_area: str) -> dict[str, Any]:
+    """Diagnose memory twin eligibility/status for one mapping pair.
+
+    One-call answer for "why was no twin created?" when wiring episodic mappings
+    into memory areas. Wraps FEAGI ``GET /v1/cortical_mapping/twin_diagnostic`` and
+    returns structured fields including:
+    - ``mapping_exists`` / ``episodic_rule_count``
+    - ``twin_expected`` / ``twin_present`` / ``twin_cortical_area``
+    - ``reason`` (machine-readable blocker)
+    - parent-region relationship fields to detect circuit-placement mismatches.
+
+    Args:
+        src_area: Source cortical area ID (base64).
+        dst_area: Destination cortical area ID (base64).
+
+    Returns:
+        Twin diagnostic payload from FEAGI.
+    """
+    return await feagi.get_memory_twin_diagnostic(src_area, dst_area)
+
+
+@mcp.tool()
+async def diagnose_mapping_plasticity(
+    src_area: str,
+    dst_area: str,
+    sample_limit: int = 20,
+) -> dict[str, Any]:
+    """Diagnose live plasticity state for one mapping pair.
+
+    Designed for questions like "why is weight not increasing?":
+    - mapping rule presence and plasticity flags/modes
+    - realized synapse count from src filtered to dst
+    - weight statistics (min/max/avg/sum, zero/nonzero counts)
+    - sample of matched synapses for direct inspection
+
+    Args:
+        src_area: Source cortical area ID (base64).
+        dst_area: Destination cortical area ID (base64).
+        sample_limit: Max matched synapses echoed in ``sample`` (1..200).
+
+    Returns:
+        Structured diagnostics combining rule and runtime synapse state.
+    """
+    return await feagi.get_mapping_plasticity_diagnostics(
+        src_area,
+        dst_area,
+        sample_limit=sample_limit,
+    )
 
 
 @mcp.tool()
@@ -1763,6 +1842,19 @@ async def get_burst_engine_config() -> dict[str, Any]:
     and ``is_paused``.
     """
     return await feagi.get_burst_engine_config()
+
+
+@mcp.tool()
+async def get_fire_ledger_areas_window_config() -> dict[str, Any]:
+    """FireLedger per-area window configuration.
+
+    Route: ``/v1/burst_engine/fire_ledger/areas_window_config``.
+
+    Use this before debugging STDP/associative plasticity. If source/destination
+    areas are missing or the configured windows are too small relative to
+    ``plasticity_window``, weight updates can appear "stuck".
+    """
+    return await feagi.get_fire_ledger_areas_window_config()
 
 
 @mcp.tool()

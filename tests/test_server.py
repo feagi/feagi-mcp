@@ -129,3 +129,22 @@ async def test_download_region_genome_propagates_error(monkeypatch):
     monkeypatch.setattr(server.feagi, "download_region_genome", fake_download_err)
     result = await server.download_region_genome("nonexistent-id")
     assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_get_version_info_delegates_to_client(monkeypatch):
+    """MCP tool get_version_info calls FeagiClient.get_version_info."""
+    from feagi_mcp import server
+
+    expected = {
+        "feagi_core": "2.0.0",
+        "rust": "1.79.0",
+        "build_timestamp": "2026-08-12T15:00:00Z",
+    }
+
+    async def fake_get_version_info():
+        return expected
+
+    monkeypatch.setattr(server.feagi, "get_version_info", fake_get_version_info)
+    result = await server.get_version_info()
+    assert result == expected

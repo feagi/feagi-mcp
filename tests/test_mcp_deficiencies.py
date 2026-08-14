@@ -145,6 +145,22 @@ class TestBurstEngineControl:
         mock_client._client.put.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_get_fire_ledger_areas_window_config(self, mock_client):
+        mock_client._client.get.return_value = _ok(
+            {
+                "total_configured_areas": 2,
+                "default_window_size": 20,
+                "areas": {"src": 3, "dst": 3},
+            }
+        )
+        result = await mock_client.get_fire_ledger_areas_window_config()
+        assert result["total_configured_areas"] == 2
+        assert result["areas"]["src"] == 3
+        assert mock_client._client.get.call_args.args[0].endswith(
+            "/v1/burst_engine/fire_ledger/areas_window_config"
+        )
+
+    @pytest.mark.asyncio
     async def test_control_burst_engine_action(self, mock_client):
         mock_client._client.post.return_value = _ok({"message": "Burst engine paused"})
         result = await mock_client.control_burst_engine("PAUSE")

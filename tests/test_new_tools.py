@@ -105,6 +105,40 @@ class TestAgentIntrospection:
         assert "output_units_and_decoder_properties" in dev_reg
 
 
+class TestVersionInfo:
+    """Test FEAGI version info retrieval."""
+
+    @pytest.mark.asyncio
+    async def test_get_version_info_success(self, mock_client):
+        """Fetches version payload from /v1/system/versions."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "feagi_core": "2.0.0",
+            "rust": "1.79.0",
+            "build_timestamp": "2026-08-12T15:00:00Z",
+        }
+        mock_client._client.get.return_value = mock_response
+
+        result = await mock_client.get_version_info()
+
+        assert result["feagi_core"] == "2.0.0"
+        assert result["rust"] == "1.79.0"
+
+    @pytest.mark.asyncio
+    async def test_get_version_info_http_error(self, mock_client):
+        """Surfaces HTTP failures from /v1/system/versions."""
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_response.text = "not found"
+        mock_client._client.get.return_value = mock_response
+
+        result = await mock_client.get_version_info()
+
+        assert result["error"] == "HTTP 404"
+        assert "message" in result
+
+
 class TestAgentJointMap:
     """Joint-map extraction from legacy and current registration payloads."""
 
@@ -328,6 +362,140 @@ class TestConnectionManagement:
         result = await mock_client.delete_cortical_mapping("src_area", "dst_area")
 
         assert "message" in result
+
+    @pytest.mark.asyncio
+    async def test_get_memory_twin_diagnostic(self, mock_client):
+        """Test fetching memory twin diagnostic."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "src_cortical_area": "src_area",
+            "dst_cortical_area": "dst_area",
+            "mapping_exists": True,
+            "episodic_rule_count": 1,
+            "twin_expected": True,
+            "twin_present": False,
+            "reason": "twin_expected_but_missing",
+        }
+        mock_client._client.get.return_value = mock_response
+
+        result = await mock_client.get_memory_twin_diagnostic("src_area", "dst_area")
+
+        assert result["mapping_exists"] is True
+        assert result["twin_expected"] is True
+        assert result["twin_present"] is False
+        assert result["reason"] == "twin_expected_but_missing"
+        mock_client._client.get.assert_called_once_with(
+            "http://localhost:8000/v1/cortical_mapping/twin_diagnostic",
+            params={
+                "src_cortical_area": "src_area",
+                "dst_cortical_area": "dst_area",
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_server_diagnose_memory_twin_mapping_tool(self, monkeypatch):
+        """Server tool should delegate twin diagnostics to FeagiClient."""
+        from feagi_mcp import server
+
+        async def fake_diag(src: str, dst: str):
+            return {
+                "src_cortical_area": src,
+                "dst_cortical_area": dst,
+                "twin_expected": True,
+                "twin_present": True,
+            }
+
+        monkeypatch.setattr(server.feagi, "get_memory_twin_diagnostic", fake_diag)
+        result = await server.diagnose_memory_twin_mapping("A", "B")
+        assert result["src_cortical_area"] == "A"
+        assert result["dst_cortical_area"] == "B"
+        assert result["twin_present"] is True
+
+    @pytest.mark.asyncio
+    async def test_get_mapping_plasticity_diagnostics_filters_src_dst_weights(self, mock_client):
+        """Mapping plasticity diagnostics should isolate realized src->dst synapses."""
+        mock_client.get_cortical_mapping = AsyncMock(
+            return_value={
+                "src_area": "src_area",
+                "dst_area": "dst_area",
+                "rules": [
+                    {
+                        "morphology_id": "associative_memory",
+                        "plasticity_flag": True,
+                        "plasticity_constant": 1,
+                    }
+                ],
+            }
+        )
+        mock_client.get_area_parameters = AsyncMock(
+            return_value={"area_id": "dst_area", "parameters": {"i": 99}}
+        )
+        mock_client.list_area_synapses = AsyncMock(
+            return_value={
+                "cortical_area_id": "src_area",
+                "direction": "outgoing",
+                "synapse_count": 3,
+                "synapses": [
+                    {
+                        "source_neuron_id": 1,
+                        "target_neuron_id": 10,
+                        "weight": 1.5,
+                        "postsynaptic_potential": 500.0,
+                    },
+                    {
+                        "source_neuron_id": 2,
+                        "target_neuron_id": 11,
+                        "weight": 0.0,
+                        "postsynaptic_potential": 500.0,
+                    },
+                    {
+                        "source_neuron_id": 3,
+                        "target_neuron_id": 12,
+                        "weight": 4.0,
+                        "postsynaptic_potential": 500.0,
+                    },
+                ],
+            }
+        )
+        neuron_list_response = MagicMock()
+        neuron_list_response.status_code = 200
+        neuron_list_response.json.return_value = [10, 11]
+        mock_client._client.get.return_value = neuron_list_response
+
+        result = await mock_client.get_mapping_plasticity_diagnostics("src_area", "dst_area")
+
+        assert result["mapping_exists"] is True
+        assert result["plastic_rules_count"] == 1
+        assert result["is_associative_memory_mapping"] is True
+        scan = result["synapse_scan"]
+        assert scan["outgoing_synapse_count_from_src"] == 3
+        assert scan["matched_synapse_count_src_to_dst"] == 2
+        stats = scan["weight_stats"]
+        assert stats["min"] == 0.0
+        assert stats["max"] == 1.5
+        assert stats["sum"] == 1.5
+        assert stats["zero_weight_count"] == 1
+        assert stats["nonzero_weight_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_server_diagnose_mapping_plasticity_tool(self, monkeypatch):
+        """Server tool should delegate mapping plasticity diagnostics to FeagiClient."""
+        from feagi_mcp import server
+
+        async def fake_diag(src: str, dst: str, sample_limit: int = 20):
+            return {
+                "src_area": src,
+                "dst_area": dst,
+                "sample_limit": sample_limit,
+                "mapping_exists": True,
+            }
+
+        monkeypatch.setattr(server.feagi, "get_mapping_plasticity_diagnostics", fake_diag)
+        result = await server.diagnose_mapping_plasticity("S", "D", sample_limit=7)
+        assert result["src_area"] == "S"
+        assert result["dst_area"] == "D"
+        assert result["sample_limit"] == 7
 
 
 class TestFilteredLists:
@@ -749,6 +917,81 @@ class TestLogTailDisabledHint:
         assert result["returned"] == 1
 
 
+class TestFireQueueDetailed:
+    """Detailed fire-queue diagnostics endpoint + MCP tool delegation."""
+
+    @pytest.mark.asyncio
+    async def test_client_get_fire_queue_detailed_success(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "timestep": 42,
+            "total_fired": 2,
+            "cortical_areas": {
+                "bWFhYV9fX0M=": {
+                    "cortical_idx": 10,
+                    "fired_count": 1,
+                    "neuron_ids": [16393],
+                    "coordinates_x": [0],
+                    "coordinates_y": [0],
+                    "coordinates_z": [0],
+                    "membrane_potentials": [100.0],
+                }
+            },
+        }
+        mock_client._client.get.return_value = mock_response
+
+        result = await mock_client.get_fire_queue_detailed()
+
+        assert result["timestep"] == 42
+        assert result["total_fired"] == 2
+        assert "bWFhYV9fX0M=" in result["cortical_areas"]
+        mock_client._client.get.assert_called_once_with(
+            "http://localhost:8000/v1/burst_engine/fire_queue/detailed"
+        )
+
+    @pytest.mark.asyncio
+    async def test_client_get_fire_queue_detailed_http_error(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_response.text = "not found"
+        mock_client._client.get.return_value = mock_response
+
+        result = await mock_client.get_fire_queue_detailed()
+
+        assert result["error"] == "HTTP 404"
+        assert result["endpoint"] == "/v1/burst_engine/fire_queue/detailed"
+
+    @pytest.mark.asyncio
+    async def test_server_get_fire_queue_detailed_tool(self, monkeypatch):
+        from feagi_mcp import server
+
+        expected = {
+            "timestep": 7,
+            "total_fired": 1,
+            "cortical_areas": {
+                "bXNkZl9fX1I=": {
+                    "cortical_idx": 8,
+                    "fired_count": 1,
+                    "neuron_ids": [8],
+                    "coordinates_x": [0],
+                    "coordinates_y": [0],
+                    "coordinates_z": [0],
+                    "membrane_potentials": [128.0],
+                }
+            },
+        }
+
+        async def fake_get_fire_queue_detailed():
+            return expected
+
+        monkeypatch.setattr(
+            server.feagi, "get_fire_queue_detailed", fake_get_fire_queue_detailed
+        )
+        result = await server.get_fire_queue_detailed()
+        assert result == expected
+
+
 class TestNetworkConnectionInfo:
     """GET /v1/network/connection_info via FeagiClient.get_network_connection_info."""
 
@@ -916,6 +1159,32 @@ class TestGetAgentConnectionEndpointsTool:
         # Endpoints unknown, but burst rate still surfaced.
         assert result["remote_runtime"]["registration_endpoint"] is None
         assert result["remote_runtime"]["burst_frequency_hz"] == 15.0
+
+
+class TestFireLedgerWindowConfigTool:
+    """MCP tool for FireLedger per-area window diagnostics."""
+
+    @pytest.mark.asyncio
+    async def test_server_get_fire_ledger_areas_window_config(self, monkeypatch):
+        from feagi_mcp import server
+
+        expected = {
+            "total_configured_areas": 2,
+            "default_window_size": 20,
+            "areas": {"bWFhYV9fX0M=": 3, "bXNkZl9fX1I=": 3},
+        }
+
+        async def fake_get_fire_ledger_areas_window_config():
+            return expected
+
+        monkeypatch.setattr(
+            server.feagi,
+            "get_fire_ledger_areas_window_config",
+            fake_get_fire_ledger_areas_window_config,
+        )
+
+        result = await server.get_fire_ledger_areas_window_config()
+        assert result == expected
 
 
 class TestRenameMorphology:

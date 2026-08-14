@@ -413,6 +413,23 @@ class FeagiClient:
             logger.error(f"get_genome_info failed: {e}")
             return {"error": str(e)}
 
+    async def get_version_info(self) -> dict[str, Any]:
+        """Get FEAGI runtime/component versions from the system endpoint."""
+        try:
+            response = await self._client.get(f"{self.base_url}/v1/system/versions")
+            if response.status_code == 200:
+                payload = response.json()
+                if isinstance(payload, dict):
+                    return _as_json_dict(payload)
+                return {"versions": payload}
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error(f"get_version_info failed: {e}")
+            return {"error": str(e)}
+
     async def download_genome(self) -> dict[str, Any]:
         """Download complete genome configuration."""
         try:
@@ -1133,6 +1150,32 @@ class FeagiClient:
             logger.error(f"get_burst_engine_status failed: {e}")
             return {"error": str(e)}
 
+    async def get_fire_queue_detailed(self) -> dict[str, Any]:
+        """Get detailed last-burst fire queue with neuron IDs by cortical area.
+
+        Uses ``/v1/burst_engine/fire_queue/detailed`` and returns per-area arrays:
+        - ``neuron_ids``
+        - ``coordinates_x`` / ``coordinates_y`` / ``coordinates_z``
+        - ``membrane_potentials``
+
+        This is the deterministic ID-level diagnostic source for STDP/plasticity
+        investigations where area-level counts are insufficient.
+        """
+        endpoint = "/v1/burst_engine/fire_queue/detailed"
+        try:
+            response = await self._client.get(f"{self.base_url}{endpoint}")
+        except Exception as e:  # noqa: BLE001 - normalized into diagnostic payload
+            return self._request_exception_payload(endpoint=endpoint, exception=e)
+        if response.status_code != 200:
+            return self._http_failure_payload(endpoint=endpoint, response=response)
+        payload = _as_json_dict(response.json())
+        if "cortical_areas" not in payload:
+            payload["note"] = (
+                "Unexpected payload: missing 'cortical_areas'. "
+                "Ensure FEAGI runtime includes fire_queue/detailed endpoint."
+            )
+        return payload
+
     async def get_network_connection_info(self) -> dict[str, Any]:
         """Get FEAGI's active networking details (GET /v1/network/connection_info).
 
@@ -1693,6 +1736,234 @@ class FeagiClient:
             logger.error(f"delete_cortical_mapping failed: {e}")
             return {"error": str(e)}
 
+    async def get_memory_twin_diagnostic(self, src_area: str, dst_area: str) -> dict[str, Any]:
+        """Explain memory-twin eligibility and status for a mapping pair.
+
+        Calls ``GET /v1/cortical_mapping/twin_diagnostic`` and returns a compact
+        reasoned payload indicating whether a twin is expected/present and why.
+        """
+        src = (src_area or "").strip()
+        dst = (dst_area or "").strip()
+        if not src or not dst:
+            return {
+                "error": "invalid_input",
+                "message": "src_area and dst_area are required",
+            }
+        try:
+            response = await self._client.get(
+                f"{self.base_url}/v1/cortical_mapping/twin_diagnostic",
+                params={"src_cortical_area": src, "dst_cortical_area": dst},
+            )
+            if response.status_code == 200:
+                payload = response.json()
+                if isinstance(payload, dict):
+                    return cast(dict[str, Any], payload)
+                return {
+                    "error": "invalid_payload",
+                    "message": "Expected JSON object from twin_diagnostic endpoint",
+                    "payload_type": type(payload).__name__,
+                }
+            return {"error": f"HTTP {response.status_code}", "message": response.text}
+        except Exception as e:
+            logger.error("get_memory_twin_diagnostic failed: %s", e)
+            return {"error": str(e)}
+
+    async def get_mapping_plasticity_diagnostics(
+        self,
+        src_area: str,
+        dst_area: str,
+        sample_limit: int = 20,
+    ) -> dict[str, Any]:
+        """Diagnose live plasticity state for one source->destination mapping pair.
+
+        Combines mapping rules with realized synapse inspection and weight statistics
+        filtered to likely edges from ``src_area`` into ``dst_area``.
+        """
+        src = (src_area or "").strip()
+        dst = (dst_area or "").strip()
+        if not src or not dst:
+            return {
+                "error": "invalid_input",
+                "message": "src_area and dst_area are required",
+            }
+        limit = max(1, min(int(sample_limit), 200))
+
+        mapping_res, syn_res, dst_area_params = await asyncio.gather(
+            self.get_cortical_mapping(src, dst),
+            self.list_area_synapses(src, direction="outgoing"),
+            self.get_area_parameters(dst),
+        )
+
+        # Best-effort fetch of destination neuron ids for accurate synapse filtering.
+        dst_neuron_ids: set[int] = set()
+        dst_neuron_fetch_error: dict[str, Any] | None = None
+        try:
+            dst_neuron_resp = await self._client.get(
+                f"{self.base_url}/v1/connectome/cortical_area/{dst}/neurons"
+            )
+            if dst_neuron_resp.status_code == 200:
+                raw_ids = dst_neuron_resp.json()
+                if isinstance(raw_ids, list):
+                    for raw_id in raw_ids:
+                        try:
+                            dst_neuron_ids.add(int(raw_id))
+                        except (TypeError, ValueError):
+                            continue
+                else:
+                    dst_neuron_fetch_error = {
+                        "error": "unexpected_payload",
+                        "message": "destination neuron list is not a JSON array",
+                    }
+            else:
+                dst_neuron_fetch_error = self._http_failure_payload(
+                    endpoint=f"/v1/connectome/cortical_area/{dst}/neurons",
+                    response=dst_neuron_resp,
+                )
+        except Exception as e:
+            dst_neuron_fetch_error = self._request_exception_payload(
+                endpoint=f"/v1/connectome/cortical_area/{dst}/neurons",
+                exception=e,
+            )
+
+        rules = mapping_res.get("rules", []) if isinstance(mapping_res, dict) else []
+        if not isinstance(rules, list):
+            rules = []
+        plastic_rules = [
+            r
+            for r in rules
+            if isinstance(r, dict)
+            and (
+                bool(r.get("plasticity_flag"))
+                or str(r.get("plasticity_mode", "")).lower() in {"stdp", "rstdp", "r-stdp"}
+            )
+        ]
+
+        dst_idx: int | None = None
+        if isinstance(dst_area_params, dict):
+            params_obj = dst_area_params.get("parameters")
+            if isinstance(params_obj, dict):
+                raw_idx = params_obj.get("i")
+                if isinstance(raw_idx, (int, float)):
+                    dst_idx = int(raw_idx)
+
+        synapses = []
+        if isinstance(syn_res, dict):
+            raw_syn = syn_res.get("synapses")
+            if isinstance(raw_syn, list):
+                synapses = [s for s in raw_syn if isinstance(s, dict)]
+
+        def _as_int(value: Any) -> int | None:
+            if isinstance(value, bool):
+                return None
+            if isinstance(value, int):
+                return value
+            if isinstance(value, float):
+                return int(value)
+            if isinstance(value, str):
+                try:
+                    return int(value.strip())
+                except ValueError:
+                    return None
+            return None
+
+        def _as_float(value: Any) -> float | None:
+            if isinstance(value, bool):
+                return None
+            if isinstance(value, (int, float)):
+                return float(value)
+            if isinstance(value, str):
+                try:
+                    return float(value.strip())
+                except ValueError:
+                    return None
+            return None
+
+        matched: list[dict[str, Any]] = []
+        skipped_without_target_identity = 0
+        for syn in synapses:
+            target_id = _as_int(syn.get("target_neuron_id"))
+            target_cortical_id = syn.get("target_cortical_id")
+            target_cortical_idx = _as_int(syn.get("target_cortical_idx"))
+
+            matched_to_dst = (
+                (target_id is not None and target_id in dst_neuron_ids)
+                or (isinstance(target_cortical_id, str) and target_cortical_id == dst)
+                or (dst_idx is not None and target_cortical_idx == dst_idx)
+            )
+            if (
+                not matched_to_dst
+                and target_id is None
+                and target_cortical_id is None
+                and target_cortical_idx is None
+            ):
+                skipped_without_target_identity += 1
+
+            if not matched_to_dst:
+                continue
+
+            matched.append(
+                {
+                    "source_neuron_id": _as_int(syn.get("source_neuron_id")),
+                    "target_neuron_id": target_id,
+                    "weight": _as_float(syn.get("weight")),
+                    "postsynaptic_potential": _as_float(syn.get("postsynaptic_potential")),
+                    "synapse_type": _as_int(syn.get("synapse_type")),
+                    "target_cortical_id": target_cortical_id,
+                    "target_cortical_idx": target_cortical_idx,
+                }
+            )
+
+        weights = [w for w in (_as_float(s.get("weight")) for s in matched) if w is not None]
+        zero_weight_count = sum(1 for w in weights if w == 0.0)
+        nonzero_weight_count = sum(1 for w in weights if w > 0.0)
+
+        result: dict[str, Any] = {
+            "src_area": src,
+            "dst_area": dst,
+            "mapping_exists": bool(rules),
+            "mapping_rules_count": len(rules),
+            "plastic_rules_count": len(plastic_rules),
+            "plastic_rules": plastic_rules,
+            "is_associative_memory_mapping": any(
+                isinstance(r, dict) and r.get("morphology_id") == "associative_memory"
+                for r in rules
+            ),
+            "synapse_scan": {
+                "outgoing_synapse_count_from_src": len(synapses),
+                "matched_synapse_count_src_to_dst": len(matched),
+                "weight_stats": {
+                    "min": min(weights) if weights else None,
+                    "max": max(weights) if weights else None,
+                    "avg": (sum(weights) / len(weights)) if weights else None,
+                    "sum": sum(weights) if weights else None,
+                    "zero_weight_count": zero_weight_count,
+                    "nonzero_weight_count": nonzero_weight_count,
+                },
+                "sample": matched[:limit],
+                "skipped_without_target_identity": skipped_without_target_identity,
+            },
+            "resolution": {
+                "destination_neuron_count": len(dst_neuron_ids),
+                "destination_cortical_idx": dst_idx,
+            },
+        }
+
+        if isinstance(mapping_res, dict) and mapping_res.get("error"):
+            result["mapping_fetch_error"] = mapping_res
+        if isinstance(syn_res, dict) and syn_res.get("error"):
+            result["synapse_fetch_error"] = syn_res
+        if dst_neuron_fetch_error is not None:
+            result["destination_neuron_fetch_error"] = dst_neuron_fetch_error
+
+        if len(matched) == 0 and not result.get("synapse_fetch_error"):
+            result["note"] = (
+                "No realized src->dst synapses matched. "
+                "If this mapping is plastic and directional, verify source/destination order "
+                "and that associative synapses were created."
+            )
+
+        return result
+
     async def get_area_semantic_info(self, area_id: str) -> dict[str, Any]:
         """Get semantic information about a cortical area.
 
@@ -2031,6 +2302,26 @@ class FeagiClient:
             }
         except Exception as e:
             logger.error("set_burst_engine_frequency failed: %s", e)
+            return {"error": str(e)}
+
+    async def get_fire_ledger_areas_window_config(self) -> dict[str, Any]:
+        """GET /v1/burst_engine/fire_ledger/areas_window_config.
+
+        Returns currently tracked cortical areas and their FireLedger window sizes.
+        Useful to diagnose why STDP updates may not occur (missing/too-small windows).
+        """
+        try:
+            response = await self._client.get(
+                f"{self.base_url}/v1/burst_engine/fire_ledger/areas_window_config"
+            )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error("get_fire_ledger_areas_window_config failed: %s", e)
             return {"error": str(e)}
 
     async def control_burst_engine(self, action: str) -> dict[str, Any]:
