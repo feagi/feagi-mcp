@@ -985,9 +985,7 @@ class TestFireQueueDetailed:
         async def fake_get_fire_queue_detailed():
             return expected
 
-        monkeypatch.setattr(
-            server.feagi, "get_fire_queue_detailed", fake_get_fire_queue_detailed
-        )
+        monkeypatch.setattr(server.feagi, "get_fire_queue_detailed", fake_get_fire_queue_detailed)
         result = await server.get_fire_queue_detailed()
         assert result == expected
 
