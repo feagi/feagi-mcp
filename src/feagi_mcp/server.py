@@ -152,9 +152,8 @@ async def get_memory_area_runtime_config(cortical_id: str, page_size: int = 1) -
 
     props = area.get("properties")
     props_dict = props if isinstance(props, dict) else {}
-    is_memory = (
-        str(area.get("cortical_type", "")).lower() == "memory"
-        or bool(props_dict.get("is_mem_type", False))
+    is_memory = str(area.get("cortical_type", "")).lower() == "memory" or bool(
+        props_dict.get("is_mem_type", False)
     )
     if not is_memory:
         return {
