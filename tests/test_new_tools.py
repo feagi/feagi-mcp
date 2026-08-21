@@ -139,6 +139,99 @@ class TestVersionInfo:
         assert "message" in result
 
 
+class TestMemoryAreaRuntimeConfigTool:
+    """Runtime memory lifecycle config tool (single-source diagnostic payload)."""
+
+    @pytest.mark.asyncio
+    async def test_prefers_runtime_memory_parameters(self, monkeypatch):
+        """Runtime memory params should win when both endpoints provide values."""
+        from feagi_mcp import server
+
+        async def fake_props(_cortical_id: str):
+            return {
+                "cortical_id": "mem_id",
+                "cortical_name": "mem_a",
+                "cortical_idx": 9,
+                "cortical_type": "memory",
+                "properties": {"is_mem_type": True},
+                "neuron_init_lifespan": 1,
+                "neuron_lifespan_growth_rate": 1.0,
+                "neuron_longterm_mem_threshold": 10,
+            }
+
+        async def fake_bv_operation(_operation_id: str, **_kwargs):
+            return {
+                "cortical_id": "mem_id",
+                "cortical_name": "mem_a",
+                "cortical_idx": 9,
+                "short_term_neuron_count": 2,
+                "long_term_neuron_count": 3,
+                "total_memory_neuron_ids": 5,
+                "memory_parameters": {
+                    "init_lifespan": 9,
+                    "lifespan_growth_rate": 2.0,
+                    "longterm_mem_threshold": 100,
+                },
+            }
+
+        monkeypatch.setattr(server.feagi, "fetch_cortical_area_properties", fake_props)
+        monkeypatch.setattr(server.feagi, "brain_visualizer_operation", fake_bv_operation)
+
+        result = await server.get_memory_area_runtime_config("mem_id")
+        lifecycle = result["effective_lifecycle"]
+
+        assert lifecycle["init_lifespan"]["value"] == 9
+        assert lifecycle["init_lifespan"]["source"] == "runtime_memory_parameters"
+        assert lifecycle["lifespan_growth_rate"]["value"] == 2.0
+        assert lifecycle["longterm_mem_threshold"]["value"] == 100
+        assert result["consistency"]["st_plus_lt_matches_total"] is True
+        assert sorted(result["consistency"]["lifecycle_param_mismatches"]) == [
+            "init_lifespan",
+            "lifespan_growth_rate",
+            "longterm_mem_threshold",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_cortical_properties_when_runtime_zero(self, monkeypatch):
+        """Zero runtime lifecycle values should fall back to cortical properties."""
+        from feagi_mcp import server
+
+        async def fake_props(_cortical_id: str):
+            return {
+                "cortical_id": "mem_id",
+                "cortical_name": "mem_b",
+                "cortical_idx": 11,
+                "cortical_type": "memory",
+                "properties": {"is_mem_type": True},
+                "neuron_init_lifespan": 7,
+                "neuron_lifespan_growth_rate": 1.5,
+                "neuron_longterm_mem_threshold": 70,
+            }
+
+        async def fake_bv_operation(_operation_id: str, **_kwargs):
+            return {
+                "short_term_neuron_count": 0,
+                "long_term_neuron_count": 4,
+                "total_memory_neuron_ids": 4,
+                "memory_parameters": {
+                    "init_lifespan": 0,
+                    "lifespan_growth_rate": 0.0,
+                    "longterm_mem_threshold": 0,
+                },
+            }
+
+        monkeypatch.setattr(server.feagi, "fetch_cortical_area_properties", fake_props)
+        monkeypatch.setattr(server.feagi, "brain_visualizer_operation", fake_bv_operation)
+
+        result = await server.get_memory_area_runtime_config("mem_id")
+        lifecycle = result["effective_lifecycle"]
+
+        assert lifecycle["init_lifespan"]["value"] == 7
+        assert lifecycle["init_lifespan"]["source"] == "cortical_properties"
+        assert lifecycle["lifespan_growth_rate"]["value"] == 1.5
+        assert lifecycle["longterm_mem_threshold"]["value"] == 70
+
+
 class TestAgentJointMap:
     """Joint-map extraction from legacy and current registration payloads."""
 

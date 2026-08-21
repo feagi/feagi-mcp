@@ -46,6 +46,24 @@ mcp = FastMCP(
 snapshot_manager = SnapshotManager()
 
 
+def _positive_int_or_none(value: Any) -> int | None:
+    """Return positive int value, otherwise None."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _positive_float_or_none(value: Any) -> float | None:
+    """Return positive float value, otherwise None."""
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
 @mcp.tool()
 async def monitor_activity(
     area_id: str,
@@ -102,6 +120,129 @@ async def get_connectivity(src_area: str, dst_area: str) -> dict[str, Any]:
     """
     result = await feagi.get_connectivity(src_area, dst_area)
     return result
+
+
+@mcp.tool()
+async def get_memory_area_runtime_config(cortical_id: str, page_size: int = 1) -> dict[str, Any]:
+    """Get effective runtime lifecycle config for one memory cortical area.
+
+    This closes the MCP visibility gap where users otherwise must infer memory
+    lifecycle behavior from multiple endpoints with different field names.
+    Returns one normalized payload with:
+
+    - Runtime memory counts (ST/LT/total) from ``GET /v1/cortical_area/memory``.
+    - Effective lifecycle values (init lifespan, growth rate, LT threshold).
+    - Source attribution for each lifecycle value (runtime vs cortical properties).
+    - Consistency checks to flag mismatched values between endpoint surfaces.
+
+    Args:
+        cortical_id: Memory cortical area ID (base64 wire ID).
+        page_size: Memory endpoint page size for neuron IDs (default 1; max 50).
+
+    Returns:
+        Normalized runtime memory config and diagnostics for this area.
+    """
+    area = await feagi.fetch_cortical_area_properties(cortical_id)
+    if not isinstance(area, dict) or area.get("error"):
+        return {
+            "error": "cortical_properties_unavailable",
+            "cortical_id": cortical_id,
+            "details": area,
+        }
+
+    props = area.get("properties")
+    props_dict = props if isinstance(props, dict) else {}
+    is_memory = (
+        str(area.get("cortical_type", "")).lower() == "memory"
+        or bool(props_dict.get("is_mem_type", False))
+    )
+    if not is_memory:
+        return {
+            "error": "not_memory_area",
+            "cortical_id": cortical_id,
+            "cortical_type": area.get("cortical_type"),
+            "message": "Tool is only valid for memory cortical areas.",
+        }
+
+    normalized_page_size = max(1, min(int(page_size), 50))
+    memory_runtime = await feagi.brain_visualizer_operation(
+        "get_cortical_area_memory",
+        query={
+            "cortical_id": cortical_id,
+            "page": 0,
+            "page_size": normalized_page_size,
+        },
+    )
+    if not isinstance(memory_runtime, dict) or memory_runtime.get("error"):
+        return {
+            "error": "memory_runtime_unavailable",
+            "cortical_id": cortical_id,
+            "details": memory_runtime,
+        }
+
+    runtime_params = memory_runtime.get("memory_parameters")
+    runtime_params_dict = runtime_params if isinstance(runtime_params, dict) else {}
+
+    runtime_init = _positive_int_or_none(runtime_params_dict.get("init_lifespan"))
+    runtime_growth = _positive_float_or_none(runtime_params_dict.get("lifespan_growth_rate"))
+    runtime_ltm = _positive_int_or_none(runtime_params_dict.get("longterm_mem_threshold"))
+
+    props_init = _positive_int_or_none(area.get("neuron_init_lifespan"))
+    props_growth = _positive_float_or_none(area.get("neuron_lifespan_growth_rate"))
+    props_ltm = _positive_int_or_none(area.get("neuron_longterm_mem_threshold"))
+
+    def choose_value(
+        runtime_value: int | float | None, props_value: int | float | None
+    ) -> tuple[int | float | None, str]:
+        if runtime_value is not None:
+            return runtime_value, "runtime_memory_parameters"
+        if props_value is not None:
+            return props_value, "cortical_properties"
+        return None, "missing_or_zero"
+
+    effective_init, init_source = choose_value(runtime_init, props_init)
+    effective_growth, growth_source = choose_value(runtime_growth, props_growth)
+    effective_ltm, ltm_source = choose_value(runtime_ltm, props_ltm)
+
+    mismatches: list[str] = []
+    if runtime_init is not None and props_init is not None and runtime_init != props_init:
+        mismatches.append("init_lifespan")
+    if runtime_growth is not None and props_growth is not None and runtime_growth != props_growth:
+        mismatches.append("lifespan_growth_rate")
+    if runtime_ltm is not None and props_ltm is not None and runtime_ltm != props_ltm:
+        mismatches.append("longterm_mem_threshold")
+
+    st_count = int(memory_runtime.get("short_term_neuron_count", 0))
+    lt_count = int(memory_runtime.get("long_term_neuron_count", 0))
+    total_count = int(memory_runtime.get("total_memory_neuron_ids", 0))
+
+    return {
+        "cortical_id": cortical_id,
+        "cortical_name": memory_runtime.get("cortical_name") or area.get("cortical_name"),
+        "cortical_idx": memory_runtime.get("cortical_idx") or area.get("cortical_idx"),
+        "runtime_counts": {
+            "short_term_neuron_count": st_count,
+            "long_term_neuron_count": lt_count,
+            "total_memory_neuron_ids": total_count,
+        },
+        "effective_lifecycle": {
+            "init_lifespan": {"value": effective_init, "source": init_source},
+            "lifespan_growth_rate": {"value": effective_growth, "source": growth_source},
+            "longterm_mem_threshold": {"value": effective_ltm, "source": ltm_source},
+        },
+        "consistency": {
+            "st_plus_lt_matches_total": (st_count + lt_count) == total_count,
+            "lifecycle_param_mismatches": mismatches,
+        },
+        "raw": {
+            "runtime_memory_parameters": runtime_params_dict,
+            "cortical_properties_lifecycle": {
+                "neuron_init_lifespan": area.get("neuron_init_lifespan"),
+                "neuron_lifespan_growth_rate": area.get("neuron_lifespan_growth_rate"),
+                "neuron_longterm_mem_threshold": area.get("neuron_longterm_mem_threshold"),
+            },
+        },
+    }
 
 
 @mcp.tool()
