@@ -34,6 +34,188 @@ _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 _ISO_TS_RE = re.compile(r"(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)")
 _LOCAL_TS_RE = re.compile(r"(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3,6})")
 
+# @cursor:ffi-safe
+# Core morphology use-case map used by MCP recommendation/apply tools.
+# Keep this deterministic and data-driven so behavior is easy to test and can be
+# ported to lower-level runtimes later.
+_CORE_MORPHOLOGY_USE_CASES: dict[str, dict[str, Any]] = {
+    "0-0-0_to_all": {
+        "intent_tags": ["broadcast", "fanout", "single-source", "starter-neuron"],
+        "description": "Broadcast one source voxel to all destination voxels.",
+        "requires_same_dimensions": False,
+    },
+    "all_to_0-0-0": {
+        "intent_tags": ["reduce", "collector", "funnel", "aggregation"],
+        "description": "Aggregate all source voxels into destination origin voxel.",
+        "requires_same_dimensions": False,
+    },
+    "all_to_all": {
+        "intent_tags": ["dense", "fully-connected", "global-coupling", "association"],
+        "description": "Fully connect all source voxels to all destination voxels.",
+        "requires_same_dimensions": False,
+    },
+    "associative_memory": {
+        "intent_tags": ["memory", "association", "hebbian", "pattern-linking"],
+        "description": "Associative memory linkage pattern.",
+        "requires_same_dimensions": False,
+    },
+    "bitmask_decoder_x": {
+        "intent_tags": ["decode", "bitmask", "x-axis", "demultiplex"],
+        "description": "Decode packed bitmask values along X axis.",
+        "requires_same_dimensions": False,
+    },
+    "bitmask_decoder_y": {
+        "intent_tags": ["decode", "bitmask", "y-axis", "demultiplex"],
+        "description": "Decode packed bitmask values along Y axis.",
+        "requires_same_dimensions": False,
+    },
+    "bitmask_decoder_z": {
+        "intent_tags": ["decode", "bitmask", "z-axis", "demultiplex"],
+        "description": "Decode packed bitmask values along Z axis.",
+        "requires_same_dimensions": False,
+    },
+    "bitmask_encoder_x": {
+        "intent_tags": ["encode", "bitmask", "x-axis", "multiplex"],
+        "description": "Encode distributed values into a packed X-axis bitmask.",
+        "requires_same_dimensions": False,
+    },
+    "bitmask_encoder_y": {
+        "intent_tags": ["encode", "bitmask", "y-axis", "multiplex"],
+        "description": "Encode distributed values into a packed Y-axis bitmask.",
+        "requires_same_dimensions": False,
+    },
+    "bitmask_encoder_z": {
+        "intent_tags": ["encode", "bitmask", "z-axis", "multiplex"],
+        "description": "Encode distributed values into a packed Z-axis bitmask.",
+        "requires_same_dimensions": False,
+    },
+    "block_to_block": {
+        "intent_tags": ["one-to-one", "identity", "direct-map", "preserve-topology"],
+        "description": "Direct source-to-destination coordinate-preserving mapping.",
+        "requires_same_dimensions": True,
+    },
+    "centered_projector": {
+        "intent_tags": ["projection", "center", "focus", "attention"],
+        "description": "Project source activity centered into destination space.",
+        "requires_same_dimensions": False,
+    },
+    "episodic_memory": {
+        "intent_tags": ["memory", "episodic", "sequence", "timeline"],
+        "description": "Episodic memory mapping suitable for temporal traces.",
+        "requires_same_dimensions": False,
+    },
+    "first_to_last": {
+        "intent_tags": ["edge", "wrap", "sequence", "cyclic"],
+        "description": "Route the first source unit toward the destination end.",
+        "requires_same_dimensions": False,
+    },
+    "last_to_first": {
+        "intent_tags": ["edge", "wrap", "sequence", "cyclic"],
+        "description": "Route the last source unit toward the destination start.",
+        "requires_same_dimensions": False,
+    },
+    "lateral_+x": {
+        "intent_tags": ["shift", "translate", "x+", "right"],
+        "description": "Lateral shift toward +X direction.",
+        "requires_same_dimensions": True,
+    },
+    "lateral_+y": {
+        "intent_tags": ["shift", "translate", "y+", "up"],
+        "description": "Lateral shift toward +Y direction.",
+        "requires_same_dimensions": True,
+    },
+    "lateral_+z": {
+        "intent_tags": ["shift", "translate", "z+", "forward"],
+        "description": "Lateral shift toward +Z direction.",
+        "requires_same_dimensions": True,
+    },
+    "lateral_-x": {
+        "intent_tags": ["shift", "translate", "x-", "left"],
+        "description": "Lateral shift toward -X direction.",
+        "requires_same_dimensions": True,
+    },
+    "lateral_-y": {
+        "intent_tags": ["shift", "translate", "y-", "down"],
+        "description": "Lateral shift toward -Y direction.",
+        "requires_same_dimensions": True,
+    },
+    "lateral_-z": {
+        "intent_tags": ["shift", "translate", "z-", "backward"],
+        "description": "Lateral shift toward -Z direction.",
+        "requires_same_dimensions": True,
+    },
+    "lateral_pairs_x": {
+        "intent_tags": ["pairwise", "lateral", "x-axis", "neighbor"],
+        "description": "Pairwise lateral neighbor mapping across X axis.",
+        "requires_same_dimensions": True,
+    },
+    "memory_replay": {
+        "intent_tags": ["memory", "replay", "recall", "reconstruction"],
+        "description": "Memory replay path for recalling learned traces.",
+        "requires_same_dimensions": False,
+    },
+    "projector": {
+        "intent_tags": ["projection", "resample", "remap", "downstream"],
+        "description": "General projection from source space into destination space.",
+        "requires_same_dimensions": False,
+    },
+    "randomizer": {
+        "intent_tags": ["random", "decorrelate", "stochastic", "exploration"],
+        "description": "Randomized connectivity for decorrelation/exploration.",
+        "requires_same_dimensions": False,
+    },
+    "rotator_z": {
+        "intent_tags": ["rotate", "rotation", "z-axis", "orientation"],
+        "description": "Rotate topology around Z axis.",
+        "requires_same_dimensions": True,
+    },
+    "sweeper": {
+        "intent_tags": ["scan", "sweep", "traverse", "sequence"],
+        "description": "Sequential sweep-style propagation through destination.",
+        "requires_same_dimensions": False,
+    },
+    "tile": {
+        "intent_tags": ["tile", "repeat", "replicate", "upsample"],
+        "description": "Replicate source pattern into tiled destination regions.",
+        "requires_same_dimensions": False,
+    },
+    "transpose_xy": {
+        "intent_tags": ["transpose", "swap", "xy", "axis-remap"],
+        "description": "Transpose X/Y axes between source and destination.",
+        "requires_same_dimensions": True,
+    },
+    "transpose_xz": {
+        "intent_tags": ["transpose", "swap", "xz", "axis-remap"],
+        "description": "Transpose X/Z axes between source and destination.",
+        "requires_same_dimensions": True,
+    },
+    "transpose_yz": {
+        "intent_tags": ["transpose", "swap", "yz", "axis-remap"],
+        "description": "Transpose Y/Z axes between source and destination.",
+        "requires_same_dimensions": True,
+    },
+}
+
+
+def _normalize_intent_tokens(intent: str) -> set[str]:
+    """Normalize natural-language intent into deterministic lowercase tokens."""
+    return {tok for tok in re.split(r"[^a-z0-9+\-]+", intent.lower()) if tok}
+
+
+def _intent_matches(metadata: dict[str, Any], tokens: set[str]) -> int:
+    """Score intent fit using explicit tag overlap only (no fallback guessing)."""
+    tags = metadata.get("intent_tags")
+    if not isinstance(tags, list):
+        return 0
+    score = 0
+    for tag in tags:
+        if not isinstance(tag, str):
+            continue
+        tag_parts = _normalize_intent_tokens(tag)
+        if tag_parts and tag_parts.intersection(tokens):
+            score += 2
+    return score
+
 
 def _as_json_dict(data: Any) -> dict[str, Any]:
     """Narrow ``response.json()`` / API payloads to ``dict`` for strict typing."""
@@ -2935,6 +3117,319 @@ class FeagiClient:
         except Exception as e:
             logger.error("inspect_cortical_areas_minimal failed: %s", e)
             return {"error": str(e)}
+
+    @staticmethod
+    def _extract_cortical_dimensions(area_payload: dict[str, Any]) -> list[int] | None:
+        """Extract 3D cortical dimensions from a typical area payload."""
+        dims = area_payload.get("cortical_dimensions")
+        if isinstance(dims, list) and len(dims) == 3:
+            return [int(dims[0]), int(dims[1]), int(dims[2])]
+        props = area_payload.get("properties")
+        if isinstance(props, dict):
+            nested = props.get("cortical_dimensions")
+            if isinstance(nested, list) and len(nested) == 3:
+                return [int(nested[0]), int(nested[1]), int(nested[2])]
+        return None
+
+    async def describe_connectivity_rules(
+        self,
+        include_classes: list[str] | None = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Return morphology rules augmented with explicit use-case metadata.
+
+        This closes a major guidance gap for circuit construction: LLMs can now read
+        concise, deterministic "when to use" hints per morphology, especially for core
+        rules.
+        """
+        normalized_classes: list[str] = []
+        if include_classes:
+            for cls in include_classes:
+                if isinstance(cls, str) and cls.strip():
+                    normalized_classes.append(cls.strip().lower())
+
+        summary = await self.list_morphologies_summary(limit=500, offset=0)
+        if not isinstance(summary, dict) or summary.get("error"):
+            return summary if isinstance(summary, dict) else {"error": "bad_payload"}
+        items = summary.get("items")
+        if not isinstance(items, list):
+            return {"error": "invalid_morphology_summary"}
+
+        rows: list[dict[str, Any]] = []
+        for row in items:
+            if not isinstance(row, dict):
+                continue
+            morph_class = str(row.get("class", "")).lower()
+            if normalized_classes and morph_class not in normalized_classes:
+                continue
+            name = str(row.get("name", ""))
+            core_meta = _CORE_MORPHOLOGY_USE_CASES.get(name)
+            if core_meta is None and morph_class == "core":
+                # Forward-compatible metadata for newly added core morphologies.
+                core_meta = {
+                    "intent_tags": ["core", "review-before-use"],
+                    "description": "Core morphology without explicit metadata in MCP catalog.",
+                    "requires_same_dimensions": False,
+                }
+            if core_meta is None:
+                core_meta = {
+                    "intent_tags": ["custom", "genome-specific"],
+                    "description": "Custom morphology from current genome.",
+                    "requires_same_dimensions": False,
+                }
+            rows.append(
+                {
+                    "name": name,
+                    "type": row.get("type"),
+                    "class": row.get("class"),
+                    "pattern_count": row.get("pattern_count"),
+                    "source": row.get("source"),
+                    "use_case": core_meta,
+                }
+            )
+
+        rows.sort(key=lambda r: str(r.get("name", "")).lower())
+        total = len(rows)
+        safe_limit = max(1, min(int(limit), 500))
+        safe_offset = max(0, int(offset))
+        window = rows[safe_offset : safe_offset + safe_limit]
+        return {
+            "total": total,
+            "returned": len(window),
+            "offset": safe_offset,
+            "limit": safe_limit,
+            "items": window,
+        }
+
+    async def recommend_connectivity_rules(
+        self,
+        src_area: str,
+        dst_area: str,
+        intent: str,
+        prefer_core: bool = True,
+        limit: int = 5,
+    ) -> dict[str, Any]:
+        """Recommend existing morphology rules for a source->destination mapping.
+
+        Deterministic ranking policy:
+        - Strong preference for core rules when ``prefer_core=True``.
+        - Match intent tokens against curated use-case tags.
+        - Boost coordinate-preserving rules only when dimensions are compatible.
+        """
+        if not isinstance(src_area, str) or not src_area.strip():
+            return {"error": "src_area must be a non-empty string"}
+        if not isinstance(dst_area, str) or not dst_area.strip():
+            return {"error": "dst_area must be a non-empty string"}
+        if not isinstance(intent, str) or not intent.strip():
+            return {"error": "intent must be a non-empty string"}
+
+        src_clean = src_area.strip()
+        dst_clean = dst_area.strip()
+        intent_tokens = _normalize_intent_tokens(intent)
+        if not intent_tokens:
+            return {"error": "intent must contain alphanumeric tokens"}
+
+        class_filter = "core" if prefer_core else None
+        summary = await self.list_morphologies_summary(
+            class_filter=class_filter,
+            limit=500,
+            offset=0,
+        )
+        if not isinstance(summary, dict) or summary.get("error"):
+            return summary if isinstance(summary, dict) else {"error": "bad_payload"}
+        candidates = summary.get("items")
+        if not isinstance(candidates, list):
+            return {"error": "invalid_morphology_summary"}
+
+        src_params, dst_params = await asyncio.gather(
+            self.get_area_parameters(src_clean),
+            self.get_area_parameters(dst_clean),
+        )
+        src_dims = (
+            self._extract_cortical_dimensions(src_params)
+            if isinstance(src_params, dict)
+            else None
+        )
+        dst_dims = (
+            self._extract_cortical_dimensions(dst_params)
+            if isinstance(dst_params, dict)
+            else None
+        )
+        same_dims = src_dims is not None and dst_dims is not None and src_dims == dst_dims
+
+        scored: list[dict[str, Any]] = []
+        for row in candidates:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("name", "")).strip()
+            if not name:
+                continue
+            morph_class = str(row.get("class", "")).strip().lower()
+            metadata = _CORE_MORPHOLOGY_USE_CASES.get(
+                name,
+                {
+                    "intent_tags": [morph_class or "unknown"],
+                    "description": "No curated use-case metadata for this rule yet.",
+                    "requires_same_dimensions": False,
+                },
+            )
+            base_match_score = _intent_matches(metadata, intent_tokens)
+            if base_match_score <= 0:
+                continue
+            score = base_match_score
+            if prefer_core and morph_class == "core":
+                score += 4
+
+            requires_same_dims = bool(metadata.get("requires_same_dimensions", False))
+            if requires_same_dims:
+                if same_dims:
+                    score += 2
+                else:
+                    score -= 3
+            if score <= 0:
+                continue
+            scored.append(
+                {
+                    "name": name,
+                    "type": row.get("type"),
+                    "class": row.get("class"),
+                    "pattern_count": row.get("pattern_count"),
+                    "source": row.get("source"),
+                    "score": score,
+                    "use_case": metadata,
+                    "dimension_fit": (
+                        "compatible"
+                        if same_dims or not requires_same_dims
+                        else "incompatible"
+                    ),
+                }
+            )
+
+        scored.sort(
+            key=lambda r: (
+                -int(r.get("score", 0)),
+                str(r.get("class", "")) != "core",
+                str(r.get("name", "")).lower(),
+            )
+        )
+        safe_limit = max(1, min(int(limit), 20))
+        top = scored[:safe_limit]
+        if not top:
+            return {
+                "error": "no_rule_match_for_intent",
+                "src_area": src_clean,
+                "dst_area": dst_clean,
+                "intent": intent,
+                "src_dimensions": src_dims,
+                "dst_dimensions": dst_dims,
+                "message": (
+                    "No existing rule matched the provided intent strongly enough. "
+                    "Refine intent (e.g., 'one-to-one identity', 'all-to-all dense', "
+                    "'transpose xy', 'lateral +x')."
+                ),
+            }
+
+        return {
+            "src_area": src_clean,
+            "dst_area": dst_clean,
+            "intent": intent,
+            "prefer_core": bool(prefer_core),
+            "src_dimensions": src_dims,
+            "dst_dimensions": dst_dims,
+            "recommended": top,
+            "selected": top[0],
+        }
+
+    async def apply_connectivity_rule(
+        self,
+        src_area: str,
+        dst_area: str,
+        intent: str,
+        postsynaptic_current_multiplier: int,
+        prefer_core: bool = True,
+        replace_existing: bool = False,
+        plasticity_flag: bool = False,
+        plasticity_constant: int = 0,
+        ltp_multiplier: int = 1,
+        ltd_multiplier: int = 1,
+        plasticity_window: int = 10,
+        synaptic_delay_bursts: int = 1,
+    ) -> dict[str, Any]:
+        """Apply the best matching existing morphology rule to src->dst mapping.
+
+        This path intentionally avoids custom rule creation and uses existing
+        morphology IDs, with core-rule preference enabled by default.
+        """
+        recommendation = await self.recommend_connectivity_rules(
+            src_area=src_area,
+            dst_area=dst_area,
+            intent=intent,
+            prefer_core=prefer_core,
+            limit=1,
+        )
+        if recommendation.get("error"):
+            return recommendation
+        selected = recommendation.get("selected")
+        if not isinstance(selected, dict):
+            return {"error": "invalid_recommendation_payload"}
+        morphology_id = selected.get("name")
+        if not isinstance(morphology_id, str) or not morphology_id.strip():
+            return {"error": "selected_morphology_missing"}
+
+        for name, m in (
+            ("ltp_multiplier", ltp_multiplier),
+            ("ltd_multiplier", ltd_multiplier),
+        ):
+            mi = int(m)
+            if mi < -128 or mi > 127:
+                return {
+                    "error": (
+                        f"{name} must fit in i8 range -128..127 (got {m!r}); "
+                        "choose a different value"
+                    )
+                }
+        if int(synaptic_delay_bursts) < 1:
+            return {"error": "synaptic_delay_bursts must be >= 1"}
+
+        new_rule: dict[str, Any] = {
+            "morphology_id": morphology_id.strip(),
+            "morphology_scalar": [1, 1, 1],
+            "postSynapticCurrent_multiplier": int(postsynaptic_current_multiplier),
+            "plasticity_flag": bool(plasticity_flag),
+            "plasticity_constant": int(plasticity_constant),
+            "ltp_multiplier": int(ltp_multiplier),
+            "ltd_multiplier": int(ltd_multiplier),
+            "plasticity_window": int(plasticity_window),
+            "synaptic_delay_bursts": int(synaptic_delay_bursts),
+        }
+
+        src_clean = src_area.strip()
+        dst_clean = dst_area.strip()
+        if replace_existing:
+            rules: list[dict[str, Any]] = [new_rule]
+        else:
+            existing = await self.get_cortical_mapping(src_clean, dst_clean)
+            rules = []
+            if isinstance(existing, dict):
+                raw_rules = existing.get("rules")
+                if isinstance(raw_rules, list):
+                    for row in raw_rules:
+                        if isinstance(row, dict):
+                            rules.append(row)
+            rules.append(new_rule)
+
+        mapping_update = await self.update_cortical_mapping(
+            src_area=src_clean,
+            dst_area=dst_clean,
+            mapping_rules=rules,
+        )
+        return {
+            "selected_rule": selected,
+            "applied_rule": new_rule,
+            "replace_existing": bool(replace_existing),
+            "mapping_update": mapping_update,
+        }
 
     # ------------------------------------------------------------------
     # Circuit-design primitives

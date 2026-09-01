@@ -411,6 +411,156 @@ class TestBuildReflexMapping:
         assert "i8" in out["error"]
 
 
+class TestConnectivityRuleIntelligence:
+    @pytest.mark.asyncio
+    async def test_describe_connectivity_rules_includes_core_use_case_metadata(self, mock_client):
+        mock_client.list_morphologies_summary = AsyncMock(
+            return_value={
+                "items": [
+                    {
+                        "name": "block_to_block",
+                        "type": "vectors",
+                        "class": "core",
+                        "pattern_count": 1,
+                        "source": "genome",
+                    },
+                    {
+                        "name": "my_custom_rule",
+                        "type": "patterns",
+                        "class": "custom",
+                        "pattern_count": 1,
+                        "source": "genome",
+                    },
+                ]
+            }
+        )
+
+        out = await mock_client.describe_connectivity_rules(include_classes=["core"])
+        assert out["total"] == 1
+        assert out["items"][0]["name"] == "block_to_block"
+        assert out["items"][0]["use_case"]["requires_same_dimensions"] is True
+        assert "one-to-one" in out["items"][0]["use_case"]["intent_tags"]
+
+    @pytest.mark.asyncio
+    async def test_recommend_connectivity_rules_prefers_core_identity_when_dimensions_match(
+        self, mock_client
+    ):
+        mock_client.list_morphologies_summary = AsyncMock(
+            return_value={
+                "items": [
+                    {
+                        "name": "all_to_all",
+                        "type": "patterns",
+                        "class": "core",
+                        "pattern_count": 1,
+                        "source": "genome",
+                    },
+                    {
+                        "name": "block_to_block",
+                        "type": "vectors",
+                        "class": "core",
+                        "pattern_count": 1,
+                        "source": "genome",
+                    },
+                ]
+            }
+        )
+        mock_client.get_area_parameters = AsyncMock(
+            side_effect=[
+                {"cortical_dimensions": [2, 2, 1]},
+                {"cortical_dimensions": [2, 2, 1]},
+            ]
+        )
+
+        out = await mock_client.recommend_connectivity_rules(
+            src_area="src",
+            dst_area="dst",
+            intent="one-to-one identity map",
+            prefer_core=True,
+            limit=3,
+        )
+        assert out["selected"]["name"] == "block_to_block"
+        assert out["selected"]["dimension_fit"] == "compatible"
+
+    @pytest.mark.asyncio
+    async def test_recommend_connectivity_rules_returns_error_when_no_intent_match(
+        self, mock_client
+    ):
+        mock_client.list_morphologies_summary = AsyncMock(
+            return_value={
+                "items": [
+                    {
+                        "name": "all_to_all",
+                        "type": "patterns",
+                        "class": "core",
+                        "pattern_count": 1,
+                        "source": "genome",
+                    }
+                ]
+            }
+        )
+        mock_client.get_area_parameters = AsyncMock(
+            side_effect=[
+                {"cortical_dimensions": [1, 1, 1]},
+                {"cortical_dimensions": [1, 1, 1]},
+            ]
+        )
+
+        out = await mock_client.recommend_connectivity_rules(
+            src_area="src",
+            dst_area="dst",
+            intent="diagonal gyro transform",
+        )
+        assert out["error"] == "no_rule_match_for_intent"
+
+    @pytest.mark.asyncio
+    async def test_apply_connectivity_rule_appends_existing_mapping(self, mock_client):
+        mock_client.list_morphologies_summary = AsyncMock(
+            return_value={
+                "items": [
+                    {
+                        "name": "block_to_block",
+                        "type": "vectors",
+                        "class": "core",
+                        "pattern_count": 1,
+                        "source": "genome",
+                    }
+                ]
+            }
+        )
+        mock_client.get_area_parameters = AsyncMock(
+            side_effect=[
+                {"cortical_dimensions": [1, 1, 1]},
+                {"cortical_dimensions": [1, 1, 1]},
+            ]
+        )
+        mock_client.get_cortical_mapping = AsyncMock(
+            return_value={
+                "rules": [
+                    {
+                        "morphology_id": "all_to_all",
+                        "postSynapticCurrent_multiplier": 1,
+                        "plasticity_flag": False,
+                    }
+                ]
+            }
+        )
+        mock_client.update_cortical_mapping = AsyncMock(return_value={"success": True})
+
+        out = await mock_client.apply_connectivity_rule(
+            src_area="src",
+            dst_area="dst",
+            intent="one-to-one identity",
+            postsynaptic_current_multiplier=3,
+            replace_existing=False,
+        )
+        assert out["selected_rule"]["name"] == "block_to_block"
+        sent_rules = mock_client.update_cortical_mapping.await_args.kwargs["mapping_rules"]
+        assert len(sent_rules) == 2
+        assert sent_rules[1]["morphology_id"] == "block_to_block"
+        assert sent_rules[1]["postSynapticCurrent_multiplier"] == 3
+
+
 class TestAutoPolarityProbe:
     @pytest.mark.asyncio
     async def test_infers_direction_from_z_centroid_shift(self, mock_client):

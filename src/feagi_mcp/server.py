@@ -1383,6 +1383,117 @@ async def update_cortical_mapping(
 
 
 @mcp.tool()
+async def describe_connectivity_rules(
+    include_classes: list[str] | None = None,
+    limit: int = 200,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Return morphology catalog with explicit use-case guidance per rule.
+
+    Use this to understand "when to use which rule" before wiring circuits.
+    Especially useful for core rules where the use-case is reusable across genomes.
+
+    Args:
+        include_classes: Optional class filter list (e.g. ["core"], ["custom"]).
+        limit: Max rows to return (default 200, hard cap 500).
+        offset: Skip first N rows after filtering.
+
+    Returns:
+        Morphology rows with use-case metadata (intent tags, description, dimension fit hints).
+    """
+    return await feagi.describe_connectivity_rules(
+        include_classes=include_classes,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@mcp.tool()
+async def recommend_connectivity_rules(
+    src_area: str,
+    dst_area: str,
+    intent: str,
+    prefer_core: bool = True,
+    limit: int = 5,
+) -> dict[str, Any]:
+    """Recommend existing morphology rules for a src->dst connection intent.
+
+    This ranking is deterministic and prefers core morphologies by default.
+    It does not create new custom rules.
+
+    Args:
+        src_area: Source cortical area ID.
+        dst_area: Destination cortical area ID.
+        intent: Human intent hint (e.g. "one-to-one identity", "transpose xy").
+        prefer_core: Prefer core rules over custom ones (default True).
+        limit: Maximum recommendations to return (default 5, max 20).
+
+    Returns:
+        Ranked recommendations plus selected best match.
+    """
+    return await feagi.recommend_connectivity_rules(
+        src_area=src_area,
+        dst_area=dst_area,
+        intent=intent,
+        prefer_core=prefer_core,
+        limit=limit,
+    )
+
+
+@mcp.tool()
+async def apply_connectivity_rule(
+    src_area: str,
+    dst_area: str,
+    intent: str,
+    postsynaptic_current_multiplier: int,
+    prefer_core: bool = True,
+    replace_existing: bool = False,
+    plasticity_flag: bool = False,
+    plasticity_constant: int = 0,
+    ltp_multiplier: int = 1,
+    ltd_multiplier: int = 1,
+    plasticity_window: int = 10,
+    synaptic_delay_bursts: int = 1,
+) -> dict[str, Any]:
+    """Apply best matching existing rule directly to src->dst mapping.
+
+    This is a reuse-first path: select existing morphology by intent, then apply via
+    ``update_cortical_mapping``. No custom morphology is created.
+
+    Args:
+        src_area: Source cortical area ID.
+        dst_area: Destination cortical area ID.
+        intent: Human intent hint used for deterministic rule selection.
+        postsynaptic_current_multiplier: Synaptic gain for the new mapping rule.
+        prefer_core: Prefer core rules over custom ones (default True).
+        replace_existing: If True, overwrite existing mapping rules.
+        plasticity_flag: Enable STDP/plasticity on the added rule.
+        plasticity_constant: Plasticity constant for the added rule.
+        ltp_multiplier: LTP multiplier (must fit i8 range).
+        ltd_multiplier: LTD multiplier (must fit i8 range).
+        plasticity_window: Plasticity window in bursts.
+        synaptic_delay_bursts: Axonal delay in bursts (>=1).
+
+    Returns:
+        Selected rule, applied mapping rule payload, and update result.
+    """
+    return await feagi.apply_connectivity_rule(
+        src_area=src_area,
+        dst_area=dst_area,
+        intent=intent,
+        postsynaptic_current_multiplier=postsynaptic_current_multiplier,
+        prefer_core=prefer_core,
+        replace_existing=replace_existing,
+        plasticity_flag=plasticity_flag,
+        plasticity_constant=plasticity_constant,
+        ltp_multiplier=ltp_multiplier,
+        ltd_multiplier=ltd_multiplier,
+        plasticity_window=plasticity_window,
+        synaptic_delay_bursts=synaptic_delay_bursts,
+    )
+
+
+@mcp.tool()
 async def delete_cortical_mapping(src_area: str, dst_area: str) -> dict[str, Any]:
     """Delete all connections between two cortical areas.
 
