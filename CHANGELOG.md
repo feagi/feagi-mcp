@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.12] - 2026-09-02
+
+### Changed
+- Release preparation: aligned package metadata and runtime version declarations to `0.0.12`
+  across `pyproject.toml`, `src/feagi_mcp/__init__.py`, and `mcp-manifest.json`.
+
 ## [0.0.11] - 2026-08-20
 
 ### Changed
