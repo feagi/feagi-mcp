@@ -3247,14 +3247,10 @@ class FeagiClient:
             self.get_area_parameters(dst_clean),
         )
         src_dims = (
-            self._extract_cortical_dimensions(src_params)
-            if isinstance(src_params, dict)
-            else None
+            self._extract_cortical_dimensions(src_params) if isinstance(src_params, dict) else None
         )
         dst_dims = (
-            self._extract_cortical_dimensions(dst_params)
-            if isinstance(dst_params, dict)
-            else None
+            self._extract_cortical_dimensions(dst_params) if isinstance(dst_params, dict) else None
         )
         same_dims = src_dims is not None and dst_dims is not None and src_dims == dst_dims
 
@@ -3299,9 +3295,7 @@ class FeagiClient:
                     "score": score,
                     "use_case": metadata,
                     "dimension_fit": (
-                        "compatible"
-                        if same_dims or not requires_same_dims
-                        else "incompatible"
+                        "compatible" if same_dims or not requires_same_dims else "incompatible"
                     ),
                 }
             )
