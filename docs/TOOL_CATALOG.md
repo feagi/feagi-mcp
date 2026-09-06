@@ -184,7 +184,7 @@ result = await stimulate_area("cStart", [0, 0, 0], 1.0, 500)
 
 **Example:**
 ```python
-with open("my_genome.json") as f:
+with open("my_brain.genome") as f:
     result = await upload_genome(f.read())
 # Returns success, cortical_area_count, brain_region_count
 ```

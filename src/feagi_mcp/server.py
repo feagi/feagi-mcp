@@ -12,7 +12,11 @@ from feagi_mcp.bv_operations import list_operation_summaries
 from feagi_mcp.composer_simulator_packs import ComposerSimulatorPacksClient
 from feagi_mcp.config import load_config
 from feagi_mcp.cortical_id_decode import decode_cortical_id_interpretation
-from feagi_mcp.feagi_client import FeagiClient
+from feagi_mcp.feagi_client import FeagiClient, analyze_genome_completeness
+from feagi_mcp.genome_artifact import (
+    decode_genome_artifact,
+    is_genome_artifact_file_name,
+)
 from feagi_mcp.io_cortical_id_encode import encode_io_cortical_id
 from feagi_mcp.placement_policy import (
     LAYOUT_XY_PLANE,
@@ -429,6 +433,25 @@ async def download_genome() -> dict[str, Any]:
 
 
 @mcp.tool()
+async def download_connectome() -> dict[str, Any]:
+    """Save the running connectome to disk (GET /v1/connectome/download).
+
+    Returns ``file_path`` with the full saved filename and extension.
+    The connectome contents are not returned in the response.
+    """
+    return await feagi.download_connectome()
+
+
+@mcp.tool()
+async def upload_connectome(file_path: str) -> dict[str, Any]:
+    """Upload a saved ``.connectome`` file (POST /v1/connectome/upload).
+
+    ``file_path`` is the full path returned by ``download_connectome``.
+    """
+    return await feagi.upload_connectome(file_path)
+
+
+@mcp.tool()
 async def download_region_genome(region_id: str) -> dict[str, Any]:
     """Download a brain-region subtree as a standalone genome JSON.
 
@@ -492,7 +515,7 @@ async def load_barebones_genome() -> dict[str, Any]:
 
 @mcp.tool()
 async def load_genome_from_file(path: str) -> dict[str, Any]:
-    """Load (provision) a genome into the live FEAGI from a local JSON file path.
+    """Load a `.genome` artifact into the live FEAGI.
 
     Reads the genome JSON file *inside the MCP server process* and uploads it to FEAGI,
     replacing the current genome. Prefer this over ``upload_genome`` whenever the genome
@@ -503,7 +526,7 @@ async def load_genome_from_file(path: str) -> dict[str, Any]:
     before driving a closed-loop run.
 
     Args:
-        path: Filesystem path to a genome JSON file (absolute, or relative to the MCP server's
+        path: Filesystem path to a `.genome` file (absolute, or relative to the MCP server's
             working directory). ``~`` is expanded.
 
     Returns:
@@ -514,13 +537,20 @@ async def load_genome_from_file(path: str) -> dict[str, Any]:
         not uploaded.
     """
     genome_path = Path(path).expanduser()
+    if not is_genome_artifact_file_name(genome_path.name):
+        return {
+            "success": False,
+            "error": "invalid_extension",
+            "path": str(genome_path),
+            "message": "Genome files must use the .genome extension",
+        }
     if not genome_path.exists():
         return {"success": False, "error": "file_not_found", "path": str(genome_path)}
     if not genome_path.is_file():
         return {"success": False, "error": "not_a_file", "path": str(genome_path)}
 
     try:
-        raw = genome_path.read_text(encoding="utf-8")
+        artifact = genome_path.read_bytes()
     except OSError as e:
         return {
             "success": False,
@@ -530,21 +560,20 @@ async def load_genome_from_file(path: str) -> dict[str, Any]:
         }
 
     try:
-        genome_data = json.loads(raw)
-    except json.JSONDecodeError as e:
+        genome_data = decode_genome_artifact(artifact)
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
         return {
             "success": False,
             "error": "invalid_json",
             "path": str(genome_path),
             "message": str(e),
         }
-
-    if not isinstance(genome_data, dict):
+    except ValueError as e:
         return {
             "success": False,
             "error": "invalid_genome",
             "path": str(genome_path),
-            "message": "genome root must be a JSON object",
+            "message": str(e),
         }
 
     upload_result = await feagi.upload_genome(genome_data)
@@ -750,11 +779,16 @@ async def validate_genome(genome_json: str) -> dict[str, Any]:
     if not morphologies:
         warnings.append("No neuron morphologies defined")
 
+    completeness = analyze_genome_completeness(genome)
+    if completeness["missing"]:
+        warnings.append("Genome completeness gaps: " + ", ".join(completeness["missing"]))
+
     return {
         "valid": len(issues) == 0,
         "issues": issues,
         "warnings": warnings,
         "cortical_area_count": len(area_ids) if "area_ids" in locals() else 0,
+        "completeness": completeness,
     }
 
 
@@ -2166,6 +2200,40 @@ async def get_neuron_state_by_id(neuron_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+async def list_memory_neurons(
+    cortical_id: str,
+    page: int = 0,
+    page_size: int = 50,
+) -> dict[str, Any]:
+    """List runtime memory neurons in one memory cortical area.
+
+    Returns paginated neuron IDs, short-term and long-term counts, lifecycle
+    parameters, upstream pattern-cache size, and synapse counts from
+    ``GET /v1/cortical_area/memory``.
+
+    Args:
+        cortical_id: Base64 cortical ID of a memory area.
+        page: Zero-based result page.
+        page_size: Number of neuron IDs to return (1..50).
+    """
+    return await feagi.list_memory_neurons(cortical_id, page, page_size)
+
+
+@mcp.tool()
+async def inspect_memory_neuron(neuron_id: int) -> dict[str, Any]:
+    """Inspect one memory neuron's lifecycle, identity, and realized synapses.
+
+    Calls ``GET /v1/connectome/memory_neuron`` and returns the pattern hash,
+    short/long-term state, lifespan, activation history, cortical identity,
+    and complete incoming/outgoing synapse details with weights.
+
+    Args:
+        neuron_id: Runtime memory-neuron ID returned by ``list_memory_neurons``.
+    """
+    return await feagi.inspect_memory_neuron(neuron_id)
+
+
+@mcp.tool()
 async def get_voxel_neurons(
     cortical_id: str,
     x: int,
@@ -2255,9 +2323,11 @@ async def snapshot_genome(
 ) -> dict[str, Any]:
     """Save the running genome blueprint to disk under ``label``.
 
-    Persists ``GET /v1/genome/download`` to ``feagi-mcp/var/snapshots/<label>.json``
-    (or ``$FEAGI_MCP_SNAPSHOTS_DIR``). Survives MCP restarts. Captures the
-    blueprint only - synaptic weights and membrane potentials are not saved.
+    Persists ``GET /v1/genome/download`` as a standard
+    ``feagi-mcp/var/snapshots/<label>.genome`` artifact, with annotations in
+    ``<label>.snapshot.json`` (or under ``$FEAGI_MCP_SNAPSHOTS_DIR``).
+    Survives MCP restarts. Captures the blueprint only - synaptic weights and
+    membrane potentials are not saved.
 
     Args:
         label: Filename-safe identifier matching ``[A-Za-z0-9_.-]{1,128}``.

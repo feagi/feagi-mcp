@@ -20,6 +20,13 @@ Model Context Protocol (MCP) server for FEAGI neural monitoring and control. Ena
 - **Download genomes** - Retrieve current brain configuration
 - **List areas** - Enumerate all cortical regions
 
+External `.genome` files pass through `feagi_mcp.genome_artifact`. The current
+codec uses UTF-8 JSON, but artifact encoding is separate from the embedded
+`genome_schema_version` and its FEAGI migration chain. Direct JSON parameters
+to MCP tools remain API documents rather than file artifacts. MCP snapshots
+store the standard genome artifact in `<label>.genome` and keep snapshot-only
+annotations in `<label>.snapshot.json`.
+
 ### Composer integration (optional)
 - **Simulator asset packs** - List/resolve/download shared packs from Composer when `FEAGI_COMPOSER_BASE_URL` is set
 
@@ -124,6 +131,9 @@ Set `FEAGI_COMPOSER_BASE_URL` to the Composer HTTPS root (e.g. staging). Read-on
 
 ### Inspection
 - `list_cortical_areas` - Enumerate all brain regions
+- `list_memory_neurons` - List paginated runtime memory-neuron IDs and ST/LT counts
+- `inspect_memory_neuron` - Inspect one memory neuron's lifecycle and weighted synaptic edges
+- `diagnose_mapping_plasticity` - Inspect plastic rules and realized source-to-destination weights
 - `get_genome_info` - Get metadata about current genome
 - `validate_genome` - Check genome structure for issues
 - `get_burst_engine_status` - Check burst engine state

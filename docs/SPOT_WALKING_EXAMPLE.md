@@ -7,7 +7,7 @@ This guide demonstrates how to use FEAGI MCP to iteratively design, debug, and t
 - FEAGI MCP installed and configured in Cursor
 - FEAGI running at localhost:8000
 - MuJoCo Spot controller running
-- Spot walking genome loaded (see `/tmp/spot_walking_genome_v2.json`)
+- Spot walking genome loaded (see `/path/to/spot_walking.genome`)
 
 ## Workflow: Debug Non-Moving Robot
 

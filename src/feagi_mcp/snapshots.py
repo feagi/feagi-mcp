@@ -1,13 +1,13 @@
 """On-disk genome snapshot manager.
 
-Provides labeled save/restore of FEAGI genome blueprints (the JSON document returned
-by ``GET /v1/genome/download``). Snapshots are stored under ``var/snapshots/`` inside
-the feagi-mcp project root by default, or under ``$FEAGI_MCP_SNAPSHOTS_DIR`` when set.
+Provides labeled save/restore of FEAGI genome artifacts. Each ``<label>.genome``
+file contains a standard uploadable genome document. Snapshot-only annotations
+are stored separately in ``<label>.snapshot.json``.
 
 Persisting on disk lets debug sessions span MCP restarts without losing rollback
 points. Snapshots only capture the genome blueprint - they do not include live
 membrane potentials, synaptic weights, or any runtime neural state. Restoring a
-snapshot uploads the saved JSON via ``POST /v1/genome/upload``.
+snapshot uploads the decoded genome via ``POST /v1/genome/upload``.
 """
 
 from __future__ import annotations
@@ -20,6 +20,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from feagi_mcp.genome_artifact import decode_genome_artifact, encode_genome_artifact
 
 logger = logging.getLogger(__name__)
 
@@ -94,34 +96,43 @@ class SnapshotManager:
     def _path_for(self, label: str) -> Path:
         """Resolve the filesystem path for ``label`` (after validation)."""
         clean = validate_label(label)
-        return self._directory / f"{clean}.json"
+        return self._directory / f"{clean}.genome"
+
+    def _metadata_path_for(self, label: str) -> Path:
+        """Resolve the sidecar metadata path for ``label``."""
+        clean = validate_label(label)
+        return self._directory / f"{clean}.snapshot.json"
 
     def list_snapshots(self) -> list[SnapshotInfo]:
         """Return metadata for every snapshot file in the directory."""
         snapshots: list[SnapshotInfo] = []
-        for entry in sorted(self._directory.glob("*.json")):
+        for entry in sorted(self._directory.glob("*.genome")):
             label = entry.stem
             try:
                 stat = entry.stat()
             except OSError as e:
                 logger.warning("Cannot stat snapshot %s: %s", entry, e)
                 continue
-            description = ""
+            metadata_path = self._metadata_path_for(label)
             try:
-                with entry.open("r", encoding="utf-8") as fp:
-                    payload = json.load(fp)
-                if isinstance(payload, dict):
-                    raw_desc = payload.get("description")
-                    if isinstance(raw_desc, str):
-                        description = raw_desc
+                with metadata_path.open("r", encoding="utf-8") as fp:
+                    metadata = json.load(fp)
+                if not isinstance(metadata, dict):
+                    raise ValueError("snapshot metadata must be a JSON object")
+                description = str(metadata["description"])
+                created_at_ms = int(metadata["created_at_ms"])
             except (OSError, json.JSONDecodeError) as e:
-                logger.warning("Cannot read snapshot %s: %s", entry, e)
+                logger.warning("Cannot read snapshot metadata %s: %s", metadata_path, e)
+                continue
+            except (KeyError, TypeError, ValueError) as e:
+                logger.warning("Invalid snapshot metadata %s: %s", metadata_path, e)
+                continue
             snapshots.append(
                 SnapshotInfo(
                     label=label,
                     path=entry,
                     size_bytes=stat.st_size,
-                    created_at_ms=int(stat.st_mtime * 1000),
+                    created_at_ms=created_at_ms,
                     description=description,
                 )
             )
@@ -139,7 +150,7 @@ class SnapshotManager:
         Args:
             label: Human-readable identifier (filename-safe).
             genome: JSON-serializable genome blueprint payload.
-            description: Optional free-form annotation stored with the snapshot.
+            description: Optional free-form annotation stored in the metadata sidecar.
             overwrite: When False, raises ``FileExistsError`` if the label already
                 exists. Set True to replace an existing snapshot.
 
@@ -149,46 +160,50 @@ class SnapshotManager:
         if not isinstance(genome, dict):
             raise ValueError("genome must be a dict")
         path = self._path_for(label)
+        metadata_path = self._metadata_path_for(label)
         if path.exists() and not overwrite:
             raise FileExistsError(f"Snapshot '{label}' already exists at {path}")
-        envelope: dict[str, Any] = {
+        metadata: dict[str, Any] = {
             "label": validate_label(label),
             "description": description or "",
             "created_at_ms": int(time.time() * 1000),
-            "genome": genome,
         }
-        tmp_path = path.with_suffix(path.suffix + ".tmp")
-        with tmp_path.open("w", encoding="utf-8") as fp:
-            json.dump(envelope, fp, ensure_ascii=False)
-        os.replace(tmp_path, path)
+        artifact_temp_path = path.with_suffix(path.suffix + ".tmp")
+        metadata_temp_path = metadata_path.with_suffix(metadata_path.suffix + ".tmp")
+        artifact_temp_path.write_bytes(encode_genome_artifact(genome))
+        with metadata_temp_path.open("w", encoding="utf-8") as fp:
+            json.dump(metadata, fp, ensure_ascii=False)
+        os.replace(metadata_temp_path, metadata_path)
+        os.replace(artifact_temp_path, path)
         stat = path.stat()
         return SnapshotInfo(
-            label=envelope["label"],
+            label=metadata["label"],
             path=path,
             size_bytes=stat.st_size,
-            created_at_ms=envelope["created_at_ms"],
-            description=envelope["description"],
+            created_at_ms=metadata["created_at_ms"],
+            description=metadata["description"],
         )
 
     def load(self, label: str) -> tuple[SnapshotInfo, dict[str, Any]]:
         """Load and parse a stored snapshot."""
         path = self._path_for(label)
+        metadata_path = self._metadata_path_for(label)
         if not path.exists():
             raise FileNotFoundError(f"Snapshot '{label}' not found at {path}")
-        with path.open("r", encoding="utf-8") as fp:
-            envelope = json.load(fp)
-        if not isinstance(envelope, dict):
-            raise ValueError(f"Snapshot '{label}' is malformed (expected JSON object)")
-        genome = envelope.get("genome")
-        if not isinstance(genome, dict):
-            raise ValueError(f"Snapshot '{label}' is missing 'genome' object")
+        if not metadata_path.exists():
+            raise FileNotFoundError(f"Snapshot metadata '{label}' not found at {metadata_path}")
+        genome = decode_genome_artifact(path.read_bytes())
+        with metadata_path.open("r", encoding="utf-8") as fp:
+            metadata = json.load(fp)
+        if not isinstance(metadata, dict):
+            raise ValueError(f"Snapshot metadata '{label}' must be a JSON object")
         stat = path.stat()
         info = SnapshotInfo(
-            label=str(envelope.get("label", label)),
+            label=str(metadata["label"]),
             path=path,
             size_bytes=stat.st_size,
-            created_at_ms=int(envelope.get("created_at_ms", int(stat.st_mtime * 1000))),
-            description=str(envelope.get("description", "")),
+            created_at_ms=int(metadata["created_at_ms"]),
+            description=str(metadata["description"]),
         )
         return info, genome
 
@@ -198,4 +213,5 @@ class SnapshotManager:
         if not path.exists():
             return False
         path.unlink()
+        self._metadata_path_for(label).unlink(missing_ok=True)
         return True

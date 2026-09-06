@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.13] - 2026-09-06
+
+### Added
+- **`download_connectome`** / **`upload_connectome`**: MCP tools and `FeagiClient` methods for
+  saving and restoring running NPU state via FEAGI connectome endpoints.
+- **`list_memory_neurons`** / **`inspect_memory_neuron`**: Paginated memory-neuron listing and
+  per-neuron lifecycle/synapse inspection.
+- **`genome_artifact`**: Explicit encoding boundary for external `.genome` files (UTF-8 JSON
+  codec); snapshot manager and upload paths use the shared artifact contract.
+
+### Changed
+- **Dependencies**: declare `feagi-core>=2.1.44` (Python SDK from PyPI).
+- **Introspection discovery**: when `FEAGI_RUNTIME_ROOT` is set, search only that root
+  (do not merge descriptors from `~/.feagi-staging` / `~/.feagi`).
+- **Snapshots**: store standard genome artifacts in `<label>.genome` with snapshot metadata in
+  `<label>.snapshot.json`.
+- Release preparation: aligned package metadata and runtime version declarations to `0.0.13`
+  across `pyproject.toml`, `src/feagi_mcp/__init__.py`, and `mcp-manifest.json`.
+
 ## [0.0.12] - 2026-09-02
 
 ### Changed

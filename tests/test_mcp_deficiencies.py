@@ -205,6 +205,73 @@ class TestNeuronInspection:
         mock_client._client.get.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_list_memory_neurons_exposes_runtime_ids_and_counts(self, mock_client):
+        mock_client._client.get.return_value = _ok(
+            {
+                "cortical_id": "bWVtb3J5",
+                "cortical_idx": 16,
+                "short_term_neuron_count": 1,
+                "long_term_neuron_count": 2,
+                "total_memory_neuron_ids": 3,
+                "memory_neuron_ids": [50000001, 50000002, 50000003],
+                "page": 0,
+                "page_size": 50,
+                "has_more": False,
+            }
+        )
+
+        result = await mock_client.list_memory_neurons("bWVtb3J5")
+
+        assert result["long_term_neuron_count"] == 2
+        assert result["memory_neuron_ids"] == [50000001, 50000002, 50000003]
+        call = mock_client._client.get.call_args
+        assert call.args[0].endswith("/v1/cortical_area/memory")
+        assert call.kwargs["params"] == {
+            "cortical_id": "bWVtb3J5",
+            "page": "0",
+            "page_size": "50",
+        }
+
+    @pytest.mark.asyncio
+    async def test_list_memory_neurons_rejects_invalid_pagination(self, mock_client):
+        result = await mock_client.list_memory_neurons("bWVtb3J5", page=-1)
+
+        assert result["error"] == "page must be non-negative"
+        mock_client._client.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_inspect_memory_neuron_returns_lifecycle_and_synapses(self, mock_client):
+        mock_client._client.get.return_value = _ok(
+            {
+                "neuron_id": 50000001,
+                "cortical_idx": 16,
+                "cortical_id": "bWVtb3J5",
+                "pattern_hash": 1234,
+                "is_longterm_memory": True,
+                "activation_count": 7,
+                "outgoing_synapse_count": 1,
+                "incoming_synapse_count": 1,
+                "outgoing_synapses": [{"target_neuron_id": 50000002, "weight": 1.5}],
+                "incoming_synapses": [{"source_neuron_id": 50000003, "weight": 0.75}],
+            }
+        )
+
+        result = await mock_client.inspect_memory_neuron(50000001)
+
+        assert result["is_longterm_memory"] is True
+        assert result["outgoing_synapses"][0]["weight"] == 1.5
+        call = mock_client._client.get.call_args
+        assert call.args[0].endswith("/v1/connectome/memory_neuron")
+        assert call.kwargs["params"] == {"neuron_id": "50000001"}
+
+    @pytest.mark.asyncio
+    async def test_inspect_memory_neuron_rejects_invalid_id(self, mock_client):
+        result = await mock_client.inspect_memory_neuron(0)
+
+        assert result["error"] == "neuron_id must be a positive integer"
+        mock_client._client.get.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_get_voxel_neurons_with_pagination(self, mock_client):
         mock_client._client.get.return_value = _ok({"voxel_neurons": []})
         result = await mock_client.get_voxel_neurons("c", 0, 0, 0, synapse_page=2)
@@ -508,6 +575,12 @@ class TestSnapshotManager:
         assert isinstance(info, SnapshotInfo)
         assert info.label == "alpha"
         assert info.path.exists()
+        assert info.path.suffix == ".genome"
+        assert json.loads(info.path.read_text(encoding="utf-8")) == {
+            "genome_title": "demo",
+            "blueprint": {"a": 1},
+        }
+        assert (tmp_path / "alpha.snapshot.json").exists()
 
         loaded_info, loaded_genome = manager.load("alpha")
         assert loaded_info.description == "first"
@@ -544,21 +617,26 @@ class TestSnapshotManager:
         manager = SnapshotManager(directory=tmp_path)
         manager.save("alpha", {"v": 1})
         assert manager.delete("alpha") is True
+        assert not (tmp_path / "alpha.snapshot.json").exists()
         with pytest.raises(FileNotFoundError):
             manager.load("alpha")
 
-    def test_load_rejects_malformed_envelope(self, tmp_path: Path):
+    def test_load_rejects_malformed_artifact(self, tmp_path: Path):
         manager = SnapshotManager(directory=tmp_path)
-        bad_path = tmp_path / "bad.json"
+        bad_path = tmp_path / "bad.genome"
         bad_path.write_text(json.dumps([1, 2, 3]), encoding="utf-8")
+        (tmp_path / "bad.snapshot.json").write_text(
+            json.dumps({"label": "bad", "description": "", "created_at_ms": 1}),
+            encoding="utf-8",
+        )
         with pytest.raises(ValueError):
             manager.load("bad")
 
-    def test_load_rejects_missing_genome_object(self, tmp_path: Path):
+    def test_load_requires_metadata_sidecar(self, tmp_path: Path):
         manager = SnapshotManager(directory=tmp_path)
-        bad_path = tmp_path / "bad.json"
-        bad_path.write_text(json.dumps({"label": "bad"}), encoding="utf-8")
-        with pytest.raises(ValueError):
+        bad_path = tmp_path / "bad.genome"
+        bad_path.write_text(json.dumps({"genome_title": "bad"}), encoding="utf-8")
+        with pytest.raises(FileNotFoundError, match="metadata"):
             manager.load("bad")
 
 

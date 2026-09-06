@@ -521,8 +521,12 @@ class TestConnectionManagement:
                 ],
             }
         )
-        mock_client.get_area_parameters = AsyncMock(
-            return_value={"area_id": "dst_area", "parameters": {"i": 99}}
+        mock_client.fetch_cortical_area_properties = AsyncMock(
+            return_value={
+                "cortical_id": "dst_area",
+                "cortical_idx": 99,
+                "cortical_name": "Destination memory",
+            }
         )
         mock_client.list_area_synapses = AsyncMock(
             return_value={
@@ -535,6 +539,8 @@ class TestConnectionManagement:
                         "target_neuron_id": 10,
                         "weight": 1.5,
                         "postsynaptic_potential": 500.0,
+                        "target_cortical_id": None,
+                        "target_cortical_idx": 0,
                     },
                     {
                         "source_neuron_id": 2,
@@ -570,6 +576,66 @@ class TestConnectionManagement:
         assert stats["sum"] == 1.5
         assert stats["zero_weight_count"] == 1
         assert stats["nonzero_weight_count"] == 1
+        assert scan["sample"][0]["target_cortical_id"] == "dst_area"
+        assert scan["sample"][0]["target_cortical_idx"] == 99
+        assert scan["sample"][0]["target_identity_source"] == "destination_neuron_membership"
+        assert scan["sample"][0]["reported_target_cortical_id"] is None
+        assert scan["sample"][0]["reported_target_cortical_idx"] == 0
+        assert result["resolution"]["destination_cortical_idx"] == 99
+
+    @pytest.mark.asyncio
+    async def test_mapping_diagnostic_resolves_paginated_memory_destination_ids(self, mock_client):
+        """Dynamic memory IDs must come from the memory endpoint, not dense neurons."""
+        mock_client.get_cortical_mapping = AsyncMock(
+            return_value={
+                "rules": [
+                    {
+                        "morphology_id": "associative_memory",
+                        "plasticity_flag": True,
+                    }
+                ]
+            }
+        )
+        mock_client.fetch_cortical_area_properties = AsyncMock(
+            return_value={
+                "cortical_id": "memory_dst",
+                "cortical_idx": 16,
+                "cortical_type": "memory",
+                "properties": {"is_mem_type": True},
+            }
+        )
+        mock_client.list_area_synapses = AsyncMock(
+            return_value={
+                "synapses": [
+                    {
+                        "source_neuron_id": 50000001,
+                        "target_neuron_id": 50000002,
+                        "weight": 2.5,
+                        "target_cortical_id": None,
+                        "target_cortical_idx": 0,
+                    }
+                ]
+            }
+        )
+        mock_client.list_memory_neurons = AsyncMock(
+            side_effect=[
+                {"memory_neuron_ids": [50000001], "has_more": True},
+                {"memory_neuron_ids": [50000002], "has_more": False},
+            ]
+        )
+
+        result = await mock_client.get_mapping_plasticity_diagnostics("memory_src", "memory_dst")
+
+        assert result["synapse_scan"]["matched_synapse_count_src_to_dst"] == 1
+        sample = result["synapse_scan"]["sample"][0]
+        assert sample["target_neuron_id"] == 50000002
+        assert sample["target_cortical_id"] == "memory_dst"
+        assert sample["target_cortical_idx"] == 16
+        assert sample["target_identity_source"] == "destination_neuron_membership"
+        assert result["resolution"]["destination_neuron_count"] == 2
+        assert result["resolution"]["destination_is_memory_area"] is True
+        assert mock_client.list_memory_neurons.await_count == 2
+        mock_client._client.get.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_server_diagnose_mapping_plasticity_tool(self, monkeypatch):
@@ -589,6 +655,40 @@ class TestConnectionManagement:
         assert result["src_area"] == "S"
         assert result["dst_area"] == "D"
         assert result["sample_limit"] == 7
+
+
+class TestMemoryNeuronTools:
+    """Direct MCP coverage for runtime memory-neuron inspection."""
+
+    @pytest.mark.asyncio
+    async def test_server_list_memory_neurons_tool(self, monkeypatch):
+        """Server tool should return the paginated memory-area payload."""
+        from feagi_mcp import server
+
+        list_memory_neurons = AsyncMock(
+            return_value={"memory_neuron_ids": [50000001], "has_more": False}
+        )
+        monkeypatch.setattr(server.feagi, "list_memory_neurons", list_memory_neurons)
+
+        result = await server.list_memory_neurons("memory_area", page=2, page_size=10)
+
+        assert result["memory_neuron_ids"] == [50000001]
+        list_memory_neurons.assert_awaited_once_with("memory_area", 2, 10)
+
+    @pytest.mark.asyncio
+    async def test_server_inspect_memory_neuron_tool(self, monkeypatch):
+        """Server tool should expose lifecycle and synapse details for one memory neuron."""
+        from feagi_mcp import server
+
+        inspect_memory_neuron = AsyncMock(
+            return_value={"neuron_id": 50000001, "is_longterm_memory": True}
+        )
+        monkeypatch.setattr(server.feagi, "inspect_memory_neuron", inspect_memory_neuron)
+
+        result = await server.inspect_memory_neuron(50000001)
+
+        assert result["is_longterm_memory"] is True
+        inspect_memory_neuron.assert_awaited_once_with(50000001)
 
 
 class TestFilteredLists:
@@ -660,17 +760,74 @@ class TestBrainVisualizerParity:
         mock_response.status_code = 200
         mock_response.json.return_value = {
             "message": "Genome saved successfully",
-            "file_path": "/tmp/out.json",
+            "file_path": "/tmp/out.genome",
         }
         mock_client._client.post.return_value = mock_response
 
-        result = await mock_client.save_genome_to_filesystem(file_path="/tmp/out.json")
+        result = await mock_client.save_genome_to_filesystem(file_path="/tmp/out.genome")
 
-        assert result["file_path"] == "/tmp/out.json"
+        assert result["file_path"] == "/tmp/out.genome"
         mock_client._client.post.assert_called_once_with(
             "http://localhost:8000/v1/genome/save",
-            json={"file_path": "/tmp/out.json"},
+            json={"file_path": "/tmp/out.genome"},
         )
+
+    @pytest.mark.asyncio
+    async def test_download_connectome(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "file_path": "/tmp/connectome/saved_connectome_2026_09_02-17_45_37.connectome",
+            "message": "Connectome saved successfully",
+        }
+        mock_client._client.get.return_value = mock_response
+
+        result = await mock_client.download_connectome()
+
+        assert result["file_path"].endswith(".connectome")
+        assert "saved_connectome" in result["file_path"]
+        mock_client._client.get.assert_called_once_with(
+            "http://localhost:8000/v1/connectome/download"
+        )
+
+    @pytest.mark.asyncio
+    async def test_upload_connectome(self, mock_client, tmp_path):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"message": "Connectome imported successfully"}
+        mock_client._client.post.return_value = mock_response
+        connectome_path = tmp_path / "saved_connectome_test.connectome"
+        connectome_path.write_bytes(b"FEAGI")
+
+        result = await mock_client.upload_connectome(str(connectome_path))
+
+        assert "imported" in result["message"]
+        mock_client._client.post.assert_called_once()
+        call_kwargs = mock_client._client.post.call_args
+        assert call_kwargs.args[0] == "http://localhost:8000/v1/connectome/upload"
+        assert "file" in call_kwargs.kwargs["files"]
+
+
+class TestGenomeCompleteness:
+    def test_analyze_genome_completeness_flat_memory_plastic_regions(self):
+        from feagi_mcp.feagi_client import analyze_genome_completeness
+
+        genome = {
+            "blueprint": {
+                "_____10c-mmem01-cx-memory-b": True,
+                "_____10c-csrc01-cx-dstmap-d": {
+                    "mmem01": [{"morphology_id": "projector", "plasticity_flag": True}]
+                },
+            },
+            "brain_regions": {"root": {"title": "Root"}},
+            "neuron_morphologies": {"projector": {"type": "functions"}},
+            "physiology": {"simulation_timestep": 0.025},
+        }
+        result = analyze_genome_completeness(genome)
+        assert result["complete"] is True
+        assert result["memory_area_count"] == 1
+        assert result["plastic_mapping_count"] == 1
+        assert result["brain_region_count"] == 1
 
 
 class TestValidateBrainRegionHierarchyTool:
@@ -1135,7 +1292,7 @@ class TestLoadGenomeFromFileTool:
             "genome_title": "iris_classifier",
             "blueprint": {"iv00_C": {}, "o____C": {}},
         }
-        genome_file = tmp_path / "iris.genome.json"
+        genome_file = tmp_path / "iris.genome"
         genome_file.write_text(json.dumps(genome), encoding="utf-8")
 
         captured = {}
@@ -1167,11 +1324,23 @@ class TestLoadGenomeFromFileTool:
 
         monkeypatch.setattr(server.feagi, "upload_genome", fake_upload)
 
-        result = await server.load_genome_from_file(str(tmp_path / "missing.json"))
+        result = await server.load_genome_from_file(str(tmp_path / "missing.genome"))
 
         assert result["success"] is False
         assert result["error"] == "file_not_found"
         assert called["uploaded"] is False
+
+    @pytest.mark.asyncio
+    async def test_json_extension_is_rejected(self, tmp_path):
+        from feagi_mcp import server
+
+        genome_file = tmp_path / "legacy.json"
+        genome_file.write_text("{}", encoding="utf-8")
+
+        result = await server.load_genome_from_file(str(genome_file))
+
+        assert result["success"] is False
+        assert result["error"] == "invalid_extension"
 
     @pytest.mark.asyncio
     async def test_invalid_json_returns_error_without_uploading(self, monkeypatch, tmp_path):
@@ -1185,7 +1354,7 @@ class TestLoadGenomeFromFileTool:
 
         monkeypatch.setattr(server.feagi, "upload_genome", fake_upload)
 
-        bad_file = tmp_path / "bad.json"
+        bad_file = tmp_path / "bad.genome"
         bad_file.write_text("{ not valid json", encoding="utf-8")
 
         result = await server.load_genome_from_file(str(bad_file))

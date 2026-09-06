@@ -12,13 +12,14 @@ internals so the FEAGI MCP can be used from arbitrary host environments
 
 Lookup precedence for the runtime root:
 
-1. ``FEAGI_RUNTIME_ROOT`` environment variable, if set and non-empty.
+1. ``FEAGI_RUNTIME_ROOT`` environment variable, if set and non-empty (exclusive;
+   home defaults are not searched).
 2. ``~/.feagi-staging`` (matches feagi-desktop's non-production builds).
 3. ``~/.feagi`` (matches feagi-desktop's production builds).
 
-The first directory that actually contains a matching descriptor wins. If
-none are present, the lookup returns ``None`` so callers can fall back to
-explicit ``introspection_url`` arguments.
+For (2) and (3), :func:`discover_endpoint` returns the first root that contains a
+matching descriptor. :func:`discover_all_endpoints` aggregates descriptors from
+every candidate root.
 """
 
 from __future__ import annotations
@@ -95,18 +96,16 @@ def _candidate_runtime_roots(*, env_override: str | None = None) -> list[Path]:
             return [override_path]
         return []
 
-    candidates: list[Path] = []
     env_root = os.environ.get("FEAGI_RUNTIME_ROOT")
     if env_root:
         env_path = Path(env_root).expanduser()
         if env_path.as_posix().strip():
-            candidates.append(env_path)
+            return [env_path]
+
     home = Path.home()
     # Staging first because that's what active development uses; production
     # builds are usually installed only on end-user machines.
-    candidates.append(home / ".feagi-staging")
-    candidates.append(home / ".feagi")
-    return candidates
+    return [home / ".feagi-staging", home / ".feagi"]
 
 
 def _descriptor_path(root: Path, controller_id: str) -> Path:

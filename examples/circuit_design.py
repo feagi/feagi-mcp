@@ -74,7 +74,7 @@ async def design_cpg_circuit():
 async def validate_custom_genome():
     """Example: Validate a genome before uploading."""
 
-    genome_path = "/Users/nadji/code/FEAGI-2.0/tmp/spot_walking_genome_v2.json"
+    genome_path = "/path/to/spot_walking.genome"
 
     with open(genome_path) as f:
         genome_json = f.read()

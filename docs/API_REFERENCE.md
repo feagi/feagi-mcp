@@ -398,7 +398,7 @@ Upload a new genome to FEAGI.
 
 **Example:**
 ```python
-with open("my_genome.json") as f:
+with open("my_brain.genome") as f:
     genome_str = f.read()
     
 result = await upload_genome(genome_str)

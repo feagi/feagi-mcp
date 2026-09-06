@@ -2,7 +2,7 @@
   "name": "feagi",
   "displayName": "FEAGI Neural Monitor",
   "description": "Observe and control FEAGI neural systems for LLM-assisted circuit design",
-  "version": "0.0.12",
+  "version": "0.0.13",
   "publisher": "neuraville",
   "categories": ["AI", "Robotics", "Science"],
   "keywords": ["feagi", "neural", "brain", "robotics", "mcp", "ai"],
@@ -61,6 +61,16 @@
       "description": "Get neuron properties and configuration"
     },
     {
+      "name": "list_memory_neurons",
+      "category": "inspection",
+      "description": "List paginated runtime memory-neuron IDs and lifecycle counts for an area"
+    },
+    {
+      "name": "inspect_memory_neuron",
+      "category": "inspection",
+      "description": "Inspect one memory neuron's identity, lifecycle, and weighted synaptic edges"
+    },
+    {
       "name": "get_embodiment_status",
       "category": "monitoring",
       "description": "Check robot controller connections and I/O mappings"
@@ -79,6 +89,16 @@
       "name": "download_genome",
       "category": "genome",
       "description": "Download complete genome configuration"
+    },
+    {
+      "name": "download_connectome",
+      "category": "connectome",
+      "description": "Save the running connectome to disk and return the full file path"
+    },
+    {
+      "name": "upload_connectome",
+      "category": "connectome",
+      "description": "Upload a saved .connectome file and restore NPU state"
     },
     {
       "name": "upload_genome",

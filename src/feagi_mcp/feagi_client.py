@@ -17,6 +17,10 @@ from feagi_mcp.area_metadata import (
     get_semantic_info,
 )
 from feagi_mcp.bv_operations import BV_OPERATION_BY_ID, resolve_path
+from feagi_mcp.genome_artifact import (
+    GENOME_ARTIFACT_MEDIA_TYPE,
+    is_genome_artifact_file_name,
+)
 from feagi_mcp.introspection_discovery import (
     IntrospectionEndpoint,
     discover_all_endpoints,
@@ -34,10 +38,81 @@ _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 _ISO_TS_RE = re.compile(r"(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)")
 _LOCAL_TS_RE = re.compile(r"(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3,6})")
 
+
 # @cursor:ffi-safe
 # Core morphology use-case map used by MCP recommendation/apply tools.
 # Keep this deterministic and data-driven so behavior is easy to test and can be
 # ported to lower-level runtimes later.
+def analyze_genome_completeness(genome: dict[str, Any]) -> dict[str, Any]:
+    """Inspect a genome JSON locally for memory, plastic mappings, and regions.
+
+    Works on flat v3 exports (``memory-b``, ``dstmap-d``, ``brain_regions``) and
+    hierarchical genomes (``is_mem_type``, ``cortical_mapping_dst``).
+    """
+    blueprint = genome.get("blueprint", {})
+    memory_area_ids: list[str] = []
+    plastic_mappings: list[tuple[str, str]] = []
+
+    if isinstance(blueprint, dict):
+        for key, value in blueprint.items():
+            if isinstance(key, str) and key.endswith("-cx-memory-b") and value is True:
+                area_id = key.split("-cx-")[0].replace("_____10c-", "")
+                memory_area_ids.append(area_id)
+            if isinstance(key, str) and key.endswith("-cx-dstmap-d") and isinstance(value, dict):
+                src_id = key.split("-cx-")[0].replace("_____10c-", "")
+                for dst_id, rules in value.items():
+                    if not isinstance(rules, list):
+                        continue
+                    if any(
+                        isinstance(rule, dict) and rule.get("plasticity_flag") is True
+                        for rule in rules
+                    ):
+                        plastic_mappings.append((src_id, str(dst_id)))
+            if isinstance(value, dict):
+                if value.get("is_mem_type") is True or value.get("cortical_type") == "MEMORY":
+                    memory_area_ids.append(str(key))
+                dstmap = value.get("cortical_mapping_dst")
+                if isinstance(dstmap, dict):
+                    for dst_id, rules in dstmap.items():
+                        if not isinstance(rules, list):
+                            continue
+                        if any(
+                            isinstance(rule, dict) and rule.get("plasticity_flag") is True
+                            for rule in rules
+                        ):
+                            plastic_mappings.append((str(key), str(dst_id)))
+
+    memory_area_ids = sorted(set(memory_area_ids))
+    plastic_mappings = sorted(set(plastic_mappings))
+    brain_regions = genome.get("brain_regions") or {}
+    region_ids = sorted(brain_regions.keys()) if isinstance(brain_regions, dict) else []
+    morphologies = genome.get("neuron_morphologies") or genome.get("morphologies") or {}
+    physiology = genome.get("physiology") or {}
+    missing: list[str] = []
+    if not memory_area_ids:
+        missing.append("memory_areas")
+    if not plastic_mappings:
+        missing.append("plastic_mappings")
+    if not region_ids:
+        missing.append("brain_regions")
+    if not morphologies:
+        missing.append("neuron_morphologies")
+    if not physiology:
+        missing.append("physiology")
+    return {
+        "complete": not missing,
+        "missing": missing,
+        "memory_area_ids": memory_area_ids,
+        "memory_area_count": len(memory_area_ids),
+        "plastic_mappings": [{"src": src, "dst": dst} for src, dst in plastic_mappings],
+        "plastic_mapping_count": len(plastic_mappings),
+        "brain_region_ids": region_ids,
+        "brain_region_count": len(region_ids),
+        "morphology_count": len(morphologies) if isinstance(morphologies, dict) else 0,
+        "has_physiology": bool(physiology),
+    }
+
+
 _CORE_MORPHOLOGY_USE_CASES: dict[str, dict[str, Any]] = {
     "0-0-0_to_all": {
         "intent_tags": ["broadcast", "fanout", "single-source", "starter-neuron"],
@@ -612,6 +687,39 @@ class FeagiClient:
             logger.error(f"get_version_info failed: {e}")
             return {"error": str(e)}
 
+    async def download_connectome(self) -> dict[str, Any]:
+        """GET /v1/connectome/download — save connectome to disk and return ``file_path``."""
+        try:
+            response = await self._client.get(f"{self.base_url}/v1/connectome/download")
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error(f"download_connectome failed: {e}")
+            return {"error": str(e)}
+
+    async def upload_connectome(self, file_path: str) -> dict[str, Any]:
+        """POST /v1/connectome/upload — multipart upload of a saved ``.connectome`` file."""
+        try:
+            path = Path(file_path)
+            data = path.read_bytes()
+            response = await self._client.post(
+                f"{self.base_url}/v1/connectome/upload",
+                files={"file": (path.name, data, "application/octet-stream")},
+            )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error(f"upload_connectome failed: {e}")
+            return {"error": str(e)}
+
     async def download_genome(self) -> dict[str, Any]:
         """Download complete genome configuration."""
         try:
@@ -947,10 +1055,12 @@ class FeagiClient:
         genome_id: str | None = None,
         genome_title: str | None = None,
     ) -> dict[str, Any]:
-        """POST /v1/genome/save — persist current genome JSON (Brain Visualizer save)."""
+        """POST /v1/genome/save — persist the current `.genome` artifact."""
         try:
             body: dict[str, str] = {}
             if file_path:
+                if not is_genome_artifact_file_name(file_path):
+                    return {"error": "Genome files must use the .genome extension"}
                 body["file_path"] = file_path
             if genome_id:
                 body["genome_id"] = genome_id
@@ -1970,40 +2080,85 @@ class FeagiClient:
             }
         limit = max(1, min(int(sample_limit), 200))
 
-        mapping_res, syn_res, dst_area_params = await asyncio.gather(
+        mapping_res, syn_res, dst_area_properties = await asyncio.gather(
             self.get_cortical_mapping(src, dst),
             self.list_area_synapses(src, direction="outgoing"),
-            self.get_area_parameters(dst),
+            self.fetch_cortical_area_properties(dst),
         )
 
-        # Best-effort fetch of destination neuron ids for accurate synapse filtering.
+        dst_properties = (
+            dst_area_properties.get("properties") if isinstance(dst_area_properties, dict) else None
+        )
+        is_memory_destination = bool(
+            isinstance(dst_area_properties, dict)
+            and (
+                str(dst_area_properties.get("cortical_type", "")).lower() == "memory"
+                or (isinstance(dst_properties, dict) and dst_properties.get("is_mem_type") is True)
+            )
+        )
+
+        # Resolve destination membership through the endpoint that owns each
+        # neuron type. Dense-neuron listing excludes dynamic memory-range IDs.
         dst_neuron_ids: set[int] = set()
         dst_neuron_fetch_error: dict[str, Any] | None = None
         try:
-            dst_neuron_resp = await self._client.get(
-                f"{self.base_url}/v1/connectome/cortical_area/{dst}/neurons"
-            )
-            if dst_neuron_resp.status_code == 200:
-                raw_ids = dst_neuron_resp.json()
-                if isinstance(raw_ids, list):
+            if is_memory_destination:
+                page = 0
+                while True:
+                    memory_page = await self.list_memory_neurons(dst, page=page, page_size=50)
+                    if memory_page.get("error"):
+                        dst_neuron_fetch_error = memory_page
+                        break
+                    raw_ids = memory_page.get("memory_neuron_ids")
+                    if not isinstance(raw_ids, list):
+                        dst_neuron_fetch_error = {
+                            "error": "unexpected_payload",
+                            "message": "memory destination neuron list is not a JSON array",
+                        }
+                        break
                     for raw_id in raw_ids:
                         try:
                             dst_neuron_ids.add(int(raw_id))
                         except (TypeError, ValueError):
                             continue
-                else:
-                    dst_neuron_fetch_error = {
-                        "error": "unexpected_payload",
-                        "message": "destination neuron list is not a JSON array",
-                    }
+                    if not memory_page.get("has_more"):
+                        break
+                    if not raw_ids:
+                        dst_neuron_fetch_error = {
+                            "error": "invalid_pagination",
+                            "message": "memory destination returned has_more with no neuron IDs",
+                        }
+                        break
+                    page += 1
             else:
-                dst_neuron_fetch_error = self._http_failure_payload(
-                    endpoint=f"/v1/connectome/cortical_area/{dst}/neurons",
-                    response=dst_neuron_resp,
+                dst_neuron_resp = await self._client.get(
+                    f"{self.base_url}/v1/connectome/cortical_area/{dst}/neurons"
                 )
+                if dst_neuron_resp.status_code == 200:
+                    raw_ids = dst_neuron_resp.json()
+                    if isinstance(raw_ids, list):
+                        for raw_id in raw_ids:
+                            try:
+                                dst_neuron_ids.add(int(raw_id))
+                            except (TypeError, ValueError):
+                                continue
+                    else:
+                        dst_neuron_fetch_error = {
+                            "error": "unexpected_payload",
+                            "message": "destination neuron list is not a JSON array",
+                        }
+                else:
+                    dst_neuron_fetch_error = self._http_failure_payload(
+                        endpoint=f"/v1/connectome/cortical_area/{dst}/neurons",
+                        response=dst_neuron_resp,
+                    )
         except Exception as e:
             dst_neuron_fetch_error = self._request_exception_payload(
-                endpoint=f"/v1/connectome/cortical_area/{dst}/neurons",
+                endpoint=(
+                    "/v1/cortical_area/memory"
+                    if is_memory_destination
+                    else f"/v1/connectome/cortical_area/{dst}/neurons"
+                ),
                 exception=e,
             )
 
@@ -2021,12 +2176,10 @@ class FeagiClient:
         ]
 
         dst_idx: int | None = None
-        if isinstance(dst_area_params, dict):
-            params_obj = dst_area_params.get("parameters")
-            if isinstance(params_obj, dict):
-                raw_idx = params_obj.get("i")
-                if isinstance(raw_idx, (int, float)):
-                    dst_idx = int(raw_idx)
+        if isinstance(dst_area_properties, dict):
+            raw_idx = dst_area_properties.get("cortical_idx")
+            if isinstance(raw_idx, (int, float)) and not isinstance(raw_idx, bool):
+                dst_idx = int(raw_idx)
 
         synapses = []
         if isinstance(syn_res, dict):
@@ -2064,24 +2217,44 @@ class FeagiClient:
         skipped_without_target_identity = 0
         for syn in synapses:
             target_id = _as_int(syn.get("target_neuron_id"))
-            target_cortical_id = syn.get("target_cortical_id")
-            target_cortical_idx = _as_int(syn.get("target_cortical_idx"))
+            reported_target_cortical_id = syn.get("target_cortical_id")
+            reported_target_cortical_idx = _as_int(syn.get("target_cortical_idx"))
+            target_id_matches = target_id is not None and target_id in dst_neuron_ids
+            target_cortical_id_matches = (
+                isinstance(reported_target_cortical_id, str) and reported_target_cortical_id == dst
+            )
+            target_cortical_idx_matches = (
+                dst_idx is not None and reported_target_cortical_idx == dst_idx
+            )
 
             matched_to_dst = (
-                (target_id is not None and target_id in dst_neuron_ids)
-                or (isinstance(target_cortical_id, str) and target_cortical_id == dst)
-                or (dst_idx is not None and target_cortical_idx == dst_idx)
+                target_id_matches or target_cortical_id_matches or target_cortical_idx_matches
             )
             if (
                 not matched_to_dst
                 and target_id is None
-                and target_cortical_id is None
-                and target_cortical_idx is None
+                and reported_target_cortical_id is None
+                and reported_target_cortical_idx is None
             ):
                 skipped_without_target_identity += 1
 
             if not matched_to_dst:
                 continue
+
+            # Destination-neuron membership is authoritative when the synapse payload
+            # lacks identity metadata for dynamically allocated memory neurons.
+            if target_id_matches:
+                target_cortical_id = dst
+                target_cortical_idx = dst_idx
+                target_identity_source = "destination_neuron_membership"
+            elif target_cortical_id_matches:
+                target_cortical_id = dst
+                target_cortical_idx = dst_idx
+                target_identity_source = "synapse_cortical_id"
+            else:
+                target_cortical_id = dst
+                target_cortical_idx = dst_idx
+                target_identity_source = "synapse_cortical_idx"
 
             matched.append(
                 {
@@ -2092,6 +2265,9 @@ class FeagiClient:
                     "synapse_type": _as_int(syn.get("synapse_type")),
                     "target_cortical_id": target_cortical_id,
                     "target_cortical_idx": target_cortical_idx,
+                    "target_identity_source": target_identity_source,
+                    "reported_target_cortical_id": reported_target_cortical_id,
+                    "reported_target_cortical_idx": reported_target_cortical_idx,
                 }
             )
 
@@ -2127,6 +2303,7 @@ class FeagiClient:
             "resolution": {
                 "destination_neuron_count": len(dst_neuron_ids),
                 "destination_cortical_idx": dst_idx,
+                "destination_is_memory_area": is_memory_destination,
             },
         }
 
@@ -2250,9 +2427,9 @@ class FeagiClient:
                 payload = str(json_body["genome_json"])
                 files = {
                     "file": (
-                        "genome.json",
+                        "genome.genome",
                         payload.encode("utf-8"),
-                        "application/json",
+                        GENOME_ARTIFACT_MEDIA_TYPE,
                     ),
                 }
                 response = await self._client.post(url, files=files)
@@ -2617,6 +2794,56 @@ class FeagiClient:
         except Exception as e:
             logger.error("get_neuron_state_by_id failed: %s", e)
             return {"error": str(e)}
+
+    async def list_memory_neurons(
+        self,
+        cortical_id: str,
+        page: int = 0,
+        page_size: int = 50,
+    ) -> dict[str, Any]:
+        """List paginated runtime memory-neuron IDs and counts for one memory area."""
+        area_id = str(cortical_id).strip()
+        if not area_id:
+            return {"error": "cortical_id must be non-empty"}
+        if page < 0:
+            return {"error": "page must be non-negative"}
+        if page_size < 1 or page_size > 50:
+            return {"error": "page_size must be between 1 and 50"}
+
+        endpoint = "/v1/cortical_area/memory"
+        try:
+            response = await self._client.get(
+                f"{self.base_url}{endpoint}",
+                params={
+                    "cortical_id": area_id,
+                    "page": str(page),
+                    "page_size": str(page_size),
+                },
+            )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return self._http_failure_payload(endpoint=endpoint, response=response)
+        except Exception as e:
+            logger.error("list_memory_neurons failed: %s", e)
+            return self._request_exception_payload(endpoint=endpoint, exception=e)
+
+    async def inspect_memory_neuron(self, neuron_id: int) -> dict[str, Any]:
+        """Inspect one runtime memory neuron, including lifecycle and synaptic edges."""
+        if isinstance(neuron_id, bool) or not isinstance(neuron_id, int) or neuron_id < 1:
+            return {"error": "neuron_id must be a positive integer"}
+
+        endpoint = "/v1/connectome/memory_neuron"
+        try:
+            response = await self._client.get(
+                f"{self.base_url}{endpoint}",
+                params={"neuron_id": str(neuron_id)},
+            )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return self._http_failure_payload(endpoint=endpoint, response=response)
+        except Exception as e:
+            logger.error("inspect_memory_neuron failed: %s", e)
+            return self._request_exception_payload(endpoint=endpoint, exception=e)
 
     async def get_voxel_neurons(
         self,
@@ -3831,21 +4058,10 @@ class FeagiClient:
     @staticmethod
     def _runtime_root_candidates() -> list[Path]:
         """Return runtime roots in precedence order."""
-        roots: list[Path] = []
         raw_override = str(os.environ.get("FEAGI_RUNTIME_ROOT", "")).strip()
         if raw_override:
-            roots.append(Path(raw_override).expanduser())
-        roots.append(Path.home() / ".feagi-staging")
-        roots.append(Path.home() / ".feagi")
-        deduped: list[Path] = []
-        seen: set[str] = set()
-        for root in roots:
-            key = str(root.resolve()) if root.exists() else str(root)
-            if key in seen:
-                continue
-            seen.add(key)
-            deduped.append(root)
-        return deduped
+            return [Path(raw_override).expanduser()]
+        return [Path.home() / ".feagi-staging", Path.home() / ".feagi"]
 
     @classmethod
     def _latest_runtime_session_dir(cls) -> Path | None:

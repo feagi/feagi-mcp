@@ -12,8 +12,8 @@ Environment:
 
 Example:
   python scripts/reproduce_amalgamation_debug.py \\
-    --base /path/to/scan+angle.json \\
-    --guest /path/to/Curve-Detection.json \\
+    --base /path/to/scan-angle.genome \\
+    --guest /path/to/curve-detection.genome \\
     --origin 0 -350 0
 """
 
@@ -47,11 +47,14 @@ def _cortical_ids_from_blueprint_v3(genome: dict) -> set[str]:
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--base", type=Path, required=True, help="Host genome JSON (loaded first)")
+    p.add_argument("--base", type=Path, required=True, help="Host .genome file")
     p.add_argument("--guest", type=Path, required=True, help="Genome to amalgamate")
     p.add_argument("--origin", nargs=3, type=int, default=[0, -350, 0], help="circuit_origin x y z")
     p.add_argument("--rewire", default="rewire_all")
     args = p.parse_args()
+    for genome_path in (args.base, args.guest):
+        if genome_path.suffix.lower() != ".genome":
+            p.error(f"Genome files must use the .genome extension: {genome_path}")
 
     host = os.environ.get("FEAGI_HOST", "127.0.0.1")
     port = os.environ.get("FEAGI_PORT", "8000")
