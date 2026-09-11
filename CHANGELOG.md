@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Dependencies**: require `feagi-core>=2.1.50` (Python SDK from PyPI).
+
 ## [0.0.13] - 2026-09-06
 
 ### Added
