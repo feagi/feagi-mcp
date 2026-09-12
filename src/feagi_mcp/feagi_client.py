@@ -426,9 +426,7 @@ def filter_cortical_area_records(
     name_needle = _optional_filter_text(name_contains).lower()
     id_needle = _optional_filter_text(cortical_id_contains).lower()
     type_needle = validate_cortical_list_type_filter(cortical_type)
-    if limit is not None and (
-        not isinstance(limit, int) or isinstance(limit, bool) or limit < 1
-    ):
+    if limit is not None and (not isinstance(limit, int) or isinstance(limit, bool) or limit < 1):
         raise ValueError("limit must be an integer >= 1.")
 
     matched: list[dict[str, Any]] = []
