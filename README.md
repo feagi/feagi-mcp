@@ -130,7 +130,7 @@ Set `FEAGI_COMPOSER_BASE_URL` to the Composer HTTPS root (e.g. staging). Read-on
 - `download_genome` - Retrieve current genome
 
 ### Inspection
-- `list_cortical_areas` - Enumerate all brain regions
+- `list_cortical_areas` - List areas; filter by name, id, or type to avoid a full-genome dump
 - `list_memory_neurons` - List paginated runtime memory-neuron IDs and ST/LT counts
 - `inspect_memory_neuron` - Inspect one memory neuron's lifecycle and weighted synaptic edges
 - `diagnose_mapping_plasticity` - Inspect plastic rules and realized source-to-destination weights

@@ -7,8 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.14] - 2026-09-12
+
+### Added
+- **`list_cortical_areas` / `list_cortical_area_names`**: optional `name_contains`,
+  `cortical_id_contains`, `cortical_type`, and `limit` filters applied locally
+  after one list fetch. `list_cortical_areas` returns compact catalog rows
+  instead of full neuron-parameter records.
+
 ### Changed
-- **Dependencies**: require `feagi-core>=2.1.50` (Python SDK from PyPI).
+- **Dependencies**: require `feagi-core>=2.1.51` (Python SDK from PyPI).
 
 ## [0.0.13] - 2026-09-06
 

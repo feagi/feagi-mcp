@@ -12,7 +12,11 @@ from feagi_mcp.bv_operations import list_operation_summaries
 from feagi_mcp.composer_simulator_packs import ComposerSimulatorPacksClient
 from feagi_mcp.config import load_config
 from feagi_mcp.cortical_id_decode import decode_cortical_id_interpretation
-from feagi_mcp.feagi_client import FeagiClient, analyze_genome_completeness
+from feagi_mcp.feagi_client import (
+    FeagiClient,
+    analyze_genome_completeness,
+    project_cortical_area_catalog_row,
+)
 from feagi_mcp.genome_artifact import (
     decode_genome_artifact,
     is_genome_artifact_file_name,
@@ -341,32 +345,57 @@ async def stimulate_area_batch(
 
 
 @mcp.tool()
-async def list_cortical_areas() -> list[dict[str, Any]]:
-    """List all cortical areas in the current genome.
+async def list_cortical_areas(
+    name_contains: str | None = None,
+    cortical_id_contains: str | None = None,
+    cortical_type: str | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """List cortical areas as compact catalog rows.
 
-    Returns all areas with their names, IDs, types (IPU/OPU/CUSTOM/CORE),
-    dimensions, and device counts. Use this to explore the current brain
-    architecture.
+    Prefer filters. An unfiltered call returns every area and is expensive.
+    Filtering is local after one FEAGI list fetch.
+
+    Args:
+        name_contains: Case-insensitive substring of the area title
+            (``cortical_name`` / ``name``).
+        cortical_id_contains: Case-insensitive substring of ``cortical_id``
+            or ``cortical_id_s``.
+        cortical_type: Exact type match (case-insensitive) against
+            ``cortical_type``, ``cortical_group``, or ``area_type``.
+            Allowed: IPU, OPU, CORE, CUSTOM, MEMORY, SENSORY, MOTOR.
+        limit: Maximum rows to return after filtering. Omit for no cap.
 
     Returns:
-        List of cortical areas with metadata
+        Catalog rows with id, name, type, dimensions, parent region, and
+        unit/subunit when present. Neuron parameter dumps are omitted;
+        use ``inspect_cortical_area`` for those.
     """
-    result = await feagi.list_cortical_areas()
-    return result
+    areas = await feagi.list_cortical_areas(
+        name_contains=name_contains,
+        cortical_id_contains=cortical_id_contains,
+        cortical_type=cortical_type,
+        limit=limit,
+    )
+    return [project_cortical_area_catalog_row(area) for area in areas]
 
 
 @mcp.tool()
-async def list_cortical_area_names() -> list[str]:
-    """Get a simple list of all cortical area names.
+async def list_cortical_area_names(
+    name_contains: str | None = None,
+) -> list[str]:
+    """Get cortical area names, optionally filtered by substring.
 
-    Returns only the human-readable names of cortical areas without additional
-    metadata. Use this for quick reference or when you just need area names.
+    Use ``name_contains`` instead of downloading every title when you are
+    looking for a specific area.
+
+    Args:
+        name_contains: Case-insensitive substring of the area name.
 
     Returns:
-        List of cortical area names (strings)
+        Matching cortical area names.
     """
-    result = await feagi.list_cortical_area_names()
-    return result
+    return await feagi.list_cortical_area_names(name_contains=name_contains)
 
 
 @mcp.tool()

@@ -127,22 +127,21 @@ params = await get_area_parameters("cCPGa_")
 
 ### list_cortical_areas
 **Category:** Inspection  
-**Purpose:** Enumerate all brain regions  
-**Signature:** `() -> list[dict]`
+**Purpose:** Enumerate cortical areas as compact catalog rows  
+**Signature:** `(name_contains=None, cortical_id_contains=None, cortical_type=None, limit=None) -> list[dict]`
 
 **When to use:**
-- Explore new genomes
-- Find cortical IDs for other tools
-- Get architecture overview
-- Discover available areas
+- Find a named area or ID without dumping the genome
+- Explore new genomes (unfiltered only when the full catalog is required)
+- Get IDs for inspect / stimulate tools
 
 **Example:**
 ```python
-areas = await list_cortical_areas()
-# Returns list with name, id, type, dimensions for each area
+areas = await list_cortical_areas(name_contains="Speed", cortical_type="OPU")
+# Returns matching catalog rows: name, id, type, dimensions
 ```
 
-**Status:** Fully functional (with fallback)
+**Status:** Fully functional
 
 ---
 

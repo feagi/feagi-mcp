@@ -2,7 +2,7 @@
   "name": "feagi",
   "displayName": "FEAGI Neural Monitor",
   "description": "Observe and control FEAGI neural systems for LLM-assisted circuit design",
-  "version": "0.0.13",
+  "version": "0.0.14",
   "publisher": "neuraville",
   "categories": ["AI", "Robotics", "Science"],
   "keywords": ["feagi", "neural", "brain", "robotics", "mcp", "ai"],
@@ -78,7 +78,7 @@
     {
       "name": "list_cortical_areas",
       "category": "inspection",
-      "description": "List all brain regions in current genome"
+      "description": "List cortical areas; filter by name, id, or type to avoid a full-genome dump"
     },
     {
       "name": "get_genome_info",

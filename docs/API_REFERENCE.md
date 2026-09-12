@@ -166,22 +166,29 @@ paths = await trace_signal_path("cCPGa_", "opose0")
 
 ## Cortical Area Inspection
 
-### list_cortical_areas()
+### list_cortical_areas(name_contains=None, cortical_id_contains=None, cortical_type=None, limit=None)
 
-List all cortical areas in the current genome.
+List cortical areas as compact catalog rows. Filtering is local after one
+FEAGI list fetch. Prefer filters; an unfiltered call returns every area.
 
-**Parameters:** None
+**Parameters:**
+- `name_contains` (str, optional): Case-insensitive substring of the area title
+- `cortical_id_contains` (str, optional): Case-insensitive substring of `cortical_id` or `cortical_id_s`
+- `cortical_type` (str, optional): Exact type match against `cortical_type`, `cortical_group`, or `area_type`. Allowed: IPU, OPU, CORE, CUSTOM, MEMORY, SENSORY, MOTOR
+- `limit` (int, optional): Maximum rows after filtering
 
 **Returns:**
 ```python
 [
     {
         "name": str,  # Human-readable name
-        "cortical_id": str,  # Short ID (e.g., "cCPGa_")
+        "cortical_id": str,  # Wire ID
+        "cortical_id_s": str,  # ASCII unit id when present
         "cortical_group": str,  # IPU, OPU, CUSTOM, CORE, MEMORY
-        "dimensions": list[int],  # [x, y, z]
-        "device_count": int,  # For IPU/OPU
+        "cortical_type": str,
+        "cortical_dimensions": list[int],  # [x, y, z]
         "neuron_count": int,
+        "parent_region_id": str | None,
     },
     ...,
 ]
@@ -189,18 +196,17 @@ List all cortical areas in the current genome.
 
 **Example:**
 ```python
-areas = await list_cortical_areas()
-cpg_areas = [a for a in areas if "CPG" in a["name"]]
+areas = await list_cortical_areas(name_contains="Speed")
 # [
-#   {"name": "CPG_Diagonal_A", "cortical_id": "cCPGa_", "dimensions": [1,1,5]},
-#   {"name": "CPG_Diagonal_B", "cortical_id": "cCPGb_", "dimensions": [1,1,5]}
+#   {"name": "Spatial Pointer Speed", "cortical_id": "...", "cortical_dimensions": [3,1,100]},
+#   {"name": "Positional Servo Speed", "cortical_id": "...", "cortical_dimensions": [6,1,50]}
 # ]
 ```
 
 **Use when:**
-- Exploring a new genome
-- Finding area IDs for other tools
-- Understanding architecture overview
+- Finding a named area without dumping the genome
+- Getting IDs for inspect / stimulate tools
+- Exploring a new genome (unfiltered, only when the full catalog is required)
 
 ---
 

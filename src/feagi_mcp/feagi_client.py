@@ -340,6 +340,141 @@ def _annotate_requested_placement(result: dict[str, Any], requested: list[int]) 
     }
 
 
+_CORTICAL_LIST_TYPE_ALIASES = frozenset(
+    {
+        "ipu",
+        "opu",
+        "core",
+        "custom",
+        "memory",
+        "sensory",
+        "motor",
+    }
+)
+
+_CORTICAL_CATALOG_KEYS = (
+    "cortical_id",
+    "cortical_id_s",
+    "name",
+    "cortical_type",
+    "cortical_group",
+    "area_type",
+    "cortical_dimensions",
+    "coordinates_3d",
+    "neuron_count",
+    "visible",
+    "parent_region_id",
+    "unit_id",
+    "subunit_id",
+    "encoding_type",
+)
+
+
+def _optional_filter_text(value: str | None) -> str:
+    """Return a stripped filter string, or empty when the argument is unused."""
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _cortical_area_name(area: dict[str, Any]) -> str:
+    """Human-readable title from a list payload."""
+    for key in ("cortical_name", "name", "friendly_name"):
+        raw = area.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return raw
+    return ""
+
+
+def _cortical_area_type_tokens(area: dict[str, Any]) -> set[str]:
+    """Lowercased type tokens from the fields FEAGI uses for classification."""
+    tokens: set[str] = set()
+    for key in ("cortical_type", "cortical_group", "area_type"):
+        raw = area.get(key)
+        if isinstance(raw, str) and raw.strip():
+            tokens.add(raw.strip().lower())
+    return tokens
+
+
+def validate_cortical_list_type_filter(cortical_type: str | None) -> str:
+    """Normalize a type filter or raise when the value is not a known type."""
+    needle = _optional_filter_text(cortical_type)
+    if not needle:
+        return ""
+    lowered = needle.lower()
+    if lowered not in _CORTICAL_LIST_TYPE_ALIASES:
+        allowed = ", ".join(sorted(alias.upper() for alias in _CORTICAL_LIST_TYPE_ALIASES))
+        raise ValueError(f"cortical_type must be one of: {allowed}.")
+    return lowered
+
+
+def filter_cortical_area_records(
+    areas: list[dict[str, Any]],
+    *,
+    name_contains: str | None = None,
+    cortical_id_contains: str | None = None,
+    cortical_type: str | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """Filter cortical-area dicts locally. Empty filters are ignored.
+
+    ``name_contains`` is a case-insensitive substring of the area title.
+    ``cortical_id_contains`` matches ``cortical_id`` or ``cortical_id_s``.
+    ``cortical_type`` is a case-insensitive exact match against
+    ``cortical_type``, ``cortical_group``, or ``area_type``.
+    """
+    name_needle = _optional_filter_text(name_contains).lower()
+    id_needle = _optional_filter_text(cortical_id_contains).lower()
+    type_needle = validate_cortical_list_type_filter(cortical_type)
+    if limit is not None and (
+        not isinstance(limit, int) or isinstance(limit, bool) or limit < 1
+    ):
+        raise ValueError("limit must be an integer >= 1.")
+
+    matched: list[dict[str, Any]] = []
+    for area in areas:
+        if name_needle and name_needle not in _cortical_area_name(area).lower():
+            continue
+        if id_needle:
+            cortical_id = str(area.get("cortical_id") or "").lower()
+            cortical_id_s = str(area.get("cortical_id_s") or "").lower()
+            if id_needle not in cortical_id and id_needle not in cortical_id_s:
+                continue
+        if type_needle and type_needle not in _cortical_area_type_tokens(area):
+            continue
+        matched.append(area)
+        if limit is not None and len(matched) >= limit:
+            break
+    return matched
+
+
+def project_cortical_area_catalog_row(area: dict[str, Any]) -> dict[str, Any]:
+    """Keep list-tool fields an agent needs; drop per-neuron parameter dumps."""
+    dimensions = area.get("cortical_dimensions")
+    if dimensions is None:
+        dimensions = area.get("dimensions")
+    coordinates = area.get("coordinates_3d")
+    if coordinates is None:
+        coordinates = area.get("position")
+    row = {
+        "cortical_id": area.get("cortical_id"),
+        "cortical_id_s": area.get("cortical_id_s"),
+        "name": _cortical_area_name(area),
+        "cortical_type": area.get("cortical_type"),
+        "cortical_group": area.get("cortical_group"),
+        "area_type": area.get("area_type"),
+        "cortical_dimensions": dimensions,
+        "coordinates_3d": coordinates,
+        "neuron_count": area.get("neuron_count"),
+        "visible": area.get("visible"),
+        "parent_region_id": area.get("parent_region_id"),
+        "unit_id": area.get("unit_id"),
+        "subunit_id": area.get("subunit_id"),
+        "encoding_type": area.get("encoding_type"),
+    }
+    return {key: row[key] for key in _CORTICAL_CATALOG_KEYS}
+
+
 def _normalize_cortical_area_list_payload(data: Any) -> list[dict[str, Any]]:
     """Turn API JSON into a list of area dicts.
 
@@ -595,47 +730,74 @@ class FeagiClient:
             logger.warning("_compute_area_lifetime_stats failed for %s: %s", area_id, e)
             return {"error": "lifetime_stats_failed", "message": str(e)}
 
-    async def list_cortical_areas(self) -> list[dict[str, Any]]:
-        """List all cortical areas in the current genome."""
+    async def list_cortical_areas(
+        self,
+        name_contains: str | None = None,
+        cortical_id_contains: str | None = None,
+        cortical_type: str | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """List cortical areas, optionally filtered in-process after one GET.
+
+        Filters are applied locally so a targeted lookup does not return the
+        entire genome to the caller. Unknown ``cortical_type`` values raise
+        ``ValueError``.
+        """
         detailed = f"{self.base_url}/v1/connectome/cortical_areas/list/detailed"
         legacy = f"{self.base_url}/v1/cortical_area/list"
         try:
             response = await self._client.get(detailed)
             if response.status_code == 200:
-                return _normalize_cortical_area_list_payload(response.json())
-            logger.warning(
-                "list_cortical_areas: GET %s returned HTTP %s; trying legacy %s",
-                detailed,
-                response.status_code,
-                legacy,
+                areas = _normalize_cortical_area_list_payload(response.json())
+            else:
+                logger.warning(
+                    "list_cortical_areas: GET %s returned HTTP %s; trying legacy %s",
+                    detailed,
+                    response.status_code,
+                    legacy,
+                )
+                response = await self._client.get(legacy)
+                if response.status_code == 200:
+                    areas = _normalize_cortical_area_list_payload(response.json())
+                else:
+                    logger.error(
+                        "list_cortical_areas failed: HTTP %s body=%s",
+                        response.status_code,
+                        (response.text or "")[:800],
+                    )
+                    return []
+            return filter_cortical_area_records(
+                areas,
+                name_contains=name_contains,
+                cortical_id_contains=cortical_id_contains,
+                cortical_type=cortical_type,
+                limit=limit,
             )
-            response = await self._client.get(legacy)
-            if response.status_code == 200:
-                return _normalize_cortical_area_list_payload(response.json())
-            logger.error(
-                "list_cortical_areas failed: HTTP %s body=%s",
-                response.status_code,
-                (response.text or "")[:800],
-            )
-            return []
+        except ValueError:
+            raise
         except Exception as e:
             logger.error(f"list_cortical_areas failed: {e}")
             return []
 
-    async def list_cortical_area_names(self) -> list[str]:
-        """Get simple list of all cortical area names."""
+    async def list_cortical_area_names(
+        self,
+        name_contains: str | None = None,
+    ) -> list[str]:
+        """Get cortical area names, optionally filtered by substring."""
         try:
             url = f"{self.base_url}/v1/cortical_area/cortical_area_name_list"
             response = await self._client.get(url)
             if response.status_code == 200:
                 data = response.json()
-                if isinstance(data, dict):
-                    raw = data.get("cortical_area_name_list", [])
-                    if isinstance(raw, list):
-                        return [str(x) for x in raw]
+                raw = data.get("cortical_area_name_list", []) if isinstance(data, dict) else []
+                names = [str(x) for x in raw] if isinstance(raw, list) else []
+            else:
+                logger.error(f"list_cortical_area_names failed: HTTP {response.status_code}")
                 return []
-            logger.error(f"list_cortical_area_names failed: HTTP {response.status_code}")
-            return []
+            needle = _optional_filter_text(name_contains).lower()
+            if not needle:
+                return names
+            return [name for name in names if needle in name.lower()]
         except Exception as e:
             logger.error(f"list_cortical_area_names failed: {e}")
             return []
