@@ -432,6 +432,96 @@ class TestAgentJointMap:
         assert result["channel_kind_counts"] == {"muscle": 2}
 
 
+class TestMotorGroupSummary:
+    """Compact group summaries must not return per-channel dumps."""
+
+    @pytest.mark.asyncio
+    async def test_get_motor_group_summary_counts_catch_all(self, mock_client):
+        mock_client.list_agent_capabilities_all = AsyncMock(
+            return_value={
+                "myo_agent": {
+                    "agent_name": "myosuite_scene_muscl",
+                    "device_registrations": {
+                        "output_units_and_decoder_properties": {
+                            "PositionalServo": [
+                                [
+                                    {
+                                        "cortical_unit_index": 0,
+                                        "friendly_name": "ungrouped",
+                                        "device_grouping": [
+                                            {
+                                                "friendly_name": "IL_L1_l",
+                                                "device_properties": {
+                                                    "joint_name": {
+                                                        "type": "String",
+                                                        "value": "",
+                                                    },
+                                                    "actuator_name": {
+                                                        "type": "String",
+                                                        "value": "IL_L1_l",
+                                                    },
+                                                    "bundle_id": {
+                                                        "type": "String",
+                                                        "value": "ungrouped",
+                                                    },
+                                                },
+                                            }
+                                        ],
+                                    },
+                                    {},
+                                ]
+                            ]
+                        }
+                    },
+                }
+            }
+        )
+        result = await mock_client.get_motor_group_summary("myo_agent")
+        assert result["agent_count"] == 1
+        groups = result["agents"][0]["groups"]
+        assert len(groups) == 1
+        assert groups[0]["channel_count"] == 1
+        assert groups[0]["is_catch_all"] is True
+        assert "device_grouping" not in groups[0]
+
+    @pytest.mark.asyncio
+    async def test_explain_cortical_area_naming_uses_inspect_and_summary(
+        self, mock_client
+    ):
+        mock_client.fetch_cortical_area_properties = AsyncMock(
+            return_value={
+                "cortical_name": "ungrouped-1",
+                "cortical_subtype": "opse",
+                "unit_id": 0,
+                "subunit_id": 1,
+                "encoding_type": "Incremental",
+                "dev_count": 416,
+            }
+        )
+        mock_client.get_motor_group_summary = AsyncMock(
+            return_value={
+                "agents": [
+                    {
+                        "agent_id": "myo_agent",
+                        "agent_name": "myosuite_scene_muscl",
+                        "groups": [
+                            {
+                                "friendly_name": "ungrouped",
+                                "unit_id": 0,
+                                "is_catch_all": True,
+                                "channel_count": 416,
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+        result = await mock_client.explain_cortical_area_naming("b3BzZREBAAA=")
+        assert result["naming_cause"]
+        assert result["id_layout"]["cortical_subunit_index"] == 1
+        assert result["matching_groups"][0]["agent_name"] == "myosuite_scene_muscl"
+
+
 class TestGenomeEditing:
     """Test genome editing tools."""
 

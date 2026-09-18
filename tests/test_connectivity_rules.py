@@ -13,8 +13,9 @@ from feagi_mcp.connectivity_rules import (
     validate_pattern_element,
 )
 
-# Live ungrouped-0 PositionalServo absolute id (subunit 0).
+# Live ungrouped-0 / ungrouped-1 PositionalServo ids.
 _OPSE_ABS = "b3BzZQEAAAA="
+_OPSE_INC = "b3BzZREBAAA="
 
 
 class TestPatternTokens:
@@ -102,6 +103,9 @@ class TestCompactSourceXFilters:
 class TestMotorZ:
     def test_opse_absolute_detected(self):
         assert dest_kind_from_cortical_id(_OPSE_ABS) == "positional_servo_absolute"
+
+    def test_opse_incremental_detected_from_flag_subunit(self):
+        assert dest_kind_from_cortical_id(_OPSE_INC) == "positional_servo_incremental"
 
     def test_rejects_high_z_on_absolute_servo(self):
         errors = motor_z_errors_for_patterns(

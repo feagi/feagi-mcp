@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`compare_device_registration_store`**: compact session vs descriptor
+  device-registration comparison (`GET /v1/agent/device_registration_store`).
+  Use this when IPU areas (especially ``isvi`` / ``SegmentedVision``) return
+  after a camera-mode change; auto-create prefers the descriptor store, which
+  ``list_agent_capabilities_all`` does not show.
+- **`get_log_tail(message_contains=...)`**: case-insensitive message filter,
+  applied on FEAGI and again locally so agents do not ingest an unfiltered
+  ring-buffer dump.
+- **`get_motor_group_summary` / `explain_cortical_area_naming`**: compact
+  motor-bundle titles, channel counts, and cortical-title provenance. Prefer
+  these over `get_agent_device_registrations` (megabyte dumps on
+  musculoskeletal agents).
 - **`propose_connectivity_rule`**: local authoring judgment for morphologies.
   Returns a reuse-or-compact ``*`` / ``?`` / ``?+N`` plan. Sit/motor subsets
   require ``source_x_channels``. Z offsets toward a PositionalServo absolute
@@ -50,9 +62,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`get_agent_joint_map`** lists muscle/tendon ``PositionalServo`` channels
   that have an empty ``joint_name``. Identity comes from ``actuator_name`` /
   ``source_entity``, with ``channel_kind`` and ``channel_kind_counts``.
+- **`interpret_cortical_id` / `compute_io_cortical_id` / `list_io_areas_compact`**:
+  subunit is flag bits 4-7 of bytes 4-5 (0-15); unit index is little-endian
+  u16 in bytes 6-7. Matches Rust ``CorticalID``. Live ``ungrouped-1``
+  (``b3BzZREBAAA=``) decodes as subunit 1 / Incremental; live Positional
+  Servo Speed (``b3BzZSEAAAA=``) decodes as subunit 2.
 - **`send_motor_command`** matches ``actuator_name`` and ``source_entity``
   as well as ``joint_name``, and reports ambiguity instead of silently
   driving the first duplicate.
+
+## [0.0.15] - 2026-09-18
+
+### Changed
+- **Dependencies**: require `feagi-core>=2.1.56` (Python SDK from PyPI; pulls `feagi-rust-py-libs>=0.0.112`).
 
 ## [0.0.14] - 2026-09-12
 

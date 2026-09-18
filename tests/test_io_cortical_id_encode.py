@@ -82,6 +82,34 @@ class TestEncodeIoCorticalId:
         assert "input" in result["error"]
 
     def test_rejects_out_of_range_unit_index(self):
-        result = encode_io_cortical_id("icnt", unit_index=256)
+        result = encode_io_cortical_id("icnt", unit_index=65536)
         assert result["ok"] is False
-        assert "0..255" in result["error"]
+        assert "0..65535" in result["error"]
+
+    def test_rejects_out_of_range_subunit_index(self):
+        result = encode_io_cortical_id("icnt", subunit_index=16)
+        assert result["ok"] is False
+        assert "0..15" in result["error"]
+
+    def test_opse_incremental_subunit_matches_live_id(self):
+        result = encode_io_cortical_id(
+            "opse",
+            framing="incremental",
+            subunit_index=1,
+            unit_index=0,
+        )
+        assert result["ok"] is True
+        assert result["cortical_id"] == "b3BzZREBAAA="
+
+    def test_opse_speed_subunit_matches_live_id(self):
+        result = encode_io_cortical_id(
+            "opse",
+            framing="absolute",
+            subunit_index=2,
+            unit_index=0,
+        )
+        assert result["ok"] is True
+        assert result["cortical_id"] == "b3BzZSEAAAA="
+        decoded = decode_cortical_id_interpretation(result["cortical_id"])
+        assert decoded["cortical_subunit_index"] == 2
+        assert decoded["frame_change_handling"] == "Absolute"

@@ -46,6 +46,10 @@ from feagi_mcp.io_area_catalog import (
     extract_per_device_dimensions,
 )
 from feagi_mcp.io_cortical_id_encode import encode_io_cortical_id
+from feagi_mcp.io_naming_provenance import (
+    build_area_naming_explanation,
+    summarize_motor_groups_from_registrations,
+)
 from feagi_mcp.placement_policy import (
     check_min_separation_to_existing,
     check_origin_exclusion,
@@ -637,6 +641,31 @@ def collect_device_registrations(agent_data: dict[str, Any]) -> dict[str, Any]:
             if value is not None and key not in collected:
                 collected[key] = value
     return collected
+
+
+def filter_log_tail_records(
+    records: object,
+    message_contains: str | None,
+) -> list[dict[str, Any]]:
+    """Keep log-tail rows whose message contains ``message_contains``.
+
+    Matching is case-insensitive. Empty ``message_contains`` returns dict rows
+    unchanged. Non-dict rows are dropped so callers never iterate a raw dump.
+    """
+    if not isinstance(records, list):
+        return []
+    needle = "" if message_contains is None else str(message_contains).strip().lower()
+    matched: list[dict[str, Any]] = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        if not needle:
+            matched.append(record)
+            continue
+        message = record.get("message")
+        if isinstance(message, str) and needle in message.lower():
+            matched.append(record)
+    return matched
 
 
 def _nonempty_str(raw: Any) -> str | None:
@@ -2056,7 +2085,13 @@ class FeagiClient:
             return {"error": str(e)}
 
     async def get_agent_device_registrations(self, agent_id: str) -> dict[str, Any]:
-        """Get device registrations for an agent."""
+        """Get device registrations for an agent.
+
+        For musculoskeletal agents this payload can be over a megabyte.
+        Prefer ``get_motor_group_summary`` or ``explain_cortical_area_naming``
+        when you only need group titles, channel counts, or why an OPU is named
+        ``ungrouped-1``.
+        """
         endpoint = "/v1/agent/capabilities/all"
         try:
             response = await self._client.get(
@@ -2080,6 +2115,80 @@ class FeagiClient:
         except Exception as e:
             logger.error(f"get_agent_device_registrations failed: {e}")
             return self._request_exception_payload(endpoint=endpoint, exception=e)
+
+    async def get_motor_group_summary(self, agent_id: str | None = None) -> dict[str, Any]:
+        """Compact motor-bundle summary (group titles, counts) without channel dumps.
+
+        Fetches ``/v1/agent/capabilities/all`` once. Pass ``agent_id`` to restrict
+        to one embodiment; omit it to summarize every motor-capable agent.
+        """
+        caps = await self.list_agent_capabilities_all(include_device_registrations=True)
+        if "error" in caps and not any(
+            isinstance(value, dict) and "agent_name" in value for value in caps.values()
+        ):
+            return caps
+
+        agents_out: list[dict[str, Any]] = []
+        for current_id, agent_data in caps.items():
+            if not isinstance(current_id, str) or not isinstance(agent_data, dict):
+                continue
+            if agent_id is not None and current_id != agent_id:
+                continue
+            registrations = collect_device_registrations(agent_data)
+            groups = summarize_motor_groups_from_registrations(registrations)
+            if not groups and agent_id is None:
+                continue
+            agents_out.append(
+                {
+                    "agent_id": current_id,
+                    "agent_name": agent_data.get("agent_name", "unknown"),
+                    "group_count": len(groups),
+                    "catch_all_group_count": sum(
+                        1 for group in groups if group.get("is_catch_all")
+                    ),
+                    "groups": groups,
+                }
+            )
+        if agent_id is not None and not agents_out:
+            return {"error": f"Agent {agent_id} not found in capabilities"}
+        return {
+            "agent_id": agent_id,
+            "agent_count": len(agents_out),
+            "agents": agents_out,
+        }
+
+    async def explain_cortical_area_naming(self, cortical_id: str) -> dict[str, Any]:
+        """Explain why a live cortical area has its title, without a registration dump.
+
+        Combines connectome inspect, local ID decode (flag-bit subunit), and a
+        compact motor-group summary. Use this instead of
+        ``get_agent_device_registrations`` when debugging names like ``ungrouped-1``.
+        """
+        cid = cortical_id.strip()
+        if not cid:
+            return {"error": "cortical_id must be non-empty"}
+        area = await self.fetch_cortical_area_properties(cid)
+        area_record = area if isinstance(area, dict) and "error" not in area else None
+        summary = await self.get_motor_group_summary()
+        agent_groups: list[dict[str, Any]] = []
+        if isinstance(summary, dict) and "error" not in summary:
+            for agent_row in summary.get("agents", []):
+                if not isinstance(agent_row, dict):
+                    continue
+                for group in agent_row.get("groups", []):
+                    if not isinstance(group, dict):
+                        continue
+                    agent_groups.append(
+                        {
+                            "agent_id": agent_row.get("agent_id"),
+                            "agent_name": agent_row.get("agent_name"),
+                            "group": group,
+                        }
+                    )
+        payload = build_area_naming_explanation(cid, area_record, agent_groups)
+        if area_record is None and isinstance(area, dict):
+            payload["area_fetch"] = area
+        return payload
 
     async def list_opu_areas(self) -> list[str]:
         """List all OPU cortical area IDs."""
@@ -2311,8 +2420,8 @@ class FeagiClient:
             variant: IO configuration variant (default ``percentage`` for the count family).
             framing: ``absolute`` or ``incremental``.
             positioning: ``linear`` or ``fractional``.
-            unit_index: Device / group instance index (wire byte 7).
-            subunit_index: Sub-area index within the unit (wire byte 6).
+            unit_index: Device / group instance index (bytes 6-7 little-endian u16).
+            subunit_index: Sub-area index within the unit (flag bits 4-7, 0-15).
             device_count: Number of devices for the area.
             position: Optional ``[x, y, z]`` request (FEAGI may auto-place; see ``placement``).
 
@@ -3043,6 +3152,7 @@ class FeagiClient:
         target_prefix: str | None = None,
         since_ts_ms: int | None = None,
         limit: int | None = None,
+        message_contains: str | None = None,
     ) -> dict[str, Any]:
         """GET /v1/system/log_tail - recent log records from the in-process tracing ring buffer.
 
@@ -3051,6 +3161,8 @@ class FeagiClient:
             target_prefix: Restrict to tracing targets starting with this prefix.
             since_ts_ms: Only return records emitted at or after this Unix timestamp (ms).
             limit: Maximum records to return.
+            message_contains: Case-insensitive substring match on ``message``.
+                Prefer this over fetching an unfiltered dump.
 
         Returns:
             Dict with ``enabled`` (False if FEAGI_LOG_RING_BUFFER_CAPACITY=0),
@@ -3067,6 +3179,8 @@ class FeagiClient:
                 params["since_ts_ms"] = str(int(since_ts_ms))
             if isinstance(limit, int) and limit > 0:
                 params["limit"] = str(int(limit))
+            if isinstance(message_contains, str) and message_contains.strip():
+                params["message_contains"] = message_contains.strip()
             response = await self._client.get(
                 f"{self.base_url}/v1/system/log_tail",
                 params=params or None,
@@ -3083,6 +3197,12 @@ class FeagiClient:
                         "that installs the layer. Until then, read the FEAGI process "
                         "stdout directly instead of retrying this tool."
                     )
+                filtered = filter_log_tail_records(
+                    payload.get("records"),
+                    message_contains,
+                )
+                payload["records"] = filtered
+                payload["returned"] = len(filtered)
                 return payload
             return {
                 "error": f"HTTP {response.status_code}",
@@ -3091,6 +3211,34 @@ class FeagiClient:
         except Exception as e:
             logger.error("get_log_tail failed: %s", e)
             return {"error": str(e)}
+
+    async def compare_device_registration_store(
+        self,
+        agent_name: str | None = None,
+    ) -> dict[str, Any]:
+        """GET /v1/agent/device_registration_store - session vs descriptor registrations.
+
+        Compact comparison of the two stores the auto-create poll uses. Does not
+        return raw device-registration JSON.
+
+        Args:
+            agent_name: Optional exact ``agent_name`` filter (e.g. ``Lite6``).
+        """
+        endpoint = "/v1/agent/device_registration_store"
+        try:
+            params: dict[str, str] = {}
+            if isinstance(agent_name, str) and agent_name.strip():
+                params["agent_name"] = agent_name.strip()
+            response = await self._client.get(
+                f"{self.base_url}{endpoint}",
+                params=params or None,
+            )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return self._http_failure_payload(endpoint=endpoint, response=response)
+        except Exception as e:
+            logger.error("compare_device_registration_store failed: %s", e)
+            return self._request_exception_payload(endpoint=endpoint, exception=e)
 
     async def get_agent_liveness(self) -> dict[str, Any]:
         """GET /v1/agent/liveness - inactivity ages for every registered agent.

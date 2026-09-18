@@ -17,6 +17,7 @@ _IMIS_ID = "aW1pcwoAAAA="
 _IPRO_ID = "aXBybwEAAQA="
 _ISVI_ID = "aXN2aQkAAAA="
 _OPSE_ID = "b3BzZQEAAAA="
+_OPSE_SPEED_ID = "b3BzZSEAAAA="
 
 
 def _imis_collapsed() -> dict:
@@ -83,6 +84,26 @@ def test_project_io_row_decodes_opse_without_mismatch() -> None:
     row = project_io_area_compact_row(_opse_expanded())
     assert row["subtype"] == "opse"
     assert row["io_kind"] == "opu"
+    assert row["subunit_index"] == 0
+    assert row["dimension_dev_count_mismatch"] is False
+
+
+def test_project_io_row_decodes_opse_speed_subunit() -> None:
+    row = project_io_area_compact_row(
+        {
+            "cortical_id": _OPSE_SPEED_ID,
+            "cortical_name": "Positional Servo Speed",
+            "cortical_group": "OPU",
+            "cortical_type": "motor",
+            "cortical_subtype": "opse",
+            "cortical_dimensions": [6, 1, 20],
+            "cortical_dimensions_per_device": [1, 1, 20],
+            "dev_count": 6,
+        }
+    )
+    assert row["subtype"] == "opse"
+    assert row["subunit_index"] == 2
+    assert row["unit_index"] == 0
     assert row["dimension_dev_count_mismatch"] is False
 
 

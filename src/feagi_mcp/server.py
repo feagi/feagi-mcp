@@ -1101,10 +1101,42 @@ async def get_agent_device_registrations(agent_id: str) -> dict[str, Any]:
         agent_id: Agent identifier (from get_registered_agents)
 
     Returns:
-        Device registrations with input_units, output_units, and metadata
+        Device registrations with input_units, output_units, and metadata.
+
+    For musculoskeletal bodies this payload can exceed a megabyte. Prefer
+    ``get_motor_group_summary`` or ``explain_cortical_area_naming``.
     """
     result = await feagi.get_agent_device_registrations(agent_id)
     return result
+
+
+@mcp.tool()
+async def get_motor_group_summary(agent_id: str | None = None) -> dict[str, Any]:
+    """Compact motor bundle titles, unit ids, and channel counts for an agent.
+
+    Use this instead of ``get_agent_device_registrations`` when you need limb /
+    catch-all group names without a per-actuator dump. Omit ``agent_id`` to
+    summarize every motor-capable agent from one capabilities fetch.
+
+    Natural language: "what motor groups exist", "why is a bundle named ungrouped",
+    "how many actuators per limb".
+    """
+    return await feagi.get_motor_group_summary(agent_id)
+
+
+@mcp.tool()
+async def explain_cortical_area_naming(cortical_id: str) -> dict[str, Any]:
+    """Explain why a live cortical area has its title (compact, no registration dump).
+
+    Combines connectome inspect, local cortical-id decode (subunit in flag bits 4-7),
+    and motor-group summary. Use for names like ``ungrouped-1``:
+    the stem is the embodiment bundle name, the suffix is the PositionalServo
+    sub-area (0 absolute, 1 incremental, 2 speed).
+
+    Natural language: "why is this area named ungrouped-1", "where did this OPU title
+    come from".
+    """
+    return await feagi.explain_cortical_area_naming(cortical_id)
 
 
 @mcp.tool()
@@ -1354,8 +1386,8 @@ async def compute_io_cortical_id(
             ``percentage_2d/3d/4d``, ``signed_percentage*``, ``cartesian_plane``, ``misc``).
         framing: ``absolute`` or ``incremental``.
         positioning: ``linear`` or ``fractional`` (percentage-family variants only).
-        unit_index: Device / group instance index (wire byte 7).
-        subunit_index: Sub-area index within the unit (wire byte 6).
+        unit_index: Device / group instance index (bytes 6-7 little-endian u16).
+        subunit_index: Sub-area index within the unit (flag bits 4-7, 0-15).
 
     Returns:
         ``{"ok": True, "cortical_id": <base64>, "config_flag": <int>, ...}`` or
@@ -1402,8 +1434,8 @@ async def create_io_area_for_unit(
         variant: IO configuration variant (default ``percentage`` for the count family).
         framing: ``absolute`` or ``incremental``.
         positioning: ``linear`` or ``fractional``.
-        unit_index: Device / group instance index (wire byte 7).
-        subunit_index: Sub-area index within the unit (wire byte 6).
+        unit_index: Device / group instance index (bytes 6-7 little-endian u16).
+        subunit_index: Sub-area index within the unit (flag bits 4-7, 0-15).
         device_count: Number of devices for the area.
         position: Optional ``[x, y, z]`` request (FEAGI may auto-place; see ``placement``).
 
@@ -2043,7 +2075,8 @@ async def save_genome_to_filesystem(
 async def interpret_cortical_id(cortical_id: str) -> dict[str, Any]:
     """Decode an 8-byte FEAGI cortical ID without calling FEAGI (pure client-side).
 
-    Returns hex bytes, ``cortical_subunit_index`` (byte 6), ``cortical_unit_index`` (byte 7),
+    Returns hex bytes, ``cortical_subunit_index`` (flag bits 4-7 of bytes 4-5),
+    ``cortical_unit_index`` (little-endian u16 in bytes 6-7), ``frame_change_handling``,
     ``mapping_hints`` for BV ``unit_id`` / ROS ``deviceGroupId`` / Python motor XYZP grouping,
     and notes. Accepts standard base64 wire IDs or legacy 8-character latin-1 keys.
 
@@ -2061,7 +2094,7 @@ async def inspect_cortical_area(cortical_id: str) -> dict[str, Any]:
     Brain Visualizer's cortical inspector (dimensions, types, neural params from services).
 
     The response always includes ``cortical_id_interpretation`` (see ``interpret_cortical_id``)
-    so agents can align ``deviceGroupId`` / BV unit index with byte 7 without manual base64 work.
+    so agents can align ``deviceGroupId`` / BV unit index with bytes 6-7 without manual base64 work.
     """
     result = await feagi.fetch_cortical_area_properties(cortical_id)
     interpretation = decode_cortical_id_interpretation(cortical_id)
@@ -2286,6 +2319,7 @@ async def get_log_tail(
     target_prefix: str | None = None,
     since_ts_ms: int | None = None,
     limit: int | None = None,
+    message_contains: str | None = None,
 ) -> dict[str, Any]:
     """Recent FEAGI log records (`/v1/system/log_tail`).
 
@@ -2295,6 +2329,10 @@ async def get_log_tail(
     response carries a ``hint`` describing how to turn it on. An ``enabled=False``
     result will not change on retry — read the FEAGI process stdout instead.
 
+    Always pass ``message_contains`` when looking for a specific event
+    (``isvi``, ``SegmentedVision``, ``auto-create``). An unfiltered dump is
+    large and hides the matching lines.
+
     Args:
         level: Minimum severity (``TRACE``/``DEBUG``/``INFO``/``WARN``/``ERROR``).
         target_prefix: Restrict to tracing targets starting with this prefix
@@ -2302,8 +2340,39 @@ async def get_log_tail(
         since_ts_ms: Unix-ms cutoff; only returns records emitted at or after this
             timestamp.
         limit: Cap on returned record count (most recent records win).
+        message_contains: Case-insensitive substring of the log message. Applied
+            on FEAGI and again locally so the agent never receives an unfiltered
+            ring dump.
     """
-    return await feagi.get_log_tail(level, target_prefix, since_ts_ms, limit)
+    return await feagi.get_log_tail(
+        level,
+        target_prefix,
+        since_ts_ms,
+        limit,
+        message_contains,
+    )
+
+
+@mcp.tool()
+async def compare_device_registration_store(
+    agent_name: str | None = None,
+) -> dict[str, Any]:
+    """Compare session vs descriptor device-registration stores (compact).
+
+    FEAGI auto-create prefers **descriptor** registrations over the live session.
+    ``list_agent_capabilities_all`` / ``get_agent_device_registrations`` only
+    show the session payload, so leftover ``SegmentedVision`` in the descriptor
+    store can recreate ``isvi`` areas after MuJoCo has switched to simple
+    ``Vision``.
+
+    Returns unit-type keys, vision group indexes, ``poll_source``, and
+    ``segmented_vision_only_in_descriptor``. Does **not** return raw registration
+    JSON.
+
+    Args:
+        agent_name: Optional exact agent name filter (e.g. ``Lite6``).
+    """
+    return await feagi.compare_device_registration_store(agent_name)
 
 
 @mcp.tool()

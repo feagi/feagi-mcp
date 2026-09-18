@@ -26,8 +26,10 @@ Added 11 new diagnostic and genome editing tools to enable programmatic genome m
 - What OPU cortical IDs should I wire to in the genome?
 
 Do **not** dump this payload for musculoskeletal bodies. Prefer
-``get_agent_joint_map``, which flattens joint *and* muscle/tendon servo
-channels. Live FEAGI returns registrations as a sibling of ``capabilities``
+``get_motor_group_summary`` (group titles + channel counts) or
+``explain_cortical_area_naming`` (why an OPU is titled ``ungrouped-1``).
+``get_agent_joint_map`` flattens joint *and* muscle/tendon servo
+channels when you need per-actuator rows. Live FEAGI returns registrations as a sibling of ``capabilities``
 on ``/v1/agent/capabilities/all``; the client now reads that sibling field.
 
 **Example output**:
@@ -47,6 +49,22 @@ on ``/v1/agent/capabilities/all``; the client now reads that sibling field.
   }
 }
 ```
+
+### 2b. `compare_device_registration_store`
+**Purpose**: Compact session vs descriptor registration comparison  
+**Endpoint**: `/v1/agent/device_registration_store`  
+**Returns**: `poll_source`, unit-type keys, vision group indexes, `mismatch`,
+`segmented_vision_only_in_descriptor`
+
+Use this instead of `list_agent_capabilities_all` when deleted `isvi` areas
+keep returning. Auto-create prefers the **descriptor** store; capabilities/all
+only shows the live session.
+
+### 2c. `get_log_tail`
+**Purpose**: Filtered FEAGI process logs  
+**Endpoint**: `/v1/system/log_tail`  
+Pass `message_contains` (`isvi`, `SegmentedVision`, `auto-create`) instead of
+fetching the unfiltered ring dump.
 
 ### 3. `list_opu_areas`
 **Purpose**: List only motor output areas  
@@ -268,7 +286,15 @@ mcp.update_cortical_mapping(
 
 ### `interpret_cortical_id`
 
-Pure decode of an 8-byte cortical wire ID (standard Base64 or legacy 8-character latin-1 key): hex layout, ``cortical_subunit_index`` (byte 6), ``cortical_unit_index`` (byte 7), and ``mapping_hints`` aligned with Brain Visualizer ``unit_id``, ROS connector ``deviceGroupId``, and feagi-python-sdk motor XYZP keys. No HTTP call to FEAGI.
+Pure decode of an 8-byte cortical wire ID (standard Base64 or legacy 8-character latin-1 key). ``cortical_subunit_index`` is flag bits 4-7 of bytes 4-5 (connectome ``subunit_id``, 0-15). ``cortical_unit_index`` is little-endian u16 in bytes 6-7 (BV ``unit_id``). ``frame_change_handling`` comes from flag bit 8. This matches Rust ``CorticalID``; byte 6 is **not** the subunit.
+
+### ``explain_cortical_area_naming``
+
+Compact title provenance for a live area: connectome name/subunit/encoding, local ID decode, matching motor bundle (if any), and a one-sentence ``naming_cause``. Does **not** return per-channel registrations.
+
+### ``get_motor_group_summary``
+
+One row per motor bundle (friendly name, unit id, channel count, sample actuator names, ``is_catch_all``). One capabilities fetch; optional ``agent_id`` filter.
 
 ### ``inspect_cortical_area``
 

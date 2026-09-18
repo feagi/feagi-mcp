@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from feagi_mcp.feagi_client import FeagiClient
+from feagi_mcp.feagi_client import FeagiClient, filter_log_tail_records
 from feagi_mcp.snapshots import SnapshotInfo, SnapshotManager, validate_label
 
 
@@ -94,6 +94,42 @@ class TestRuntimeTaps:
         }
 
     @pytest.mark.asyncio
+    async def test_get_log_tail_filters_message_contains(self, mock_client):
+        mock_client._client.get.return_value = _ok(
+            {
+                "enabled": True,
+                "capacity": 2000,
+                "records": [
+                    {"level": "INFO", "message": "Creating cortical areas"},
+                    {"level": "INFO", "message": "Deleting cortical area isvi aXN2aQkAAAA="},
+                    {"level": "WARN", "message": "unrelated"},
+                ],
+                "returned": 3,
+            }
+        )
+        result = await mock_client.get_log_tail(message_contains="isvi")
+        assert result["returned"] == 1
+        assert result["records"][0]["message"].startswith("Deleting")
+        params = mock_client._client.get.call_args.kwargs["params"]
+        assert params["message_contains"] == "isvi"
+
+    @pytest.mark.asyncio
+    async def test_compare_device_registration_store_query(self, mock_client):
+        mock_client._client.get.return_value = _ok(
+            {
+                "count": 1,
+                "mismatch_count": 1,
+                "segmented_vision_descriptor_stale_count": 1,
+                "agents": [{"agent_name": "Lite6", "poll_source": "descriptor"}],
+            }
+        )
+        result = await mock_client.compare_device_registration_store(agent_name="Lite6")
+        assert result["segmented_vision_descriptor_stale_count"] == 1
+        call = mock_client._client.get.call_args
+        assert call.args[0].endswith("/v1/agent/device_registration_store")
+        assert call.kwargs["params"] == {"agent_name": "Lite6"}
+
+    @pytest.mark.asyncio
     async def test_get_log_tail_handles_disabled(self, mock_client):
         mock_client._client.get.return_value = _ok(
             {"enabled": False, "capacity": 0, "records": [], "returned": 0}
@@ -107,6 +143,17 @@ class TestRuntimeTaps:
         assert result["records"] == []
         assert result["returned"] == 0
         assert "FEAGI_LOG_RING_BUFFER_CAPACITY" in result["hint"]
+
+
+class TestLogTailFilter:
+    def test_filter_log_tail_records_is_case_insensitive(self):
+        records = [
+            {"message": "Deleting cortical area isvi aXN2aQkAAAA="},
+            {"message": "burst tick"},
+        ]
+        matched = filter_log_tail_records(records, "ISVI")
+        assert len(matched) == 1
+        assert "Deleting" in matched[0]["message"]
 
 
 class TestBurstEngineControl:

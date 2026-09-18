@@ -1,15 +1,23 @@
 """Decode canonical 8-byte FEAGI cortical IDs for MCP tooling (no live FEAGI call).
 
-WIRE LAYOUT (IPU / OPU Cortical IDs, 8 bytes):
+WIRE LAYOUT (IPU / OPU Cortical IDs, 8 bytes), matching Rust ``CorticalID``:
+
     byte 0 — ``b'i'`` (sensory) or ``b'o'`` (motor / output sensory path)
     bytes 1–3 — unit reference (ASCII, e.g. ``mot``); with byte 0 forms the 4-char subtype
         (e.g. ``omot``) used in API ``cortical_subtype``.
-    bytes 4–5 — configuration / encoding payload (see Rust ``IOCorticalAreaConfigurationFlag``).
-    byte 6 — ``CorticalSubUnitIndex`` (which area within a multi-area unit).
-    byte 7 — ``CorticalUnitIndex`` (which instance of that unit type: device / group index).
+    bytes 4–5 — ``IOCorticalAreaConfigurationFlag`` bitmask, little-endian u16.
+    bytes 6–7 — ``CorticalUnitIndex`` as little-endian u16 (device / group instance).
 
-Brain Visualizer ``unit_id`` and the Python SDK motor decoder both use byte 7 for grouping
-(deviceGroupId alignment). Byte 6 is ``subunit_id``.
+CONFIGURATION FLAG (u16) bit layout (Rust ``bit_indexes``):
+
+    bits 0–3  — variant discriminant
+    bits 4–7  — ``CorticalSubUnitIndex`` (0–15); this is BV / connectome ``subunit_id``
+    bit  8    — frame-change handling: absolute = 0, incremental = 1
+    bit  9    — percentage neuron positioning: linear = 0, fractional = 1
+    bits 10–12 — pose schema (PoseEstimation only)
+
+Brain Visualizer ``unit_id`` and the Python SDK motor decoder both use the u16 unit
+index in bytes 6–7. ``subunit_id`` is **not** byte 6.
 """
 
 from __future__ import annotations
@@ -17,6 +25,10 @@ from __future__ import annotations
 import base64
 import binascii
 from typing import Any
+
+_SUBUNIT_SHIFT = 4
+_SUBUNIT_MASK = 0x0F
+_FRAME_CHANGE_SHIFT = 8
 
 
 def _raw_from_cortical_id_string(cortical_id: str) -> tuple[bytes | None, str | None]:
@@ -75,6 +87,13 @@ def decode_cortical_id_interpretation(cortical_id: str) -> dict[str, Any]:
     except UnicodeDecodeError:
         subtype_4 = raw[0:4].hex()
 
+    flags = int.from_bytes(raw[4:6], "little")
+    subunit = (flags >> _SUBUNIT_SHIFT) & _SUBUNIT_MASK
+    unit_index = int.from_bytes(raw[6:8], "little")
+    frame_change = (
+        "Incremental" if ((flags >> _FRAME_CHANGE_SHIFT) & 0x01) == 1 else "Absolute"
+    )
+
     base.update(
         {
             "ok": True,
@@ -83,18 +102,20 @@ def decode_cortical_id_interpretation(cortical_id: str) -> dict[str, Any]:
             "io_kind": io_kind,
             "subtype_4char": subtype_4,
             "config_bytes_4_5": [int(raw[4]), int(raw[5])],
-            "cortical_subunit_index": int(raw[6]),
-            "cortical_unit_index": int(raw[7]),
+            "cortical_subunit_index": subunit,
+            "cortical_unit_index": unit_index,
+            "frame_change_handling": frame_change,
             "mapping_hints": {
-                "bv_unit_id": int(raw[7]),
-                "bv_subunit_id": int(raw[6]),
-                "ros_connector_device_group_id": int(raw[7]),
-                "python_motor_group_from_xyzp_key": int(raw[7]),
+                "bv_unit_id": unit_index,
+                "bv_subunit_id": subunit,
+                "ros_connector_device_group_id": unit_index,
+                "python_motor_group_from_xyzp_key": unit_index,
             },
             "notes": (
-                "cortical_unit_index (byte 7) is the instance / device group used by BV unit_id, "
-                "ROS connector deviceGroupId, and feagi-python-sdk motor decode keys. "
-                "cortical_subunit_index (byte 6) is the sub-area within a unit (BV subunit_id)."
+                "cortical_subunit_index is flag bits 4-7 of bytes 4-5 (connectome "
+                "subunit_id / title suffix). cortical_unit_index is little-endian u16 "
+                "in bytes 6-7 (BV unit_id / device group). Bit 8 of the flag is "
+                "Absolute vs Incremental frame handling."
             ),
         }
     )

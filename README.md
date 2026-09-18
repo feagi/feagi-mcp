@@ -87,7 +87,10 @@ Add to your Cursor MCP settings (`~/.cursor/mcp.json`):
 ### Agent Introspection
 - `get_registered_agents` - List registered agents with ids and `agent_name`
 - `get_agent_properties` - Get agent type, capabilities, version, connection info
-- `get_agent_device_registrations` - Inspect motor/sensor structure, group_ids, control modes
+- `get_agent_device_registrations` - Inspect motor/sensor structure, group_ids, control modes. Prefer `get_motor_group_summary` / `explain_cortical_area_naming` for musculoskeletal agents.
+- `compare_device_registration_store` - Compact session vs descriptor registration keys (`poll_source`, leftover `SegmentedVision`)
+- `get_motor_group_summary` - Compact motor bundle titles, unit ids, and channel counts
+- `explain_cortical_area_naming` - Why a live area has its title (e.g. `ungrouped-1`)
 
 ### Monitoring
 - `monitor_activity` / `monitor_activity_batch` - Firing rates and lifetime stats. `summary_only=True` (default) omits `spike_history` and neuron-id lists.
@@ -96,6 +99,7 @@ Add to your Cursor MCP settings (`~/.cursor/mcp.json`):
 - `get_embodiment_status` - Check controller connections and mappings
 - `get_area_parameters` - Inspect neuron properties
 - `get_cortical_synapse_counts` - Get incoming/outgoing synapse counts
+- `get_log_tail` - FEAGI process logs. Pass `message_contains` instead of dumping the ring buffer.
 
 ### Genome Editing (NEW)
 - `create_brain_region` - Create the named circuit container. Title must name the function (Sit, Walk CPG); Autogen Circuit / Untitled are rejected.
