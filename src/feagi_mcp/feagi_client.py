@@ -17,6 +17,18 @@ from feagi_mcp.area_metadata import (
     get_semantic_info,
 )
 from feagi_mcp.bv_operations import BV_OPERATION_BY_ID, resolve_path
+from feagi_mcp.circuit_naming import (
+    extract_region_title,
+    parent_circuit_naming_error,
+    validate_circuit_title,
+)
+from feagi_mcp.connectivity_rules import (
+    PATTERN_LANGUAGE,
+    build_connectivity_proposal,
+    dest_kind_from_cortical_id,
+    motor_z_errors_for_patterns,
+    validate_morphology_parameters,
+)
 from feagi_mcp.genome_artifact import (
     GENOME_ARTIFACT_MEDIA_TYPE,
     is_genome_artifact_file_name,
@@ -25,6 +37,13 @@ from feagi_mcp.introspection_discovery import (
     IntrospectionEndpoint,
     discover_all_endpoints,
     discover_endpoint,
+    match_descriptor_to_registered_agents,
+)
+from feagi_mcp.io_area_catalog import (
+    build_io_areas_compact_payload,
+    extract_cortical_dimensions,
+    extract_dev_count,
+    extract_per_device_dimensions,
 )
 from feagi_mcp.io_cortical_id_encode import encode_io_cortical_id
 from feagi_mcp.placement_policy import (
@@ -299,11 +318,88 @@ def _as_json_dict(data: Any) -> dict[str, Any]:
     return {}
 
 
+def _summarize_cortical_activity(payload: dict[str, Any]) -> dict[str, Any]:
+    """Drop spike lists that explode MCP token use.
+
+    Keeps counts, rates, and ``lifetime_stats``. Removes ``spike_history`` and
+    ``firing_statistics.active_neurons`` (the per-id dump).
+    """
+    summarized = dict(payload)
+    summarized.pop("spike_history", None)
+    stats = summarized.get("firing_statistics")
+    if isinstance(stats, dict):
+        slim_stats = dict(stats)
+        slim_stats.pop("active_neurons", None)
+        summarized["firing_statistics"] = slim_stats
+    return summarized
+
+
+def _morphology_parameter_count(parameters: Any) -> int:
+    """Count patterns or vectors in a morphology parameters object."""
+    if not isinstance(parameters, dict):
+        return 0
+    patterns = parameters.get("patterns")
+    if isinstance(patterns, list):
+        return len(patterns)
+    vectors = parameters.get("vectors")
+    if isinstance(vectors, list):
+        return len(vectors)
+    return 0
+
+
+def _morphology_rule_rejection(
+    morphology_type: str,
+    morphology_parameters: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Return the create/update rejection payload when a rule is not compact."""
+    judgment = validate_morphology_parameters(morphology_type, morphology_parameters)
+    if not judgment.get("reject"):
+        return None
+    return {
+        "error": "invalid_connectivity_rule",
+        "success": False,
+        "message": "; ".join(str(e) for e in judgment.get("errors", [])),
+        "judgment": judgment,
+        "pattern_language": PATTERN_LANGUAGE,
+    }
+
+
 def _as_json_list_str(data: Any) -> list[str]:
     """Narrow JSON list payloads to ``list[str]`` (OPU/IPU id lists, etc.)."""
     if isinstance(data, list):
         return [str(x) for x in data]
     return []
+
+
+def _summarize_registered_agents(
+    agent_ids: list[str],
+    capabilities_payload: dict[str, Any],
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Attach ``agent_name`` / capability flags to registry IDs.
+
+    ``/v1/agent/list`` returns opaque IDs only. Names live on
+    ``/v1/agent/capabilities/all``. Device registration blobs are omitted so
+    this summary stays small enough for MCP tool responses.
+    """
+    if "error" in capabilities_payload:
+        error = str(capabilities_payload.get("message") or capabilities_payload.get("error"))
+        return [{"agent_id": agent_id} for agent_id in agent_ids], error
+
+    summaries: list[dict[str, Any]] = []
+    for agent_id in agent_ids:
+        entry: dict[str, Any] = {"agent_id": agent_id}
+        raw = capabilities_payload.get(agent_id)
+        if isinstance(raw, dict):
+            name = raw.get("agent_name")
+            if isinstance(name, str) and name:
+                entry["agent_name"] = name
+            caps = raw.get("capabilities")
+            if isinstance(caps, dict):
+                entry["capabilities"] = {
+                    key: value for key, value in caps.items() if key != "device_registrations"
+                }
+        summaries.append(entry)
+    return summaries, None
 
 
 def _find_actual_coordinates(result: dict[str, Any]) -> list[int] | None:
@@ -359,7 +455,10 @@ _CORTICAL_CATALOG_KEYS = (
     "cortical_type",
     "cortical_group",
     "area_type",
+    "cortical_subtype",
     "cortical_dimensions",
+    "cortical_dimensions_per_device",
+    "dev_count",
     "coordinates_3d",
     "neuron_count",
     "visible",
@@ -448,12 +547,10 @@ def filter_cortical_area_records(
 
 def project_cortical_area_catalog_row(area: dict[str, Any]) -> dict[str, Any]:
     """Keep list-tool fields an agent needs; drop per-neuron parameter dumps."""
-    dimensions = area.get("cortical_dimensions")
-    if dimensions is None:
-        dimensions = area.get("dimensions")
     coordinates = area.get("coordinates_3d")
     if coordinates is None:
         coordinates = area.get("position")
+    subtype = area.get("cortical_subtype")
     row = {
         "cortical_id": area.get("cortical_id"),
         "cortical_id_s": area.get("cortical_id_s"),
@@ -461,7 +558,10 @@ def project_cortical_area_catalog_row(area: dict[str, Any]) -> dict[str, Any]:
         "cortical_type": area.get("cortical_type"),
         "cortical_group": area.get("cortical_group"),
         "area_type": area.get("area_type"),
-        "cortical_dimensions": dimensions,
+        "cortical_subtype": subtype,
+        "cortical_dimensions": extract_cortical_dimensions(area),
+        "cortical_dimensions_per_device": extract_per_device_dimensions(area),
+        "dev_count": extract_dev_count(area),
         "coordinates_3d": coordinates,
         "neuron_count": area.get("neuron_count"),
         "visible": area.get("visible"),
@@ -499,6 +599,83 @@ def _extract_wrapped_value(raw: Any) -> Any:
     if isinstance(raw, dict) and "value" in raw:
         return raw.get("value")
     return raw
+
+
+_REGISTRATION_KEYS = (
+    "input_units_and_encoder_properties",
+    "output_units_and_decoder_properties",
+    "input_units",
+    "output_units",
+    "feedbacks",
+)
+
+
+def _merge_registration_dict(target: dict[str, Any], source: object) -> None:
+    """Copy missing registration keys from ``source`` into ``target``."""
+    if not isinstance(source, dict):
+        return
+    for key, value in source.items():
+        if value is not None and key not in target:
+            target[key] = value
+
+
+def collect_device_registrations(agent_data: dict[str, Any]) -> dict[str, Any]:
+    """Normalize FEAGI capability payloads into a device_registrations map.
+
+    Live ``/v1/agent/capabilities/all?include_device_registrations=true``
+    returns registrations as a sibling of ``capabilities``. Older payloads
+    nest them under ``capabilities.device_registrations`` or hoist unit maps
+    onto ``capabilities`` itself.
+    """
+    collected: dict[str, Any] = {}
+    _merge_registration_dict(collected, agent_data.get("device_registrations"))
+    caps = agent_data.get("capabilities")
+    if isinstance(caps, dict):
+        _merge_registration_dict(collected, caps.get("device_registrations"))
+        for key in _REGISTRATION_KEYS:
+            value = caps.get(key)
+            if value is not None and key not in collected:
+                collected[key] = value
+    return collected
+
+
+def _nonempty_str(raw: Any) -> str | None:
+    """Return a stripped string from a raw or typed-value field, else None."""
+    value = _extract_wrapped_value(raw)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped:
+            return stripped
+    return None
+
+
+def _classify_output_channel(
+    *,
+    device_type: str,
+    joint_name: str | None,
+    actuator_name: str | None,
+) -> str:
+    """Label a motor channel as joint, muscle, pointer, misc, or other."""
+    dtype = device_type.lower()
+    if dtype in {"miscdata", "misc"}:
+        return "misc"
+    if dtype in {"spatialpointer", "angularpointer"}:
+        return "pointer"
+    if actuator_name and not joint_name:
+        return "muscle"
+    if joint_name:
+        return "joint"
+    return "other"
+
+
+def _channel_aliases(channel: dict[str, Any]) -> list[str]:
+    """Unique lookup names for ``send_motor_command`` matching."""
+    aliases: list[str] = []
+    for key in ("joint_name", "actuator_name", "source_entity", "driven_joint"):
+        value = channel.get(key)
+        if isinstance(value, str) and value and value not in aliases:
+            aliases.append(value)
+    return aliases
 
 
 class FeagiClient:
@@ -594,6 +771,7 @@ class FeagiClient:
         duration_ms: int = 1000,
         include_lifetime_stats: bool = True,
         lifetime_neuron_cap: int = 64,
+        summary_only: bool = True,
     ) -> dict[str, Any]:
         """Monitor cortical area activity with optional lifetime fire-count enrichment.
 
@@ -610,6 +788,9 @@ class FeagiClient:
             include_lifetime_stats: When True, attach ``lifetime_stats`` block.
             lifetime_neuron_cap: Maximum neurons to inspect for lifetime stats
                 (caps fan-out for large areas; first ``N`` neurons are sampled).
+            summary_only: When True (default), drop ``spike_history`` and
+                ``firing_statistics.active_neurons``. Set False only when the
+                raw spike list is required.
 
         Returns:
             Activity data including ``firing_statistics`` (sample window) and,
@@ -634,6 +815,8 @@ class FeagiClient:
             result["lifetime_stats"] = await self._compute_area_lifetime_stats(
                 area_id, lifetime_neuron_cap
             )
+        if summary_only:
+            return _summarize_cortical_activity(result)
         return result
 
     async def _compute_area_lifetime_stats(
@@ -976,6 +1159,10 @@ class FeagiClient:
     ) -> dict[str, Any]:
         """Create a custom morphology definition.
 
+        Pattern morphologies must use FEAGI pattern tokens (``*``, ``?``, ``?+N``,
+        exact ints). Enumerated exact voxel dumps that collapse to one offset are
+        rejected so agents rewrite them as compact rules.
+
         Args:
             morphology_name: Unique morphology name
             morphology_type: Type (vectors, patterns, functions, composite)
@@ -984,6 +1171,9 @@ class FeagiClient:
         Returns:
             Status of morphology creation
         """
+        rejection = _morphology_rule_rejection(morphology_type, morphology_parameters)
+        if rejection is not None:
+            return rejection
         try:
             payload = {
                 "morphology_name": morphology_name,
@@ -1002,6 +1192,98 @@ class FeagiClient:
             }
         except Exception as e:
             logger.error(f"create_morphology failed: {e}")
+            return {"error": str(e), "success": False}
+
+    async def get_morphology(
+        self,
+        morphology_name: str,
+        include_parameters: bool = False,
+    ) -> dict[str, Any]:
+        """Fetch one morphology without downloading the full catalog.
+
+        Uses ``POST /v1/morphology/morphology_properties``. Parameters are omitted
+        by default so enumerated dumps do not inflate the MCP response. Local
+        ``judgment`` includes ``compact_form`` when the stored rows can collapse
+        to ``N..M``.
+        """
+        name = morphology_name.strip()
+        if not name:
+            return {
+                "error": "invalid_input",
+                "success": False,
+                "message": "morphology_name must be non-empty",
+            }
+        try:
+            response = await self._client.post(
+                f"{self.base_url}/v1/morphology/morphology_properties",
+                json={"morphology_name": name},
+            )
+            if response.status_code != 200:
+                return {
+                    "error": f"HTTP {response.status_code}",
+                    "success": False,
+                    "message": response.text,
+                }
+            raw = _as_json_dict(response.json())
+            parameters = raw.get("parameters")
+            if not isinstance(parameters, dict):
+                parameters = {}
+            morph_type = str(raw.get("type") or raw.get("morphology_type") or "")
+            result: dict[str, Any] = {
+                "name": str(raw.get("morphology_name") or raw.get("name") or name),
+                "type": morph_type,
+                "class": str(raw.get("class") or ""),
+                "pattern_count": _morphology_parameter_count(parameters),
+                "judgment": validate_morphology_parameters(morph_type, parameters),
+                "success": True,
+            }
+            if include_parameters:
+                result["parameters"] = parameters
+            return result
+        except Exception as e:
+            logger.error(f"get_morphology failed: {e}")
+            return {"error": str(e), "success": False}
+
+    async def update_morphology(
+        self,
+        morphology_name: str,
+        morphology_type: str,
+        morphology_parameters: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Replace an existing morphology and rebuild mappings that use it.
+
+        Uses ``PUT /v1/morphology/morphology``. The same compactness judgment as
+        ``create_morphology`` applies: enumerated dumps are rejected and
+        ``judgment.compact_form`` is the rewrite to submit.
+        """
+        name = morphology_name.strip()
+        if not name:
+            return {
+                "error": "invalid_input",
+                "success": False,
+                "message": "morphology_name must be non-empty",
+            }
+        rejection = _morphology_rule_rejection(morphology_type, morphology_parameters)
+        if rejection is not None:
+            return rejection
+        try:
+            payload = {
+                "morphology_name": name,
+                "morphology_type": morphology_type,
+                "morphology_parameters": morphology_parameters,
+            }
+            response = await self._client.put(
+                f"{self.base_url}/v1/morphology/morphology", json=payload
+            )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+                "success": False,
+            }
+        except Exception as e:
+            logger.error(f"update_morphology failed: {e}")
             return {"error": str(e), "success": False}
 
     async def rename_morphology(
@@ -1149,6 +1431,23 @@ class FeagiClient:
             logger.error(f"get_regions_members failed: {e}")
             return {"error": str(e)}
 
+    async def _require_functional_parent_circuit(self, region_id: str) -> str | None:
+        """Reject placeholder parents (Autogen Circuit / Untitled) using a local title check.
+
+        Fetches ``regions_members`` once and inspects only the ``title`` field. The full
+        member list is not returned to the caller.
+        """
+        rid = region_id.strip()
+        if not rid:
+            return "brain_region_id is required for CUSTOM and MEMORY cortical areas"
+        members = await self.get_regions_members()
+        if not isinstance(members, dict):
+            return "cannot verify parent circuit name: get_brain_regions returned a non-object"
+        if members.get("error"):
+            return f"cannot verify parent circuit name: {members.get('error')}"
+        title = extract_region_title(members, rid)
+        return parent_circuit_naming_error(title, rid)
+
     async def create_brain_region(
         self,
         title: str,
@@ -1160,13 +1459,17 @@ class FeagiClient:
     ) -> dict[str, Any]:
         """POST /v1/region/region — create a brain region (hierarchy node; BV \"circuit\").
 
+        ``title`` must name the circuit function (Sit, Walk CPG, OR Gate). Placeholder
+        titles such as Autogen Circuit or Untitled are rejected.
+
         Omitted parent_region_id: FEAGI resolves to the existing root so new regions are not
         siblings of root (matches BV single-root expectation).
         """
         try:
             trimmed = title.strip()
-            if not trimmed:
-                return {"error": "title must be non-empty"}
+            title_error = validate_circuit_title(trimmed)
+            if title_error is not None:
+                return {"error": title_error}
             if len(coordinates_2d) != 2:
                 return {"error": "coordinates_2d must have exactly 2 integers"}
             if len(coordinates_3d) != 3:
@@ -1314,6 +1617,9 @@ class FeagiClient:
                 "clone_cortical_mapping": clone_cortical_mapping,
             }
             if parent_region_id is not None:
+                parent_error = await self._require_functional_parent_circuit(str(parent_region_id))
+                if parent_error is not None:
+                    return {"error": parent_error}
                 payload["parent_region_id"] = parent_region_id
             response = await self._client.post(
                 f"{self.base_url}/v1/cortical_area/clone",
@@ -1691,19 +1997,38 @@ class FeagiClient:
             return {"error": str(e), "area_id": area_id}
 
     async def get_registered_agents(self) -> dict[str, Any]:
-        """Get list of registered agents."""
+        """Get registered agents with names from the capability registry.
+
+        ``GET /v1/agent/list`` returns opaque AgentDescriptor IDs only.
+        This joins ``GET /v1/agent/capabilities/all`` so callers see
+        ``agent_name`` without a per-id round trip.
+        """
         endpoint = "/v1/agent/list"
         try:
             response = await self._client.get(f"{self.base_url}{endpoint}")
-            if response.status_code == 200:
-                agent_ids = response.json()
-                if isinstance(agent_ids, list):
-                    ids = _as_json_list_str(agent_ids)
-                    return {"agent_ids": ids, "count": len(ids)}
-                if isinstance(agent_ids, dict):
-                    return _as_json_dict(agent_ids)
-                return {"error": "unexpected_response", "raw": agent_ids}
-            return self._http_failure_payload(endpoint=endpoint, response=response)
+            if response.status_code != 200:
+                return self._http_failure_payload(endpoint=endpoint, response=response)
+            agent_ids_raw = response.json()
+            if isinstance(agent_ids_raw, list):
+                ids = _as_json_list_str(agent_ids_raw)
+            elif isinstance(agent_ids_raw, dict):
+                nested_ids = agent_ids_raw.get("agent_ids")
+                ids = _as_json_list_str(nested_ids)
+            else:
+                return {"error": "unexpected_response", "raw": agent_ids_raw}
+
+            capabilities = await self.list_agent_capabilities_all(
+                include_device_registrations=False
+            )
+            agents, capabilities_error = _summarize_registered_agents(ids, capabilities)
+            result: dict[str, Any] = {
+                "agent_ids": ids,
+                "count": len(ids),
+                "agents": agents,
+            }
+            if capabilities_error is not None:
+                result["capabilities_error"] = capabilities_error
+            return result
         except Exception as e:
             logger.error(f"get_registered_agents failed: {e}")
             return self._request_exception_payload(endpoint=endpoint, exception=e)
@@ -1744,28 +2069,11 @@ class FeagiClient:
                     agent_data = all_agents[agent_id]
                     if isinstance(agent_data, dict):
                         caps = agent_data.get("capabilities", {})
-                        dev_reg: dict[str, Any] = {}
-                        if isinstance(caps, dict):
-                            raw_dev_reg = caps.get("device_registrations", {})
-                            if isinstance(raw_dev_reg, dict):
-                                dev_reg = dict(raw_dev_reg)
-                            # New FEAGI payloads may expose registrations directly
-                            # under capabilities instead of nesting in
-                            # ``device_registrations``.
-                            for key in (
-                                "input_units_and_encoder_properties",
-                                "output_units_and_decoder_properties",
-                                "input_units",
-                                "output_units",
-                            ):
-                                value = caps.get(key)
-                                if value is not None and key not in dev_reg:
-                                    dev_reg[key] = value
                         return {
                             "agent_id": agent_id,
                             "agent_name": agent_data.get("agent_name", "unknown"),
                             "capabilities": caps if isinstance(caps, dict) else {},
-                            "device_registrations": dev_reg,
+                            "device_registrations": collect_device_registrations(agent_data),
                         }
                 return {"error": f"Agent {agent_id} not found in capabilities"}
             return self._http_failure_payload(endpoint=endpoint, response=response)
@@ -1786,6 +2094,9 @@ class FeagiClient:
 
     async def list_opu_areas_with_metadata(self) -> list[dict[str, Any]]:
         """List all OPU areas with semantic metadata about their type and capabilities.
+
+        Prefer :meth:`list_io_areas_compact` for subtype, dimensions, and
+        ``dev_count``. This method only recognizes a small static type table.
 
         Returns:
             List of dictionaries with ID, type, purpose, capabilities, and usage info
@@ -1811,6 +2122,10 @@ class FeagiClient:
     async def list_ipu_areas_with_metadata(self) -> list[dict[str, Any]]:
         """List all IPU areas with semantic metadata about their type and capabilities.
 
+        Prefer :meth:`list_io_areas_compact` for subtype, dimensions, and
+        ``dev_count``. This method only recognizes a small static type table
+        and repeats purpose/capabilities text for every area.
+
         Returns:
             List of dictionaries with ID, type, purpose, capabilities, and usage info
         """
@@ -1820,6 +2135,37 @@ class FeagiClient:
         except Exception as e:
             logger.error(f"list_ipu_areas_with_metadata failed: {e}")
             return []
+
+    async def list_io_areas_compact(
+        self,
+        io_kind: str = "both",
+        *,
+        subtype: str | None = None,
+        include_areas: bool = True,
+        mismatches_only: bool = False,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        """Compact IPU/OPU catalog plus subtype summary (one list fetch).
+
+        Decodes 4-char subtype locally (``ipro``, ``imis``, ``opse``, ...) so
+        agents do not call ``interpret_cortical_id`` per area. Flags rows where
+        voxel width is not ``per_device_x * dev_count``.
+        """
+        try:
+            areas = await self.list_cortical_areas()
+            return build_io_areas_compact_payload(
+                areas,
+                io_kind=io_kind,
+                subtype=subtype,
+                include_areas=include_areas,
+                mismatches_only=mismatches_only,
+                limit=limit,
+            )
+        except ValueError:
+            raise
+        except Exception as e:
+            logger.error("list_io_areas_compact failed: %s", e)
+            return {"error": str(e)}
 
     async def create_cortical_area(
         self,
@@ -1849,7 +2195,8 @@ class FeagiClient:
             device_count: Number of devices for IPU/OPU (default: 1)
             properties: Optional additional properties
             brain_region_id: Required for CUSTOM/MEMORY (parent brain region / circuit UUID).
-                May be omitted if ``properties`` includes ``brain_region_id``.
+                The parent title must name the circuit function; Autogen Circuit / Untitled
+                are rejected. May be omitted if ``properties`` includes ``brain_region_id``.
             skip_placement_validation: If True, skip MCP placement checks (origin exclusion
                 and spacing vs existing areas). Use only when necessary.
             cortical_id: For OPU/IPU: type key like "opse", "isvi" (required for OPU/IPU)
@@ -1904,6 +2251,9 @@ class FeagiClient:
                     return {
                         "error": "brain_region_id is required for CUSTOM and MEMORY cortical areas",
                     }
+                parent_error = await self._require_functional_parent_circuit(str(resolved_region))
+                if parent_error is not None:
+                    return {"error": parent_error}
                 request_data["brain_region_id"] = resolved_region
 
                 if not skip_placement_validation:
@@ -3234,6 +3584,7 @@ class FeagiClient:
         duration_ms: int = 1000,
         include_lifetime_stats: bool = True,
         lifetime_neuron_cap: int = 64,
+        summary_only: bool = True,
     ) -> dict[str, Any]:
         """Fan out :meth:`monitor_activity` over multiple areas in parallel.
 
@@ -3242,6 +3593,9 @@ class FeagiClient:
         4-6 area inspection completes in roughly the duration of a single call.
         Lifetime-stats enrichment is forwarded per-area; disable for very large
         batches if the extra per-neuron fan-out is unwanted.
+
+        ``summary_only`` defaults True so a batch of active areas does not return
+        every spike row and neuron id.
 
         Returns:
             Dict mapping ``area_id`` -> per-area activity payload (or error dict).
@@ -3261,6 +3615,7 @@ class FeagiClient:
                         duration_ms,
                         include_lifetime_stats=include_lifetime_stats,
                         lifetime_neuron_cap=lifetime_neuron_cap,
+                        summary_only=summary_only,
                     )
                     for aid in clean_ids
                 ),
@@ -3587,6 +3942,12 @@ class FeagiClient:
             "offset": safe_offset,
             "limit": safe_limit,
             "items": window,
+            "pattern_language": PATTERN_LANGUAGE,
+            "authoring_note": (
+                "Call propose_connectivity_rule before create_morphology. "
+                "Reuse a core rule when it already matches. Never enumerate exact voxels "
+                "for a regular * / ? / ?+N transform."
+            ),
         }
 
     async def recommend_connectivity_rules(
@@ -3696,6 +4057,12 @@ class FeagiClient:
         )
         safe_limit = max(1, min(int(limit), 20))
         top = scored[:safe_limit]
+        construction = build_connectivity_proposal(
+            intent,
+            src_dimensions=src_dims,
+            dst_dimensions=dst_dims,
+            dest_kind=dest_kind_from_cortical_id(dst_clean),
+        )
         if not top:
             return {
                 "error": "no_rule_match_for_intent",
@@ -3706,9 +4073,11 @@ class FeagiClient:
                 "dst_dimensions": dst_dims,
                 "message": (
                     "No existing rule matched the provided intent strongly enough. "
-                    "Refine intent (e.g., 'one-to-one identity', 'all-to-all dense', "
-                    "'transpose xy', 'lateral +x')."
+                    "Use construction.custom or refine intent "
+                    "(e.g., 'one-to-one identity', 'sit motor', 'broadcast')."
                 ),
+                "construction": construction,
+                "pattern_language": PATTERN_LANGUAGE,
             }
 
         return {
@@ -3720,7 +4089,62 @@ class FeagiClient:
             "dst_dimensions": dst_dims,
             "recommended": top,
             "selected": top[0],
+            "construction": construction,
+            "pattern_language": PATTERN_LANGUAGE,
         }
+
+    async def propose_connectivity_rule(
+        self,
+        intent: str,
+        src_area: str | None = None,
+        dst_area: str | None = None,
+        src_dimensions: list[int] | None = None,
+        dst_dimensions: list[int] | None = None,
+        source_x_channels: list[int] | None = None,
+        z_offset: int | None = None,
+    ) -> dict[str, Any]:
+        """Author a compact connectivity rule locally before calling FEAGI.
+
+        Fetches area dimensions only when area ids are given and explicit dimensions
+        are omitted. Rule judgment itself is local.
+        """
+        if not isinstance(intent, str) or not intent.strip():
+            return {"error": "intent must be a non-empty string"}
+
+        src_dims = src_dimensions
+        dst_dims = dst_dimensions
+        dst_id = dst_area.strip() if isinstance(dst_area, str) and dst_area.strip() else None
+        src_id = src_area.strip() if isinstance(src_area, str) and src_area.strip() else None
+        fetches: list[Any] = []
+        fetch_keys: list[str] = []
+        if src_id and src_dims is None:
+            fetches.append(self.get_area_parameters(src_id))
+            fetch_keys.append("src")
+        if dst_id and dst_dims is None:
+            fetches.append(self.get_area_parameters(dst_id))
+            fetch_keys.append("dst")
+        if fetches:
+            fetched = await asyncio.gather(*fetches)
+            for key, params in zip(fetch_keys, fetched, strict=True):
+                if not isinstance(params, dict):
+                    continue
+                dims = self._extract_cortical_dimensions(params)
+                if key == "src" and src_dims is None:
+                    src_dims = dims
+                if key == "dst" and dst_dims is None:
+                    dst_dims = dims
+
+        proposal = build_connectivity_proposal(
+            intent.strip(),
+            src_dimensions=src_dims,
+            dst_dimensions=dst_dims,
+            dest_kind=dest_kind_from_cortical_id(dst_id),
+            source_x_channels=source_x_channels,
+            z_offset=z_offset,
+        )
+        proposal["src_area"] = src_id
+        proposal["dst_area"] = dst_id
+        return proposal
 
     async def apply_connectivity_rule(
         self,
@@ -3850,9 +4274,10 @@ class FeagiClient:
             src_area_id: Base64 source cortical ID.
             dst_area_id: Base64 destination cortical ID.
             morphology_name: Unique name for the new morphology (e.g. ``"hinge_to_cart"``).
-            voxel_mappings: List of ``{"src":[x,y,z], "dst":[x,y,z]}`` dicts. Wildcards
-                are supported by passing the string ``"*"``, ``"?"``, or ``"!"`` in place
-                of an integer (FEAGI pattern semantics).
+            voxel_mappings: Compact ``{"src":[...], "dst":[...]}`` pattern rows.
+                Tokens: ``*``, ``?``, ``!``, ``?+``, ``?-``, ``?+=``, ``?-=``,
+                ``?+N``, ``?-N``, ``?-A:?+B``, or exact ints. Do not list every
+                voxel of a regular transform.
             postsynaptic_current_multiplier: Synaptic gain. Positive = excite, negative = inhibit.
             plasticity_flag: Enable STDP on this mapping rule.
             plasticity_constant: STDP base learning rate (integer; FEAGI scales internally).
@@ -3901,6 +4326,25 @@ class FeagiClient:
                         )
                     }
                 patterns.append([list(src_xyz), list(dst_xyz)])
+            judgment = validate_morphology_parameters("patterns", {"patterns": patterns})
+            if judgment.get("reject"):
+                return {
+                    "error": "invalid_connectivity_rule",
+                    "judgment": judgment,
+                    "pattern_language": PATTERN_LANGUAGE,
+                }
+            motor_errors = motor_z_errors_for_patterns(
+                patterns, dest_kind_from_cortical_id(dst_area_id)
+            )
+            if motor_errors:
+                return {
+                    "error": "invalid_positional_servo_z",
+                    "message": "; ".join(motor_errors),
+                    "motor_decode": (
+                        "z=0 is max command on a PositionalServo absolute OPU; "
+                        "do not use ?+N or high exact Z"
+                    ),
+                }
             morph_create = await self.create_morphology(
                 morphology_name=morphology_name,
                 morphology_type="patterns",
@@ -4152,16 +4596,28 @@ class FeagiClient:
         """List active controller bridges from descriptors and agent registry.
 
         Scans the runtime introspection directory for descriptor files written
-        by feagi-desktop when launching controllers, then cross-references with
-        FEAGI's agent registry for runtime status.
+        by feagi-desktop when launching controllers, then joins each descriptor
+        to ``/v1/agent/list`` by exact ``agent_id`` (opaque base64
+        AgentDescriptor). Substring matching on ``controller_id`` is not used.
 
         Returns:
-            ``controllers`` list with each entry containing descriptor metadata
-            and agent registration status.
+            ``controllers`` with registration flags, plus ``registered_agents``
+            (id + name) from the capability registry.
         """
         descriptors = discover_all_endpoints()
         agents_resp = await self.get_registered_agents()
-        agent_ids: list[str] = agents_resp.get("agent_ids", [])
+        agent_ids: list[str] = (
+            list(agents_resp.get("agent_ids", [])) if isinstance(agents_resp, dict) else []
+        )
+        agents_by_id: dict[str, dict[str, Any]] = {}
+        registered_agents: list[dict[str, Any]] = []
+        if isinstance(agents_resp, dict):
+            raw_agents = agents_resp.get("agents")
+            if isinstance(raw_agents, list):
+                for raw_agent in raw_agents:
+                    if isinstance(raw_agent, dict) and isinstance(raw_agent.get("agent_id"), str):
+                        registered_agents.append(raw_agent)
+                        agents_by_id[raw_agent["agent_id"]] = raw_agent
 
         controllers: list[dict[str, Any]] = []
         for desc in descriptors:
@@ -4174,17 +4630,28 @@ class FeagiClient:
                 "controller_version": desc.controller_version,
                 "started_at": desc.started_at,
                 "descriptor_path": desc.descriptor_path,
+                "descriptor_agent_id": desc.agent_id,
             }
-            matching_agents = [a for a in agent_ids if desc.controller_id.lower() in a.lower()]
+            matching_agents = match_descriptor_to_registered_agents(desc.agent_id, agent_ids)
             entry["matching_agent_ids"] = matching_agents
             entry["agent_registered"] = len(matching_agents) > 0
+            if matching_agents:
+                matched = agents_by_id.get(matching_agents[0], {})
+                entry["matched_agent_id"] = matching_agents[0]
+                matched_name = matched.get("agent_name")
+                if isinstance(matched_name, str) and matched_name:
+                    entry["matched_agent_name"] = matched_name
             controllers.append(entry)
 
-        return {
+        result: dict[str, Any] = {
             "controllers": controllers,
             "total_descriptors": len(descriptors),
             "registered_agent_ids": agent_ids,
+            "registered_agents": registered_agents,
         }
+        if isinstance(agents_resp, dict) and agents_resp.get("capabilities_error"):
+            result["capabilities_error"] = agents_resp["capabilities_error"]
+        return result
 
     @staticmethod
     def _strip_ansi_codes(line: str) -> str:
@@ -4448,12 +4915,16 @@ class FeagiClient:
         }
 
     async def get_agent_joint_map(self, agent_id: str) -> dict[str, Any]:
-        """Extract a focused joint-to-OPU mapping from an agent's device registrations.
+        """Extract a focused actuator-to-OPU mapping from device registrations.
 
         Parses both legacy ``output_units`` and current
         ``output_units_and_decoder_properties`` registration shapes and
-        produces a flat joint list with cortical IDs, group/channel indices,
+        produces a flat channel list with cortical IDs, group/channel indices,
         control modes, and value ranges when provided.
+
+        Musculoskeletal muscle/tendon servos often have an empty ``joint_name``
+        and identify the channel via ``actuator_name`` / ``source_entity``.
+        Those channels are included with ``channel_kind="muscle"``.
 
         Args:
             agent_id: Agent identifier (from ``get_registered_agents``).
@@ -4514,14 +4985,31 @@ class FeagiClient:
                         "custom_name",
                         channel_data.get("name", f"joint_{channel_idx}"),
                     )
+                    if not isinstance(joint_name, str) or not joint_name:
+                        joint_name = f"joint_{channel_idx}"
+                    actuator_name = _nonempty_str(channel_data.get("actuator_name"))
+                    driven_joint = _nonempty_str(channel_data.get("joint_name"))
+                    source_entity = _nonempty_str(channel_data.get("source_entity"))
+                    channel_kind = _classify_output_channel(
+                        device_type=str(device_type),
+                        joint_name=driven_joint or (joint_name if joint_name else None),
+                        actuator_name=actuator_name,
+                    )
                     joint: dict[str, Any] = {
                         "device_type": device_type,
                         "group_id": group_id,
                         "channel_index": normalized_channel,
                         "cortical_id": cortical_id,
                         "joint_name": joint_name,
+                        "channel_kind": channel_kind,
                         "control_mode": channel_data.get("control_mode", "unknown"),
                     }
+                    if actuator_name:
+                        joint["actuator_name"] = actuator_name
+                    if source_entity:
+                        joint["source_entity"] = source_entity
+                    if driven_joint:
+                        joint["driven_joint"] = driven_joint
                     min_val = channel_data.get("min_value")
                     max_val = channel_data.get("max_value")
                     if min_val is not None:
@@ -4613,15 +5101,25 @@ class FeagiClient:
                     device_props = channel.get("device_properties", {})
                     if not isinstance(device_props, dict):
                         device_props = {}
+                    driven_joint = _nonempty_str(device_props.get("joint_name"))
+                    actuator_name = _nonempty_str(device_props.get("actuator_name"))
+                    source_entity = _nonempty_str(device_props.get("source_entity"))
+                    bundle_id = _nonempty_str(device_props.get("bundle_id"))
                     name_candidates = [
-                        _extract_wrapped_value(device_props.get("joint_name")),
-                        _extract_wrapped_value(device_props.get("source_entity")),
-                        channel.get("friendly_name"),
-                        meta.get("friendly_name"),
+                        actuator_name,
+                        source_entity,
+                        driven_joint,
+                        _nonempty_str(channel.get("friendly_name")),
+                        _nonempty_str(meta.get("friendly_name")),
                     ]
                     joint_name = next(
-                        (str(name) for name in name_candidates if isinstance(name, str) and name),
+                        (name for name in name_candidates if name),
                         f"{device_type}_{channel_idx}",
+                    )
+                    channel_kind = _classify_output_channel(
+                        device_type=str(device_type),
+                        joint_name=driven_joint,
+                        actuator_name=actuator_name,
                     )
 
                     group_id_decoder: int | str = (
@@ -4633,19 +5131,36 @@ class FeagiClient:
                         "channel_index": channel_index,
                         "cortical_id": cortical_id,
                         "joint_name": joint_name,
+                        "channel_kind": channel_kind,
                         "control_mode": control_mode,
                     }
+                    if actuator_name:
+                        joint_decoder["actuator_name"] = actuator_name
+                    if source_entity:
+                        joint_decoder["source_entity"] = source_entity
+                    if driven_joint:
+                        joint_decoder["driven_joint"] = driven_joint
+                    if bundle_id:
+                        joint_decoder["bundle_id"] = bundle_id
                     if min_value is not None:
                         joint_decoder["min_value"] = min_value
                     if max_value is not None:
                         joint_decoder["max_value"] = max_value
                     joints.append(joint_decoder)
 
+        kind_counts: dict[str, int] = {}
+        for joint in joints:
+            kind = joint.get("channel_kind", "other")
+            if not isinstance(kind, str) or not kind:
+                kind = "other"
+            kind_counts[kind] = kind_counts.get(kind, 0) + 1
+
         return {
             "agent_id": agent_id,
             "joints": joints,
             "opu_cortical_ids": sorted(opu_cortical_ids),
             "total_joints": len(joints),
+            "channel_kind_counts": kind_counts,
         }
 
     async def send_motor_command(
@@ -4666,7 +5181,8 @@ class FeagiClient:
 
         Args:
             agent_id: Agent identifier (from ``get_registered_agents``).
-            joint_name: Joint name as reported by ``get_agent_joint_map``.
+            joint_name: Channel name as reported by ``get_agent_joint_map``
+                (``joint_name``, ``actuator_name``, or ``source_entity``).
             target_value: Target position/angle in the joint's native units
                 (degrees for servos, typically within ``min_value``..``max_value``).
 
@@ -4679,12 +5195,33 @@ class FeagiClient:
             return joint_map
 
         joints = joint_map.get("joints", [])
-        matched = [j for j in joints if j.get("joint_name", "").lower() == joint_name.lower()]
+        needle = joint_name.lower()
+        matched = [
+            j
+            for j in joints
+            if isinstance(j, dict) and any(alias.lower() == needle for alias in _channel_aliases(j))
+        ]
         if not matched:
-            available = [j.get("joint_name", "?") for j in joints]
+            available = [j.get("joint_name", "?") for j in joints if isinstance(j, dict)]
             return {
                 "error": f"Joint '{joint_name}' not found for agent '{agent_id}'",
                 "available_joints": available,
+            }
+        if len(matched) > 1:
+            return {
+                "error": (
+                    f"Channel '{joint_name}' is ambiguous for agent '{agent_id}' "
+                    f"({len(matched)} matches)"
+                ),
+                "matches": [
+                    {
+                        "joint_name": j.get("joint_name"),
+                        "actuator_name": j.get("actuator_name"),
+                        "channel_index": j.get("channel_index"),
+                        "cortical_id": j.get("cortical_id"),
+                    }
+                    for j in matched
+                ],
             }
 
         joint = matched[0]

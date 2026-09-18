@@ -25,6 +25,11 @@ Added 11 new diagnostic and genome editing tools to enable programmatic genome m
 - What control mode does this motor support? (absolute-0 vs incremental-1)
 - What OPU cortical IDs should I wire to in the genome?
 
+Do **not** dump this payload for musculoskeletal bodies. Prefer
+``get_agent_joint_map``, which flattens joint *and* muscle/tendon servo
+channels. Live FEAGI returns registrations as a sibling of ``capabilities``
+on ``/v1/agent/capabilities/all``; the client now reads that sibling field.
+
 **Example output**:
 ```json
 {
@@ -53,7 +58,78 @@ Added 11 new diagnostic and genome editing tools to enable programmatic genome m
 **Endpoint**: `/v1/cortical_area/ipu`  
 **Returns**: Filtered list of IPU cortical IDs
 
+### 4b. `list_io_areas_compact`
+**Purpose**: Genome-wide IPU/OPU inventory without the metadata dump  
+**Endpoint**: one `GET /v1/connectome/cortical_areas/list/detailed` (same as `list_cortical_areas`)  
+**Returns**: `count`, `mismatch_count`, `by_subtype`, compact `areas` rows
+
+Use this instead of `list_ipu_areas_with_metadata` / `list_opu_areas_with_metadata` when you need:
+- 4-char subtype (`ipro`, `imis`, `isvi`, `opse`, …) decoded locally from the cortical ID
+- `cortical_dimensions`, `cortical_dimensions_per_device`, `dev_count`
+- `dimension_dev_count_mismatch` when width is not `per_device_x * dev_count`
+
+`include_areas=False` returns the subtype summary only. `mismatches_only=True` lists only collapsed I/O strips.
+
+## Connectivity rule authoring
+
+### `propose_connectivity_rule`
+
+Local judgment (dimensions are fetched only when area ids are given and dims are
+omitted). Call this **before** `create_morphology`.
+
+- Reuse a core rule when `reuse` is set (`block_to_block`, `projector`, …).
+- Otherwise create the returned `custom` patterns/vectors unchanged.
+- Never expand a regular transform into exact voxel pairs.
+- PositionalServo absolute dest (`opse` subunit 0): dest `z=0` is max command.
+  `?+17` / high Z averages to ~0.05 excitation.
+- Sit/motor subset requires `source_x_channels`. Wildcarding every muscle is refused.
+
+`create_morphology`, `update_morphology`, and `build_reflex_mapping` enforce
+the same policy.
+
+## Activity monitoring
+
+### `monitor_activity` / `monitor_activity_batch`
+
+`summary_only=True` (default) returns counts, rates, and `lifetime_stats` only.
+It omits `spike_history` and the `active_neurons` id list. A multi-area batch
+of an active babble/OPU used to dump thousands of spike rows into the MCP
+context. Set `summary_only=False` only when you need the raw spike list.
+
+### `get_morphology`
+
+One-rule fetch (`POST /v1/morphology/morphology_properties`). Do not use
+`list_morphologies` for a single name.
+
+- Default response: `name`, `type`, `class`, `pattern_count`, `judgment`.
+- `include_parameters=True` adds the stored rows (only when you need them).
+- When stored rows are an enumerable dump, `judgment.compact_form` is the
+  `N..M` rewrite.
+
+### `update_morphology`
+
+`PUT /v1/morphology/morphology`. Replaces the rule and rebuilds mappings that
+use it. Submit compact patterns (or `judgment.compact_form` from
+`get_morphology`). Enumerated dumps are rejected.
+
 ## Genome Editing Tools
+
+### Circuit naming policy (MCP)
+
+In Brain Visualizer a **circuit** is a named **brain region**, not a cortical area. Untitled genomes expose a placeholder region titled **Autogen Circuit**. MCP refuses that container.
+
+**Workflow when building a circuit**
+
+1. Name the function (Sit, Walk CPG, OR Gate) — not the tool or a UUID.
+2. `create_brain_region(title="<function>")`.
+3. `create_cortical_area(..., brain_region_id=<that region_id>)` for CUSTOM/MEMORY.
+
+| Do | Avoid |
+|----|--------|
+| Function-first: `Sit`, `Sit Drive`, `Walk CPG`, `OR Gate`, `Balance` | `Autogen Circuit`, `Untitled`, `New Circuit`, `Circuit` |
+| Same function name the user asked for | `MCP Circuit`, `McpSit`, a region UUID as the title |
+
+`create_brain_region` rejects placeholder titles. `create_cortical_area` (CUSTOM/MEMORY) and `clone_cortical_area` (when `parent_region_id` is set) look up the parent title and reject Autogen Circuit / Untitled.
 
 ### Cortical area naming policy (MCP)
 
@@ -80,7 +156,7 @@ Keep labels **short but unambiguous** (aim under ~40 characters). Prefer names t
 - `position`: [x, y, z] coordinates
 - `neurons_per_voxel`: Neurons per voxel (default: 1)
 - `device_count`: Number of devices for IPU/OPU
-- `brain_region_id`: **Required for CUSTOM and MEMORY** — parent brain region (circuit) UUID. Call `get_brain_regions` to list regions. Same as REST `brain_region_id` on `custom_cortical_area`. You may pass this inside `properties["brain_region_id"]` instead of the top-level argument.
+- `brain_region_id`: **Required for CUSTOM and MEMORY** — parent brain region (circuit) UUID whose **title names the circuit function**. Do not use Autogen Circuit. Call `create_brain_region` first; `get_brain_regions` only to reuse an already-named circuit. Same as REST `brain_region_id` on `custom_cortical_area`. You may pass this inside `properties["brain_region_id"]` instead of the top-level argument.
 - `properties`: Optional dict (e.g. `grp_id`; for CUSTOM/MEMORY include `brain_region_id` here if not using the dedicated parameter)
 
 **Use case**: Instead of manually editing genome JSON, programmatically add the 4 per-limb OPU areas:
@@ -95,15 +171,20 @@ mcp.create_cortical_area(
 )
 ```
 
-**CUSTOM / MEMORY** (must supply a non-root circuit region):
+**CUSTOM / MEMORY** (must supply a function-named circuit region):
 
 ```python
+region = mcp.create_brain_region(
+    title="Sit",
+    coordinates_2d=[0, 0],
+    coordinates_3d=[120, 40, 0],
+)
 mcp.create_cortical_area(
-    name="MyCircuit",
+    name="babble",
     cortical_type="CUSTOM",
     dimensions=[10, 10, 1],
     position=[50, 50, 0],
-    brain_region_id="<uuid-from-get_brain_regions>",
+    brain_region_id=region["region_id"],
 )
 ```
 

@@ -63,6 +63,8 @@ class IntrospectionEndpoint:
     controller_version: str | None
     started_at: str
     descriptor_path: str
+    #: Base64 AgentDescriptor from the launcher, when the descriptor includes it.
+    agent_id: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """Return a plain dict suitable for JSON/MCP transport."""
@@ -143,6 +145,10 @@ def _load_descriptor(path: Path) -> IntrospectionEndpoint | None:
         return None
 
     try:
+        raw_agent_id = data.get("agent_id")
+        agent_id = None
+        if isinstance(raw_agent_id, str) and raw_agent_id.strip():
+            agent_id = raw_agent_id
         return IntrospectionEndpoint(
             schema_version=schema_version,
             controller_id=str(data["controller_id"]),
@@ -157,6 +163,7 @@ def _load_descriptor(path: Path) -> IntrospectionEndpoint | None:
             ),
             started_at=str(data["started_at"]),
             descriptor_path=str(path),
+            agent_id=agent_id,
         )
     except (KeyError, TypeError, ValueError) as exc:
         logger.warning(
@@ -254,3 +261,19 @@ def discover_endpoint_or_raise(
             "introspection enabled, or pass an explicit introspection_url."
         )
     return found
+
+
+def match_descriptor_to_registered_agents(
+    descriptor_agent_id: str | None,
+    registered_agent_ids: list[str],
+) -> list[str]:
+    """Join a controller descriptor to the FEAGI agent registry by exact id.
+
+    FEAGI agent IDs are opaque base64 AgentDescriptors. Matching
+    ``controller_id`` as a substring of those IDs is not a valid join.
+    """
+    if not descriptor_agent_id:
+        return []
+    if descriptor_agent_id in registered_agent_ids:
+        return [descriptor_agent_id]
+    return []

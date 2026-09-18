@@ -350,6 +350,8 @@ class TestAgentAndMonitoring:
         assert result["results"]["area_a"] == {"firing_rate": 1.0}
         assert result["results"]["area_b"] == {"firing_rate": 2.0}
         assert mock_client.monitor_activity.await_count == 2
+        for call in mock_client.monitor_activity.await_args_list:
+            assert call.kwargs["summary_only"] is True
 
     @pytest.mark.asyncio
     async def test_monitor_activity_batch_empty(self, mock_client):
@@ -365,6 +367,32 @@ class TestConnectivityDiagnostics:
         assert result["error"] == "request_failed"
         assert result["error_type"] == "connect_error"
         assert result["endpoint"] == "/v1/agent/list"
+
+    @pytest.mark.asyncio
+    async def test_get_registered_agents_includes_capability_names(self, mock_client):
+        mock_client._client.get.return_value = _ok(
+            [
+                "VdjYtJL3hmvhOZCjhKB+Tke+ZWV31+GMB+Uf7331jzLdiMI5Wsdm9vy5BMb4OmnV",
+                "viz-id",
+            ]
+        )
+        mock_client.list_agent_capabilities_all = AsyncMock(
+            return_value={
+                "VdjYtJL3hmvhOZCjhKB+Tke+ZWV31+GMB+Uf7331jzLdiMI5Wsdm9vy5BMb4OmnV": {
+                    "agent_name": "myosuite_scene_muscl",
+                    "capabilities": {"motor": True, "sensory": True},
+                },
+                "viz-id": {"agent_name": "brain-visualizer"},
+            }
+        )
+        result = await mock_client.get_registered_agents()
+        assert result["count"] == 2
+        by_name = {row["agent_id"]: row["agent_name"] for row in result["agents"]}
+        assert (
+            by_name["VdjYtJL3hmvhOZCjhKB+Tke+ZWV31+GMB+Uf7331jzLdiMI5Wsdm9vy5BMb4OmnV"]
+            == "myosuite_scene_muscl"
+        )
+        assert by_name["viz-id"] == "brain-visualizer"
 
     @pytest.mark.asyncio
     async def test_list_agent_capabilities_all_classifies_connect_errors(self, mock_client):
@@ -550,6 +578,80 @@ class TestMonitorActivityLifetimeStats:
         result = await mock_client.monitor_activity("a")
         assert result["firing_statistics"]["total_spikes"] == 0
         assert "error" in result["lifetime_stats"]
+
+    @pytest.mark.asyncio
+    async def test_summary_only_drops_spike_lists(self, mock_client):
+        mock_client._client.get.return_value = _ok(
+            {
+                "area_id": "babble",
+                "firing_statistics": {
+                    "total_spikes": 146,
+                    "firing_rate_hz": 365.0,
+                    "active_neuron_count": 144,
+                    "active_neurons": list(range(144)),
+                },
+                "spike_history": [{"burst": 1, "neuron_id": n} for n in range(146)],
+            }
+        )
+        result = await mock_client.monitor_activity(
+            "babble", duration_ms=100, include_lifetime_stats=False
+        )
+        assert "spike_history" not in result
+        assert "active_neurons" not in result["firing_statistics"]
+        assert result["firing_statistics"]["active_neuron_count"] == 144
+        assert result["firing_statistics"]["total_spikes"] == 146
+
+    @pytest.mark.asyncio
+    async def test_summary_only_false_keeps_spike_lists(self, mock_client):
+        history = [{"burst": 1, "neuron_id": 9}]
+        mock_client._client.get.return_value = _ok(
+            {
+                "area_id": "babble",
+                "firing_statistics": {
+                    "total_spikes": 1,
+                    "active_neurons": [9],
+                },
+                "spike_history": history,
+            }
+        )
+        result = await mock_client.monitor_activity(
+            "babble",
+            duration_ms=100,
+            include_lifetime_stats=False,
+            summary_only=False,
+        )
+        assert result["spike_history"] == history
+        assert result["firing_statistics"]["active_neurons"] == [9]
+
+    @pytest.mark.asyncio
+    async def test_batch_forwards_summary_only_false(self, mock_client):
+        mock_client.monitor_activity = AsyncMock(return_value={"firing_rate": 1.0})
+        await mock_client.monitor_activity_batch(["area_a"], duration_ms=100, summary_only=False)
+        assert mock_client.monitor_activity.await_args.kwargs["summary_only"] is False
+
+    @pytest.mark.asyncio
+    async def test_server_monitor_activity_batch_tool(self, monkeypatch):
+        from feagi_mcp import server
+
+        async def fake_batch(
+            area_ids: list[str],
+            duration_ms: int = 1000,
+            include_lifetime_stats: bool = True,
+            lifetime_neuron_cap: int = 64,
+            summary_only: bool = True,
+        ):
+            _ = duration_ms
+            _ = lifetime_neuron_cap
+            return {
+                "area_count": len(area_ids),
+                "summary_only": summary_only,
+                "include_lifetime_stats": include_lifetime_stats,
+            }
+
+        monkeypatch.setattr(server.feagi, "monitor_activity_batch", fake_batch)
+        result = await server.monitor_activity_batch(["a"], summary_only=True)
+        assert result["summary_only"] is True
+        assert result["area_count"] == 1
 
 
 class TestSnapshotManager:

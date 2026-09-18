@@ -56,6 +56,10 @@ Returns OPU areas with full semantic metadata instead of just IDs.
 #### `list_ipu_areas_with_metadata()`
 Returns IPU areas with full semantic metadata.
 
+Do not use this for encoder inventories. Unknown 4-char types (`ipro`, `imis`,
+`isvm`) are labeled `unknown` and the payload repeats purpose/capability text
+per area. Use `list_io_areas_compact` instead.
+
 #### `get_area_semantic_info(area_id: str)`
 Get detailed semantic information about a specific cortical area by its ID.
 

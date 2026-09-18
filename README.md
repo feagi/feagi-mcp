@@ -85,12 +85,12 @@ Add to your Cursor MCP settings (`~/.cursor/mcp.json`):
 ## Available Tools
 
 ### Agent Introspection
-- `get_registered_agents` - List all connected agents (controllers, embodiments)
+- `get_registered_agents` - List registered agents with ids and `agent_name`
 - `get_agent_properties` - Get agent type, capabilities, version, connection info
 - `get_agent_device_registrations` - Inspect motor/sensor structure, group_ids, control modes
 
 ### Monitoring
-- `monitor_activity` - Get real-time firing rates for a cortical area
+- `monitor_activity` / `monitor_activity_batch` - Firing rates and lifetime stats. `summary_only=True` (default) omits `spike_history` and neuron-id lists.
 - `get_connectivity` - Inspect synaptic connections between areas
 - `trace_signal_path` - Verify signal propagation paths
 - `get_embodiment_status` - Check controller connections and mappings
@@ -98,16 +98,21 @@ Add to your Cursor MCP settings (`~/.cursor/mcp.json`):
 - `get_cortical_synapse_counts` - Get incoming/outgoing synapse counts
 
 ### Genome Editing (NEW)
-- `create_cortical_area` - Add OPU/IPU/CUSTOM/MEMORY areas programmatically (CUSTOM/MEMORY require `brain_region_id`; MCP enforces origin/label spacing unless skipped). **Naming:** use intuitive role/circuit names; never prefix with `Mcp` — see `docs/NEW_TOOLS.md` (Cortical area naming policy).
+- `create_brain_region` - Create the named circuit container. Title must name the function (Sit, Walk CPG); Autogen Circuit / Untitled are rejected.
+- `create_cortical_area` - Add OPU/IPU/CUSTOM/MEMORY areas programmatically (CUSTOM/MEMORY require a function-named `brain_region_id`; MCP enforces origin/label spacing unless skipped). **Naming:** circuit title = function; area names = role; never prefix with `Mcp` — see `docs/NEW_TOOLS.md` (Circuit naming policy).
 - `update_cortical_area` - Modify cortical area properties
 - `delete_cortical_area` - Remove cortical areas
 - `list_opu_areas` - List only motor output areas
 - `list_ipu_areas` - List only sensory input areas
+- `list_io_areas_compact` - Compact IPU/OPU inventory (subtype, dimensions, `dev_count`, dimension mismatch). Prefer this over `*_with_metadata`.
 - `list_opu_areas_with_metadata` - List OPU areas with semantic type/purpose/capabilities info
-- `list_ipu_areas_with_metadata` - List IPU areas with semantic type/purpose/capabilities info
+- `list_ipu_areas_with_metadata` - List IPU areas with semantic type/purpose/capabilities info (do not use for encoder inventories)
 - `get_area_semantic_info` - Get detailed semantic information about any cortical area
 
 ### Connection Management (NEW)
+- `propose_connectivity_rule` - Local compact-rule judgment (`*` / `?` / `?+N`). Call before `create_morphology`.
+- `get_morphology` - Fetch one morphology (parameters omitted by default; `judgment.compact_form` when rows should be `N..M`). Prefer this over `list_morphologies`.
+- `update_morphology` - Replace an existing morphology and rebuild mappings that use it. Same compactness gate as `create_morphology`.
 - `get_cortical_mapping` - Get connection configuration between two areas
 - `update_cortical_mapping` - Create/update connections with morphology rules
 - `delete_cortical_mapping` - Remove connections between areas

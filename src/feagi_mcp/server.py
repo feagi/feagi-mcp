@@ -78,6 +78,7 @@ async def monitor_activity(
     duration_ms: int = 1000,
     include_lifetime_stats: bool = True,
     lifetime_neuron_cap: int = 64,
+    summary_only: bool = True,
 ) -> dict[str, Any]:
     """Monitor real-time neural activity, plus lifetime fire-count enrichment.
 
@@ -96,6 +97,8 @@ async def monitor_activity(
             Set False for very large areas where the extra fan-out is unwanted.
         lifetime_neuron_cap: Maximum neurons inspected for lifetime stats
             (default: 64). Caps round-trips for big areas.
+        summary_only: When True (default), omit ``spike_history`` and the
+            ``active_neurons`` id list. Set False only to inspect raw spikes.
 
     Returns:
         Activity data including ``firing_statistics`` (sample window) and,
@@ -107,6 +110,7 @@ async def monitor_activity(
         duration_ms,
         include_lifetime_stats=include_lifetime_stats,
         lifetime_neuron_cap=lifetime_neuron_cap,
+        summary_only=summary_only,
     )
     return result
 
@@ -367,9 +371,11 @@ async def list_cortical_areas(
         limit: Maximum rows to return after filtering. Omit for no cap.
 
     Returns:
-        Catalog rows with id, name, type, dimensions, parent region, and
-        unit/subunit when present. Neuron parameter dumps are omitted;
-        use ``inspect_cortical_area`` for those.
+        Catalog rows with id, name, type, dimensions, per-device dimensions,
+        ``dev_count``, parent region, and unit/subunit when present. Neuron
+        parameter dumps are omitted; use ``inspect_cortical_area`` for those.
+        For IPU/OPU subtype summaries and dimension-vs-``dev_count`` mismatches,
+        use ``list_io_areas_compact`` instead of ``list_ipu_areas_with_metadata``.
     """
     areas = await feagi.list_cortical_areas(
         name_contains=name_contains,
@@ -402,14 +408,9 @@ async def list_cortical_area_names(
 async def list_morphologies() -> dict[str, Any]:
     """Get all morphology definitions and connectivity rules.
 
-    Returns complete morphology catalog including:
-    - vectors: Precise coordinate-based connections
-    - patterns: Pattern-based connectivity rules
-    - functions: Function-based connections (memory, projection, etc.)
-    - composite: Multi-morphology compositions
-
-    Each morphology defines how neurons connect between cortical areas.
-    Use this to understand available connection patterns and design circuits.
+    Prefer ``list_morphologies_summary`` to browse, then ``get_morphology`` for
+    one rule. This full catalog includes every pattern array and often exceeds
+    the MCP response cap.
 
     Returns:
         Dictionary mapping morphology names to their definitions
@@ -627,35 +628,92 @@ async def create_morphology(
     morphology_type: str,
     morphology_parameters: dict[str, Any],
 ) -> dict[str, Any]:
-    """Create a custom morphology for precise neuron-to-neuron connectivity.
+    """Create a custom morphology. Call ``propose_connectivity_rule`` first.
 
-    Morphologies define connection patterns between cortical areas.
-    Use "vectors" type for precise coordinate-based mappings (e.g., joint control).
+    Prefer an existing core rule (``block_to_block``, ``projector``, ``lateral_+z``,
+    ``all_to_all``) via ``recommend_connectivity_rules`` / ``apply_connectivity_rule``.
+    Create a custom morphology only when no core rule expresses the transform.
+
+    ``patterns`` rows are ``[[src_x, src_y, src_z], [dst_x, dst_y, dst_z]]`` using
+    the FEAGI pattern language (``*``, ``?``, ``!``, ``?+``, ``?-``, ``?+=``,
+    ``?-=``, ``?+N``, ``?-N``, ``?-A:?+B``, or exact integers). Source-side
+    relative tokens do not filter; only ``*`` and exact integers select sources.
+
+    Do not enumerate exact voxel pairs for a regular transform. A dump that
+    collapses to one offset is rejected.
+
+    On a PositionalServo absolute OPU, dest ``z=0`` is max command. Do not use
+    ``?+17`` / high Z for muscle excitation.
 
     Args:
-        morphology_name: Unique name for this morphology (e.g., "to_joint_0")
-        morphology_type: Type of morphology ("vectors", "patterns", "functions", "composite")
+        morphology_name: Unique name for this morphology
+        morphology_type: ``vectors``, ``patterns``, ``functions``, or ``composite``
         morphology_parameters: Type-specific parameters:
-            - For "vectors": {"vectors": [[dx, dy, dz], ...]}
-              Each vector [dx,dy,dz] creates synapse from [x,y,z] to [x+dx,y+dy,z+dz]
-            - For "patterns": {"patterns": [[pattern_x, pattern_y, pattern_z]]}
-            - For "functions": {} (function-based connections)
-
-    Returns:
-        Status of morphology creation
+            - vectors: ``{"vectors": [[dx, dy, dz], ...]}``
+            - patterns: ``{"patterns": [[[src], [dst]], ...]}``
 
     Examples:
-        Identity mapping (preserves coordinates):
-          {"vectors": [[0, 0, 0]]}
+        Identity: ``{"vectors": [[0, 0, 0]]}`` or
+        ``{"patterns": [[["*", "*", "*"], ["?", "?", "?"]]]}``
 
-        X-axis lateral connection:
-          {"vectors": [[1, 0, 0]]}
+        Z offset: ``{"vectors": [[0, 0, 17]]}`` or
+        ``{"patterns": [[["*", "*", "*"], ["?", "?", "?+17"]]]}``
 
-        Multi-directional:
-          {"vectors": [[1, 0, 0], [0, 1, 0], [0, 0, 1]]}
+        One motor channel at max command:
+        ``{"patterns": [[[382, "*", "*"], ["?", "?", 0]]]}``
     """
     result = await feagi.create_morphology(morphology_name, morphology_type, morphology_parameters)
     return result
+
+
+@mcp.tool()
+async def get_morphology(
+    morphology_name: str,
+    include_parameters: bool = False,
+) -> dict[str, Any]:
+    """Fetch one morphology by name (``POST /v1/morphology/morphology_properties``).
+
+    Use this instead of ``list_morphologies`` when you need a single rule.
+    Parameters are omitted by default. ``judgment`` is computed locally and
+    includes ``compact_form`` when stored rows should be rewritten as ``N..M``.
+    Set ``include_parameters=True`` only when you need the raw rows.
+
+    Args:
+        morphology_name: Existing morphology name
+        include_parameters: When true, include the stored parameters object
+
+    Returns:
+        ``name``, ``type``, ``class``, ``pattern_count``, ``judgment``,
+        and ``parameters`` when requested
+    """
+    return await feagi.get_morphology(
+        morphology_name,
+        include_parameters=include_parameters,
+    )
+
+
+@mcp.tool()
+async def update_morphology(
+    morphology_name: str,
+    morphology_type: str,
+    morphology_parameters: dict[str, Any],
+) -> dict[str, Any]:
+    """Replace an existing morphology (``PUT /v1/morphology/morphology``).
+
+    Rebuilds synapses for mappings that use this rule. Same compactness
+    policy as ``create_morphology``: enumerated dumps are rejected; submit
+    ``judgment.compact_form`` from ``get_morphology`` instead.
+
+    Args:
+        morphology_name: Existing morphology name
+        morphology_type: ``vectors``, ``patterns``, ``functions``, or ``composite``
+        morphology_parameters: Replacement parameters (compact patterns/vectors)
+    """
+    return await feagi.update_morphology(
+        morphology_name,
+        morphology_type,
+        morphology_parameters,
+    )
 
 
 @mcp.tool()
@@ -977,7 +1035,9 @@ async def get_registered_agents() -> dict[str, Any]:
     heartbeat timeout, and that teardown closes their sockets.
 
     Returns:
-        List of registered agents with their capabilities, subscriptions, and status
+        ``agent_ids``, ``count``, and ``agents`` (each with ``agent_id``,
+        ``agent_name`` when the capability registry has it, and capability
+        flags). Do not treat opaque IDs as controller names.
     """
     result = await feagi.get_registered_agents()
     return result
@@ -1073,8 +1133,8 @@ async def list_opu_areas_with_metadata() -> list[dict[str, Any]]:
     - data_format: Format of data this area outputs
     - typical_use: Common use cases and applications
 
-    Use this instead of list_opu_areas when you need to understand what each
-    output area does and what it can control.
+    Use this instead of list_opu_areas when you need static purpose/capability
+    text. For subtype, voxel size, and ``dev_count``, use ``list_io_areas_compact``.
 
     Returns:
         List of OPU areas with semantic metadata
@@ -1109,14 +1169,58 @@ async def list_ipu_areas_with_metadata() -> list[dict[str, Any]]:
     - data_format: Format of data this area expects
     - typical_use: Common use cases and applications
 
-    Use this instead of list_ipu_areas when you need to understand what each
-    input area processes and what sensors it supports.
+    Use this instead of list_ipu_areas when you need static purpose/capability
+    text. Do **not** use this to inventory encoder IPUs: unknown subtypes such
+    as ``ipro`` / ``imis`` / ``isvm`` are labeled ``unknown`` and the payload
+    repeats long capability strings per area. Use ``list_io_areas_compact``
+    (``io_kind="ipu"``) for subtype, dimensions, and ``dev_count``.
 
     Returns:
         List of IPU areas with semantic metadata
     """
     result = await feagi.list_ipu_areas_with_metadata()
     return result
+
+
+@mcp.tool()
+async def list_io_areas_compact(
+    io_kind: str = "both",
+    subtype: str | None = None,
+    include_areas: bool = True,
+    mismatches_only: bool = False,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """Compact IPU/OPU inventory: subtype, dimensions, ``dev_count``, mismatch flag.
+
+    One FEAGI list fetch. Subtype is decoded locally from the 8-byte cortical ID
+    (``ipro``, ``imis``, ``isvi``, ``opse``, ...) so you do not need
+    ``interpret_cortical_id`` per area. ``dimension_dev_count_mismatch`` is true
+    when voxel width is not ``per_device_x * dev_count`` (combined encoder IPUs
+    that auto-created as a 1-voxel cube).
+
+    Prefer this over ``list_ipu_areas_with_metadata`` / ``list_opu_areas_with_metadata``.
+    Use ``include_areas=False`` for the subtype summary only.
+
+    Args:
+        io_kind: ``ipu``, ``opu``, or ``both`` (default).
+        subtype: Optional 4-char filter (``imis``, ``opse``, ...).
+        include_areas: If false, return summary counters only.
+        mismatches_only: If true, ``areas`` lists only dimension/``dev_count`` mismatches.
+        limit: Cap on ``areas`` after filtering. Summary is not capped.
+
+    Returns:
+        ``count``, ``mismatch_count``, ``by_subtype``, and compact ``areas`` rows.
+    """
+    try:
+        return await feagi.list_io_areas_compact(
+            io_kind,
+            subtype=subtype,
+            include_areas=include_areas,
+            mismatches_only=mismatches_only,
+            limit=limit,
+        )
+    except ValueError as e:
+        return {"error": str(e)}
 
 
 @mcp.tool()
@@ -1171,6 +1275,10 @@ async def create_cortical_area(
     If the user asked for a "new circuit" as a named container in the brain map with no voxel
     geometry, they likely mean a brain region — use create_brain_region instead.
 
+    CUSTOM/MEMORY areas must live in a functionally named circuit. Workflow: decide the
+    function (Sit, Walk CPG, OR Gate), create_brain_region with that title, then pass the
+    new region_id here. Do not parent into Autogen Circuit.
+
     Args:
         name: Human-readable name (persisted in genome / BV). Use clear role- or circuit-based
             names (e.g. OrGate_Input_A); do not prefix with Mcp/MCP (see docs NEW_TOOLS naming
@@ -1181,8 +1289,10 @@ async def create_cortical_area(
         neurons_per_voxel: Number of neurons per voxel (default: 1)
         device_count: Number of devices for IPU/OPU (default: 1)
         properties: Optional additional properties (grp_id, etc.)
-        brain_region_id: Parent brain region UUID for CUSTOM/MEMORY (required by API; may use
-            properties[\"brain_region_id\"] instead)
+        brain_region_id: Parent brain region UUID for CUSTOM/MEMORY. Required. The parent
+            region's title must name the circuit function. Autogen Circuit / Untitled are
+            rejected — call create_brain_region first (e.g. title Sit, Walk CPG, OR Gate).
+            May use properties[\"brain_region_id\"] instead.
         skip_placement_validation: Set True only to bypass MCP checks: (1) anchors must be
             at least 20 voxels from world origin (BV axis visibility), (2) anchors must be at
             least 32 voxels from any existing area (label overlap in BV).
@@ -1462,7 +1572,9 @@ async def describe_connectivity_rules(
         offset: Skip first N rows after filtering.
 
     Returns:
-        Morphology rows with use-case metadata (intent tags, description, dimension fit hints).
+        Morphology rows with use-case metadata, plus a top-level
+        ``pattern_language`` catalog. Call ``propose_connectivity_rule`` before
+        creating a custom rule.
     """
     return await feagi.describe_connectivity_rules(
         include_classes=include_classes,
@@ -1479,20 +1591,21 @@ async def recommend_connectivity_rules(
     prefer_core: bool = True,
     limit: int = 5,
 ) -> dict[str, Any]:
-    """Recommend existing morphology rules for a src->dst connection intent.
+    """Recommend existing morphology rules and a compact construction plan.
 
-    This ranking is deterministic and prefers core morphologies by default.
-    It does not create new custom rules.
+    Ranking prefers core morphologies. ``construction`` is always attached so a
+    missing catalog match still yields a legal ``*`` / ``?`` / ``?+N`` authoring
+    plan instead of an enumerated voxel dump.
 
     Args:
         src_area: Source cortical area ID.
         dst_area: Destination cortical area ID.
-        intent: Human intent hint (e.g. "one-to-one identity", "transpose xy").
+        intent: Human intent hint (e.g. "one-to-one identity", "sit motor").
         prefer_core: Prefer core rules over custom ones (default True).
         limit: Maximum recommendations to return (default 5, max 20).
 
     Returns:
-        Ranked recommendations plus selected best match.
+        Ranked recommendations, ``selected``, ``construction``, and ``pattern_language``.
     """
     return await feagi.recommend_connectivity_rules(
         src_area=src_area,
@@ -1500,6 +1613,51 @@ async def recommend_connectivity_rules(
         intent=intent,
         prefer_core=prefer_core,
         limit=limit,
+    )
+
+
+@mcp.tool()
+async def propose_connectivity_rule(
+    intent: str,
+    src_area: str | None = None,
+    dst_area: str | None = None,
+    src_dimensions: list[int] | None = None,
+    dst_dimensions: list[int] | None = None,
+    source_x_channels: list[int] | None = None,
+    z_offset: int | None = None,
+) -> dict[str, Any]:
+    """Author a compact connectivity rule before ``create_morphology``.
+
+    Local judgment. Uses area ids only to read dimensions and to detect a
+    PositionalServo destination (``opse``). Does not create morphologies.
+
+    Required workflow:
+    1. Call this with the intent (and ``source_x_channels`` for sit/motor subsets).
+    2. Reuse ``reuse.morphology_id`` when present.
+    3. Otherwise create the returned ``custom`` patterns/vectors as-is.
+    4. Never expand that result into per-voxel exact coordinates.
+
+    PositionalServo absolute dest: ``z=0`` is max command. A Z offset is rejected.
+    Sit/motor subset requires ``source_x_channels``; wildcarding every muscle is refused.
+
+    Args:
+        intent: e.g. ``sit motor``, ``one-to-one identity``, ``z offset``.
+        src_area: Optional source cortical id.
+        dst_area: Optional destination cortical id (used for servo detection).
+        src_dimensions: Optional ``[x, y, z]`` when ids are omitted.
+        dst_dimensions: Optional ``[x, y, z]`` when ids are omitted.
+        source_x_channels: Required for subset motor/sit mappings.
+        z_offset: Required for non-motor shift intents (e.g. 17). Forbidden on
+            PositionalServo absolute destinations.
+    """
+    return await feagi.propose_connectivity_rule(
+        intent=intent,
+        src_area=src_area,
+        dst_area=dst_area,
+        src_dimensions=src_dimensions,
+        dst_dimensions=dst_dimensions,
+        source_x_channels=source_x_channels,
+        z_offset=z_offset,
     )
 
 
@@ -1618,6 +1776,10 @@ async def get_brain_regions() -> dict[str, Any]:
     """List brain regions and member cortical areas (GET region/regions_members).
 
     Natural language: \"which region is this area in?\", region hierarchy, relocate context.
+
+    Use ``title`` to choose a parent. Autogen Circuit and Untitled are FEAGI placeholders
+    for untitled genomes — do not parent new CUSTOM/MEMORY areas there. Create a
+    function-named region with create_brain_region first.
     """
     result = await feagi.get_regions_members()
     return result
@@ -1755,8 +1917,12 @@ async def create_brain_region(
     In FEAGI, users often say \"circuit\" when they mean this — a named region that can hold
     cortical areas — not an IPU/OPU/CUSTOM voxel block. For voxel areas use create_cortical_area.
 
+    Title the region for the circuit function, not a placeholder. Autogen Circuit, Untitled,
+    New Circuit, and MCP-prefixed names are rejected.
+
     Args:
-        title: Display name for the new region (e.g. user-supplied label).
+        title: Function-based display name (e.g. Sit, Walk CPG, OR Gate). This is the BV
+            circuit label. Do not use Autogen Circuit, Untitled, or a UUID.
         coordinates_2d: Brain-map 2D position [x, y] (API-required).
         coordinates_3d: Layout 3D anchor [x, y, z] (API-required).
         parent_region_id: Optional parent region UUID. If omitted, FEAGI attaches the new region
@@ -1934,6 +2100,8 @@ async def clone_cortical_area(
     """Clone a custom (c*) or memory (m*) cortical area (POST cortical_area/clone).
 
     Natural language: \"duplicate area\". Only custom/memory areas are supported by the API.
+    When parent_region_id is set, that region must already have a function-based title
+    (Sit, Walk CPG). Autogen Circuit / Untitled parents are rejected.
     """
     result = await feagi.clone_cortical_area_via_api(
         source_area_id,
@@ -2318,6 +2486,7 @@ async def monitor_activity_batch(
     duration_ms: int = 1000,
     include_lifetime_stats: bool = True,
     lifetime_neuron_cap: int = 64,
+    summary_only: bool = True,
 ) -> dict[str, Any]:
     """Monitor multiple cortical areas concurrently.
 
@@ -2332,6 +2501,8 @@ async def monitor_activity_batch(
         duration_ms: Monitoring window applied to every area (default 1000).
         include_lifetime_stats: Forward to per-area enrichment (default True).
         lifetime_neuron_cap: Per-area neuron sampling cap (default 64).
+        summary_only: When True (default), each area omits ``spike_history``
+            and ``active_neurons`` ids. Set False only for raw spike dumps.
 
     Returns:
         ``{"duration_ms", "area_count", "results": {area_id: payload}}``.
@@ -2341,6 +2512,7 @@ async def monitor_activity_batch(
         duration_ms,
         include_lifetime_stats=include_lifetime_stats,
         lifetime_neuron_cap=lifetime_neuron_cap,
+        summary_only=summary_only,
     )
 
 
@@ -2451,7 +2623,8 @@ async def list_morphologies_summary(
 
     Use this instead of ``list_morphologies`` when the genome has many morphologies
     (the full listing easily exceeds the MCP response cap). Apply filters to focus
-    the result and ``limit``/``offset`` to paginate.
+    the result and ``limit``/``offset`` to paginate. Fetch one rule with
+    ``get_morphology``; rewrite it with ``update_morphology``.
     """
     return await feagi.list_morphologies_summary(
         name_substring=name_substring,
@@ -2493,6 +2666,9 @@ async def inspect_cortical_areas_minimal(cortical_ids: list[str]) -> dict[str, A
     present, refractory, plasticity constant, burst engine flag, synapse counts).
     Discards visualization geometry and encoding option lists. Lets you sweep
     several areas at once without exhausting the response budget.
+
+    For a genome-wide IPU/OPU inventory (subtype + ``dev_count`` + dimension
+    mismatch), use ``list_io_areas_compact`` instead of this tool.
     """
     return await feagi.inspect_cortical_areas_minimal(cortical_ids)
 
@@ -2521,21 +2697,22 @@ async def build_reflex_mapping(
 ) -> dict[str, Any]:
     """Create a custom ``patterns`` morphology and wire src->dst with it in one call.
 
-    Combines ``create_morphology`` + ``update_cortical_mapping`` so a reflex circuit
-    can be specified by its voxel-to-voxel routing table alone:
+    Combines ``create_morphology`` + ``update_cortical_mapping``. Pass compact
+    pattern rows, not an enumerated voxel table:
 
     .. code-block:: python
 
         voxel_mappings = [
-            {"src": [0, 0, 0], "dst": [0, 0, 0]},
-            {"src": [0, 0, 1], "dst": [0, 0, 1]},
-            ...
+            {"src": ["*", "*", "*"], "dst": ["?", "?", "?"]},
+            {"src": [382, "*", "*"], "dst": ["?", "?", 0]},
         ]
 
-    Each entry is one row of the morphology pattern. Wildcards (``"*"``, ``"?"``,
-    ``"!"``) are supported in any axis. By default the new mapping is appended to
-    existing rules between the two areas; pass ``replace_existing=True`` to wipe
-    them first.
+    Tokens: ``*``, ``?``, ``!``, ``?+N``, ``?-A:?+B``, exact ints. Enumerated
+    exact dumps that share one offset are rejected. On a PositionalServo
+    absolute OPU, dest z=0 is max command.
+
+    By default the new mapping is appended; pass ``replace_existing=True`` to
+    wipe existing rules first.
 
     ``synaptic_delay_bursts`` must be >= 1 (the backend rejects a zero axonal delay during
     synapse regeneration); it defaults to 1. A value < 1 is rejected up front, before the
@@ -2670,14 +2847,18 @@ async def list_controller_bridges() -> dict[str, Any]:
     Combines two sources:
     1. **Introspection descriptors** written by feagi-desktop when launching
        controllers (scans ``<runtime_root>/controllers/.introspection/``).
-    2. **Registered agents** from the FEAGI agent registry (``/v1/agent/list``).
+       Descriptors include the FEAGI ``agent_id`` the process registered with.
+    2. **Registered agents** from the FEAGI agent registry (``/v1/agent/list``)
+       joined by that exact ``agent_id`` (not a substring of the opaque id).
 
     Use this to check which controllers are running before issuing motor
     commands, stimulating OPU areas, or using embodiment introspection tools.
 
     Returns:
-        ``controllers`` list with introspection URLs, PIDs, matching agent
-        registrations, and ``registered_agent_ids`` for cross-reference.
+        ``controllers`` list with introspection URLs, PIDs, and an exact
+        ``agent_id`` join to the FEAGI registry when the launch descriptor
+        includes that id. Also ``registered_agents`` with ``agent_name`` so
+        opaque registry IDs can be identified without extra property calls.
     """
     return await feagi.list_controller_bridges()
 
@@ -2748,19 +2929,20 @@ async def get_experiment_stop_cause(
 
 @mcp.tool()
 async def get_agent_joint_map(agent_id: str) -> dict[str, Any]:
-    """Get a focused joint-to-OPU cortical area mapping for a registered agent.
+    """Get a focused actuator-to-OPU mapping for a registered agent.
 
-    Parses the agent's device registrations and extracts a flat list of joints
-    with their OPU cortical area IDs, group/channel indices, control modes,
-    and angle ranges. Use this to understand which cortical areas to stimulate
-    in order to drive specific robot joints.
+    Parses the agent's device registrations and extracts a flat list of motor
+    channels with OPU cortical area IDs, group/channel indices, control modes,
+    and value ranges. Joint-named servos and muscle/tendon servos are both
+    included. Muscle channels typically have an empty ``joint_name`` on the
+    wire and are identified by ``actuator_name``.
 
     Args:
         agent_id: Agent identifier (from ``get_registered_agents``).
 
     Returns:
-        ``joints`` list with per-joint metadata and ``opu_cortical_ids`` for
-        stimulation targeting.
+        ``joints`` list with per-channel metadata, ``channel_kind_counts``,
+        and ``opu_cortical_ids`` for stimulation targeting.
     """
     return await feagi.get_agent_joint_map(agent_id)
 
@@ -2789,8 +2971,9 @@ async def send_motor_command(
 
     Args:
         agent_id: Agent identifier (from ``get_registered_agents``).
-        joint_name: Joint name as reported by ``get_agent_joint_map``
-            (case-insensitive match).
+        joint_name: Channel name as reported by ``get_agent_joint_map``
+            (``joint_name``, ``actuator_name``, or ``source_entity``;
+            case-insensitive match).
         target_value: Target angle/position in the joint's native units
             (degrees for servo motors).
 

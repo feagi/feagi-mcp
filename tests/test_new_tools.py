@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from feagi_mcp.feagi_client import FeagiClient
+from feagi_mcp.feagi_client import FeagiClient, collect_device_registrations
 
 
 @pytest.fixture
@@ -103,6 +103,46 @@ class TestAgentIntrospection:
 
         dev_reg = result["device_registrations"]
         assert "output_units_and_decoder_properties" in dev_reg
+
+    @pytest.mark.asyncio
+    async def test_get_agent_device_registrations_reads_sibling_field(self, mock_client):
+        """Live FEAGI puts device_registrations beside capabilities, not inside it."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "myo_agent": {
+                "agent_name": "myosuite_scene_muscl",
+                "capabilities": {
+                    "motor": True,
+                    "sensory": True,
+                },
+                "device_registrations": {
+                    "output_units_and_decoder_properties": {"PositionalServo": []},
+                    "input_units_and_encoder_properties": {},
+                    "feedbacks": [],
+                },
+            }
+        }
+        mock_client._client.get.return_value = mock_response
+
+        result = await mock_client.get_agent_device_registrations("myo_agent")
+
+        dev_reg = result["device_registrations"]
+        assert "output_units_and_decoder_properties" in dev_reg
+        assert "PositionalServo" in dev_reg["output_units_and_decoder_properties"]
+
+
+def test_collect_device_registrations_prefers_sibling_map() -> None:
+    """Sibling registrations win over empty nested capability maps."""
+    collected = collect_device_registrations(
+        {
+            "capabilities": {"device_registrations": {}, "motor": True},
+            "device_registrations": {
+                "output_units_and_decoder_properties": {"PositionalServo": []}
+            },
+        }
+    )
+    assert collected["output_units_and_decoder_properties"] == {"PositionalServo": []}
 
 
 class TestVersionInfo:
@@ -297,7 +337,99 @@ class TestAgentJointMap:
         assert result["joints"][0]["joint_name"] == "joint1"
         assert result["joints"][0]["control_mode"] == "Absolute"
         assert result["joints"][0]["cortical_id"] == "b3BzZQEAAAA="
+        assert result["joints"][0]["channel_kind"] == "joint"
         assert result["joints"][1]["channel_index"] == 5
+        assert result["channel_kind_counts"]["joint"] == 2
+
+    @pytest.mark.asyncio
+    async def test_get_agent_joint_map_lists_muscle_actuators(self, mock_client):
+        """Muscle/tendon servos with empty joint_name are listed by actuator_name."""
+        mock_client.get_agent_device_registrations = AsyncMock(
+            return_value={
+                "agent_id": "myo_agent",
+                "device_registrations": {
+                    "output_units_and_decoder_properties": {
+                        "PositionalServo": [
+                            [
+                                {
+                                    "cortical_unit_index": 0,
+                                    "friendly_name": "ungrouped",
+                                    "io_configuration_flags": {"frame_change_handling": "Absolute"},
+                                    "device_grouping": [
+                                        {
+                                            "channel_index_override": None,
+                                            "friendly_name": "IL_L1_l",
+                                            "device_properties": {
+                                                "joint_name": {
+                                                    "type": "String",
+                                                    "value": "",
+                                                },
+                                                "actuator_name": {
+                                                    "type": "String",
+                                                    "value": "IL_L1_l",
+                                                },
+                                                "source_entity": {
+                                                    "type": "String",
+                                                    "value": "IL_L1_l",
+                                                },
+                                                "bundle_id": {
+                                                    "type": "String",
+                                                    "value": "ungrouped",
+                                                },
+                                            },
+                                        },
+                                        {
+                                            "channel_index_override": 1,
+                                            "friendly_name": "rect_abd_l",
+                                            "device_properties": {
+                                                "joint_name": {
+                                                    "type": "String",
+                                                    "value": "",
+                                                },
+                                                "actuator_name": {
+                                                    "type": "String",
+                                                    "value": "rect_abd_l",
+                                                },
+                                                "source_entity": {
+                                                    "type": "String",
+                                                    "value": "rect_abd_l",
+                                                },
+                                                "bundle_id": {
+                                                    "type": "String",
+                                                    "value": "ungrouped",
+                                                },
+                                            },
+                                        },
+                                    ],
+                                },
+                                {"PositionalServo": [{"value": 10}, "Linear"]},
+                            ]
+                        ]
+                    }
+                },
+            }
+        )
+        mock_client.list_cortical_areas = AsyncMock(
+            return_value=[
+                {
+                    "cortical_id": "b3BzZQEAAAA=",
+                    "cortical_group": "OPU",
+                    "cortical_subtype": "opse",
+                    "unit_id": 0,
+                    "subunit_id": 0,
+                }
+            ]
+        )
+
+        result = await mock_client.get_agent_joint_map("myo_agent")
+
+        assert result["total_joints"] == 2
+        names = [j["joint_name"] for j in result["joints"]]
+        assert names == ["IL_L1_l", "rect_abd_l"]
+        assert result["joints"][0]["channel_kind"] == "muscle"
+        assert result["joints"][0]["actuator_name"] == "IL_L1_l"
+        assert "driven_joint" not in result["joints"][0]
+        assert result["channel_kind_counts"] == {"muscle": 2}
 
 
 class TestGenomeEditing:
@@ -339,6 +471,11 @@ class TestGenomeEditing:
         }
         mock_client._client.post.return_value = mock_response
         mock_client.get_cortical_area_geometry = AsyncMock(return_value={})
+        mock_client.get_regions_members = AsyncMock(
+            return_value={
+                "00000000-0000-0000-0000-000000000001": {"title": "Sit"},
+            }
+        )
 
         result = await mock_client.create_cortical_area(
             name="TestArea",
@@ -1017,12 +1154,23 @@ class TestCreateBrainRegion:
             [0, 0, 0],
         )
         assert "error" in result
+        mock_client._client.post.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_create_brain_region_rejects_autogen_title(self, mock_client):
+        result = await mock_client.create_brain_region(
+            "Autogen Circuit",
+            [0, 0],
+            [0, 0, 0],
+        )
+        assert "error" in result
+        mock_client._client.post.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_create_brain_region_rejects_bad_dimensions(self, mock_client):
-        r1 = await mock_client.create_brain_region("X", [0], [0, 0, 0])
+        r1 = await mock_client.create_brain_region("Sit", [0], [0, 0, 0])
         assert "error" in r1
-        r2 = await mock_client.create_brain_region("X", [0, 0], [0, 0])
+        r2 = await mock_client.create_brain_region("Sit", [0, 0], [0, 0])
         assert "error" in r2
 
 
@@ -1513,6 +1661,152 @@ class TestRenameMorphology:
         result = await server.rename_morphology("x", "y")
 
         assert result["new_morphology_id"] == "y"
+
+
+class TestGetMorphology:
+    """Single-morphology fetch via POST /v1/morphology/morphology_properties."""
+
+    @pytest.mark.asyncio
+    async def test_omits_parameters_by_default(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "morphology_name": "babble_sit",
+            "type": "patterns",
+            "class": "custom",
+            "parameters": {"patterns": [[[x, "*", "*"], ["?", "?", 0]] for x in range(10)]},
+        }
+        mock_client._client.post.return_value = mock_response
+
+        result = await mock_client.get_morphology("babble_sit")
+
+        assert result["success"] is True
+        assert result["name"] == "babble_sit"
+        assert result["pattern_count"] == 10
+        assert "parameters" not in result
+        assert result["judgment"]["reject"] is True
+        assert result["judgment"]["compact_form"]["parameters"]["patterns"] == [
+            [["0..9", "*", "*"], ["?", "?", 0]]
+        ]
+        mock_client._client.post.assert_awaited_once()
+        assert mock_client._client.get.await_count == 0
+        call_kwargs = mock_client._client.post.await_args.kwargs
+        assert call_kwargs["json"] == {"morphology_name": "babble_sit"}
+
+    @pytest.mark.asyncio
+    async def test_include_parameters_returns_rows(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "morphology_name": "babble_sit",
+            "type": "patterns",
+            "class": "custom",
+            "parameters": {"patterns": [[[0, "*", "*"], ["?", "?", 0]]]},
+        }
+        mock_client._client.post.return_value = mock_response
+
+        result = await mock_client.get_morphology("babble_sit", include_parameters=True)
+
+        assert result["parameters"]["patterns"] == [[[0, "*", "*"], ["?", "?", 0]]]
+
+    @pytest.mark.asyncio
+    async def test_empty_name_skips_http(self, mock_client):
+        result = await mock_client.get_morphology("   ")
+        assert result["error"] == "invalid_input"
+        mock_client._client.post.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_http_error(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_response.text = "not found"
+        mock_client._client.post.return_value = mock_response
+
+        result = await mock_client.get_morphology("missing")
+
+        assert result["success"] is False
+        assert "HTTP 404" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_server_get_morphology_tool(self, monkeypatch):
+        from feagi_mcp import server
+
+        async def fake_get(name: str, include_parameters: bool = False):
+            return {"name": name, "include_parameters": include_parameters, "success": True}
+
+        monkeypatch.setattr(server.feagi, "get_morphology", fake_get)
+
+        result = await server.get_morphology("babble_sit", include_parameters=True)
+        assert result["name"] == "babble_sit"
+        assert result["include_parameters"] is True
+
+
+class TestUpdateMorphology:
+    """PUT /v1/morphology/morphology with the same compactness gate as create."""
+
+    @pytest.mark.asyncio
+    async def test_update_morphology_success(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"status": "success"}
+        mock_client._client.put.return_value = mock_response
+
+        result = await mock_client.update_morphology(
+            "babble_sit",
+            "patterns",
+            {"patterns": [[["0..7", "*", "*"], ["?", "?", 0]]]},
+        )
+
+        assert result["status"] == "success"
+        mock_client._client.put.assert_awaited_once()
+        call_kwargs = mock_client._client.put.await_args.kwargs
+        assert call_kwargs["json"]["morphology_name"] == "babble_sit"
+        assert call_kwargs["json"]["morphology_parameters"]["patterns"][0][0][0] == "0..7"
+
+    @pytest.mark.asyncio
+    async def test_update_morphology_rejects_enumerated_dump(self, mock_client):
+        patterns = [[[x, "*", "*"], ["?", "?", 0]] for x in range(10)]
+        result = await mock_client.update_morphology(
+            "babble_sit",
+            "patterns",
+            {"patterns": patterns},
+        )
+        assert result["error"] == "invalid_connectivity_rule"
+        mock_client._client.put.assert_not_called()
+        assert result["judgment"]["compact_form"]["parameters"]["patterns"] == [
+            [["0..9", "*", "*"], ["?", "?", 0]]
+        ]
+
+    @pytest.mark.asyncio
+    async def test_update_morphology_strips_name(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"status": "success"}
+        mock_client._client.put.return_value = mock_response
+
+        await mock_client.update_morphology(
+            "  babble_sit  ",
+            "patterns",
+            {"patterns": [[[0, "*", "*"], ["?", "?", 0]]]},
+        )
+        assert mock_client._client.put.await_args.kwargs["json"]["morphology_name"] == "babble_sit"
+
+    @pytest.mark.asyncio
+    async def test_server_update_morphology_tool(self, monkeypatch):
+        from feagi_mcp import server
+
+        async def fake_update(name: str, morph_type: str, parameters: dict):
+            return {"status": "success", "name": name, "type": morph_type, "parameters": parameters}
+
+        monkeypatch.setattr(server.feagi, "update_morphology", fake_update)
+
+        result = await server.update_morphology(
+            "babble_sit",
+            "patterns",
+            {"patterns": [[["0..7", "*", "*"], ["?", "?", 0]]]},
+        )
+        assert result["status"] == "success"
+        assert result["name"] == "babble_sit"
 
 
 class TestBuildReflexMappingDelayValidation:

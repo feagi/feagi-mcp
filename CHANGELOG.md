@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`propose_connectivity_rule`**: local authoring judgment for morphologies.
+  Returns a reuse-or-compact ``*`` / ``?`` / ``?+N`` plan. Sit/motor subsets
+  require ``source_x_channels``. Z offsets toward a PositionalServo absolute
+  OPU are rejected (``z=0`` is max command).
+- **`list_io_areas_compact`**: one-fetch IPU/OPU inventory with locally decoded
+  4-char subtype, dimensions, per-device dimensions, ``dev_count``, and a
+  ``dimension_dev_count_mismatch`` flag. Prefer this over
+  ``list_ipu_areas_with_metadata`` (which labels encoder types ``unknown`` and
+  repeats long capability text per area).
+- **Circuit naming policy**: `create_brain_region` rejects placeholder titles
+  (Autogen Circuit, Untitled, generic container words).
+  `create_cortical_area` (CUSTOM/MEMORY) and `clone_cortical_area` (when a
+  parent is set) refuse those parents and require a function-based circuit
+  title (Sit, Walk CPG, OR Gate).
+- **Absolute pattern range ``N..M``**: source-side contiguous channels collapse
+  to one ``["1..98", "*", "*"]`` row instead of one exact-X row per channel.
+- **`get_morphology`**: fetch one rule via
+  ``POST /v1/morphology/morphology_properties``. Parameters are omitted by
+  default; local ``judgment`` includes ``compact_form`` when rows collapse to
+  ``N..M``. Use this instead of ``list_morphologies``.
+- **`update_morphology`**: ``PUT /v1/morphology/morphology`` with the same
+  compactness gate as ``create_morphology``. Rebuilds mappings that use the
+  rule.
+- **`monitor_activity` / `monitor_activity_batch` ``summary_only``** (default
+  True): drop ``spike_history`` and ``firing_statistics.active_neurons``. Set
+  False only when a raw spike dump is required.
+
+### Changed
+- **`create_morphology` / `build_reflex_mapping`** reject enumerated exact
+  voxel dumps that share one offset, and reject high dest Z on PositionalServo
+  absolute areas. ``recommend_connectivity_rules`` / ``describe_connectivity_rules``
+  now attach ``pattern_language`` and a ``construction`` plan.
+- **`list_cortical_areas` catalog rows** now include ``cortical_subtype``,
+  ``cortical_dimensions_per_device``, and ``dev_count`` when the list payload
+  has them.
+- **`get_agent_device_registrations`** now reads the sibling
+  ``device_registrations`` field on ``/v1/agent/capabilities/all``. Live FEAGI
+  does not nest that blob under ``capabilities``, so musculoskeletal agents
+  previously looked unregistered to MCP.
+- **`get_agent_joint_map`** lists muscle/tendon ``PositionalServo`` channels
+  that have an empty ``joint_name``. Identity comes from ``actuator_name`` /
+  ``source_entity``, with ``channel_kind`` and ``channel_kind_counts``.
+- **`send_motor_command`** matches ``actuator_name`` and ``source_entity``
+  as well as ``joint_name``, and reports ambiguity instead of silently
+  driving the first duplicate.
+
 ## [0.0.14] - 2026-09-12
 
 ### Added

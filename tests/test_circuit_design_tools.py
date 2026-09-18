@@ -440,6 +440,8 @@ class TestConnectivityRuleIntelligence:
         assert out["items"][0]["name"] == "block_to_block"
         assert out["items"][0]["use_case"]["requires_same_dimensions"] is True
         assert "one-to-one" in out["items"][0]["use_case"]["intent_tags"]
+        assert out["pattern_language"]["rule_shape"]
+        assert "propose_connectivity_rule" in out["authoring_note"]
 
     @pytest.mark.asyncio
     async def test_recommend_connectivity_rules_prefers_core_identity_when_dimensions_match(
@@ -481,6 +483,7 @@ class TestConnectivityRuleIntelligence:
         )
         assert out["selected"]["name"] == "block_to_block"
         assert out["selected"]["dimension_fit"] == "compatible"
+        assert out["construction"]["reuse"]["morphology_id"] == "block_to_block"
 
     @pytest.mark.asyncio
     async def test_recommend_connectivity_rules_returns_error_when_no_intent_match(
@@ -512,6 +515,8 @@ class TestConnectivityRuleIntelligence:
             intent="diagonal gyro transform",
         )
         assert out["error"] == "no_rule_match_for_intent"
+        assert "construction" in out
+        assert out["pattern_language"]["source_relative"]
 
     @pytest.mark.asyncio
     async def test_apply_connectivity_rule_appends_existing_mapping(self, mock_client):
@@ -559,6 +564,65 @@ class TestConnectivityRuleIntelligence:
         assert len(sent_rules) == 2
         assert sent_rules[1]["morphology_id"] == "block_to_block"
         assert sent_rules[1]["postSynapticCurrent_multiplier"] == 3
+
+    @pytest.mark.asyncio
+    async def test_create_morphology_rejects_enumerated_offset_dump(self, mock_client):
+        patterns = [[[x, 0, z], [x, 0, z + 17]] for x in range(4) for z in range(2)]
+        out = await mock_client.create_morphology(
+            "babble_sit",
+            "patterns",
+            {"patterns": patterns},
+        )
+        assert out["error"] == "invalid_connectivity_rule"
+        mock_client._client.post.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_create_morphology_accepts_compact_pattern(self, mock_client):
+        mock_client._client.post.return_value = _ok({"success": True})
+        out = await mock_client.create_morphology(
+            "babble_sit",
+            "patterns",
+            {"patterns": [[[382, "*", "*"], ["?", "?", 0]]]},
+        )
+        assert out.get("success") is True
+        mock_client._client.post.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_update_morphology_rejects_enumerated_source_x_dump(self, mock_client):
+        patterns = [[[x, "*", "*"], ["?", "?", 0]] for x in range(10)]
+        out = await mock_client.update_morphology(
+            "babble_sit",
+            "patterns",
+            {"patterns": patterns},
+        )
+        assert out["error"] == "invalid_connectivity_rule"
+        mock_client._client.put.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_build_reflex_rejects_high_z_on_positional_servo(self, mock_client):
+        mock_client.create_morphology = AsyncMock()
+        out = await mock_client.build_reflex_mapping(
+            src_area_id="src",
+            dst_area_id="b3BzZQEAAAA=",
+            morphology_name="bad_sit",
+            voxel_mappings=[{"src": [382, "*", "*"], "dst": ["?", "?", 17]}],
+            postsynaptic_current_multiplier=1,
+        )
+        assert out["error"] == "invalid_positional_servo_z"
+        mock_client.create_morphology.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_propose_connectivity_rule_is_local_for_explicit_dims(self, mock_client):
+        out = await mock_client.propose_connectivity_rule(
+            intent="sit motor",
+            dst_area="b3BzZQEAAAA=",
+            source_x_channels=[382, 394],
+            src_dimensions=[416, 1, 5],
+            dst_dimensions=[416, 1, 20],
+        )
+        assert out["error"] is None
+        assert out["custom"]["parameters"]["patterns"][0][1][2] == 0
+        mock_client._client.get.assert_not_called()
 
 
 class TestAutoPolarityProbe:

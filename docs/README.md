@@ -18,7 +18,7 @@ Welcome to FEAGI MCP documentation!
 
 3. **[API Reference](API_REFERENCE.md)** - Complete tool documentation
 
-   Cortical **naming** when using `create_cortical_area`: see **[NEW_TOOLS.md — Cortical area naming policy](NEW_TOOLS.md#cortical-area-naming-policy-mcp)** (no `Mcp` prefix; intuitive role names).
+   Circuit **and** cortical **naming** when using `create_brain_region` / `create_cortical_area`: see **[NEW_TOOLS.md — Circuit naming policy](NEW_TOOLS.md#circuit-naming-policy-mcp)** (function titles, not Autogen Circuit) and **[Cortical area naming policy](NEW_TOOLS.md#cortical-area-naming-policy-mcp)** (no `Mcp` prefix; role names).
    - All tool signatures
    - Parameter descriptions
    - Return value formats
