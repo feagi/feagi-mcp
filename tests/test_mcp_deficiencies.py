@@ -379,9 +379,7 @@ class TestNeuronInspection:
     @pytest.mark.asyncio
     async def test_get_voxel_neurons_with_pagination(self, mock_client):
         mock_client._client.get.return_value = _ok({"voxel_neurons": []})
-        result = await mock_client.get_voxel_neurons(
-            "c", 0, 0, 0, synapse_page=2, view="edges"
-        )
+        result = await mock_client.get_voxel_neurons("c", 0, 0, 0, synapse_page=2, view="edges")
         assert result == {"voxel_neurons": [], "view": "edges"}
         params = mock_client._client.get.call_args.kwargs["params"]
         assert params["synapse_page"] == "2"

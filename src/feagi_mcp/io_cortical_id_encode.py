@@ -156,9 +156,7 @@ def encode_io_cortical_id(
         result["error"] = f"unit_index must be in 0..{_UNIT_INDEX_MAX}; got {unit_index}"
         return result
     if not (0 <= int(subunit_index) <= _SUBUNIT_INDEX_MAX):
-        result["error"] = (
-            f"subunit_index must be in 0..{_SUBUNIT_INDEX_MAX}; got {subunit_index}"
-        )
+        result["error"] = f"subunit_index must be in 0..{_SUBUNIT_INDEX_MAX}; got {subunit_index}"
         return result
 
     flag, flag_err = configuration_flag(variant, framing, positioning)

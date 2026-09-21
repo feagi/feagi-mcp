@@ -61,12 +61,8 @@ def test_validate_io_kind_rejects_unknown() -> None:
 
 
 def test_dimension_mismatch_flags_collapsed_encoder_ipu() -> None:
-    assert (
-        dimension_dev_count_mismatch([1, 1, 1], [1, 1, 1], 416) is True
-    )
-    assert (
-        dimension_dev_count_mismatch([416, 1, 20], [1, 1, 20], 416) is False
-    )
+    assert dimension_dev_count_mismatch([1, 1, 1], [1, 1, 1], 416) is True
+    assert dimension_dev_count_mismatch([416, 1, 20], [1, 1, 20], 416) is False
     assert dimension_dev_count_mismatch([1, 1, 10], None, 1) is False
 
 

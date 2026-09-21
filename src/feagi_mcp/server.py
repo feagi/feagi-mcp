@@ -2586,9 +2586,7 @@ async def get_voxel_neurons(
     ``view=edges`` with ``synapse_page`` only when a raw synapse page is
     required.
     """
-    return await feagi.get_voxel_neurons(
-        cortical_id, x, y, z, synapse_page, view=view
-    )
+    return await feagi.get_voxel_neurons(cortical_id, x, y, z, synapse_page, view=view)
 
 
 @mcp.tool()

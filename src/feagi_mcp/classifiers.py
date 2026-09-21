@@ -63,11 +63,7 @@ def classifier_field_bindings(record: dict[str, Any]) -> list[dict[str, str]]:
 
 def project_classifier_row(record: dict[str, Any]) -> dict[str, Any]:
     """Keep classifier identity, parent, pose, shared slots, and field bindings."""
-    row = {
-        key: record.get(key)
-        for key in CLASSIFIER_LIST_KEYS
-        if key != "fields"
-    }
+    row = {key: record.get(key) for key in CLASSIFIER_LIST_KEYS if key != "fields"}
     row["fields"] = classifier_field_bindings(record)
     return row
 
@@ -174,8 +170,7 @@ def resolve_classifier_slot(
         "present": True,
         "name": _area_name(area),
         "cortical_type": area.get("cortical_type") or area.get("area_type"),
-        "cortical_dimensions": area.get("cortical_dimensions")
-        or area.get("dimensions"),
+        "cortical_dimensions": area.get("cortical_dimensions") or area.get("dimensions"),
         "visible": area.get("visible"),
         "coordinates_3d": coordinates,
         "parent_region_id": area.get("parent_region_id"),
@@ -273,9 +268,7 @@ def build_classifier_inspect(
         src_id = slot_ids.get(src_slot)
         dst_id = slot_ids.get(dst_slot)
         morphologies = (
-            mapping_lookup.get((str(src_id), str(dst_id)), [])
-            if src_id and dst_id
-            else []
+            mapping_lookup.get((str(src_id), str(dst_id)), []) if src_id and dst_id else []
         )
         present = expected in morphologies
         row = {
@@ -303,12 +296,8 @@ def build_classifier_inspect(
         missing_mappings,
     )
     for binding in classifier_field_bindings(classifier):
-        field_slot = resolve_classifier_slot(
-            "field_area", binding["field_area_id"], catalog
-        )
-        twin_slot = resolve_classifier_slot(
-            "scan_twin", binding["scan_twin_id"], catalog
-        )
+        field_slot = resolve_classifier_slot("field_area", binding["field_area_id"], catalog)
+        twin_slot = resolve_classifier_slot("scan_twin", binding["scan_twin_id"], catalog)
         field_missing = [] if field_slot.get("present") else ["field_area"]
         twin_missing = [] if twin_slot.get("present") else ["scan_twin"]
         morphologies = (
@@ -317,9 +306,7 @@ def build_classifier_inspect(
             else []
         )
         mapping_present = "episodic_scan" in morphologies
-        field_mapping_missing = (
-            [] if mapping_present else ["field_to_kernel_mem"]
-        )
+        field_mapping_missing = [] if mapping_present else ["field_to_kernel_mem"]
         field_blockers = scan_blockers(
             {
                 "field_area": field_slot,
@@ -357,9 +344,7 @@ def build_classifier_inspect(
             }
         )
         if not mapping_present:
-            missing_mappings.append(
-                f"field_to_kernel_mem:{binding['field_area_id']}"
-            )
+            missing_mappings.append(f"field_to_kernel_mem:{binding['field_area_id']}")
         for name in field_blockers:
             if name not in blockers:
                 blockers.append(name)

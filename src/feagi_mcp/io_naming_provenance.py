@@ -102,8 +102,7 @@ def summarize_motor_groups_from_registrations(
             friendly_name = _nonempty_str(meta.get("friendly_name"))
             unit_index = meta.get("cortical_unit_index")
             is_catch_all = (
-                friendly_name == CATCH_ALL_GROUP_NAME
-                or CATCH_ALL_GROUP_NAME in bundle_ids
+                friendly_name == CATCH_ALL_GROUP_NAME or CATCH_ALL_GROUP_NAME in bundle_ids
             )
             io_flags = meta.get("io_configuration_flags")
             frame_handling = None
@@ -145,9 +144,7 @@ def compose_naming_cause(
     suffix = title_parts.get("subunit_suffix")
     if suffix is not None and isinstance(subunit_id, int):
         encoding_note = f" ({encoding})" if encoding else ""
-        pieces.append(
-            f"suffix '-{suffix}' is PositionalServo sub-area {subunit_id}{encoding_note}"
-        )
+        pieces.append(f"suffix '-{suffix}' is PositionalServo sub-area {subunit_id}{encoding_note}")
     if not pieces:
         return "Title is the connectome cortical_name with no matching motor registration group."
     return "; ".join(pieces) + "."
@@ -161,9 +158,7 @@ def build_area_naming_explanation(
     """Compose the compact explain_cortical_area_naming payload."""
     interpretation = decode_cortical_id_interpretation(cortical_id)
     area_record = area if isinstance(area, dict) else {}
-    name = _nonempty_str(area_record.get("cortical_name")) or _nonempty_str(
-        area_record.get("name")
-    )
+    name = _nonempty_str(area_record.get("cortical_name")) or _nonempty_str(area_record.get("name"))
     subunit_id = area_record.get("subunit_id")
     if not isinstance(subunit_id, int):
         decoded_sub = interpretation.get("cortical_subunit_index")

@@ -376,9 +376,7 @@ class TestSendMotorCommand:
                             [
                                 {
                                     "cortical_unit_index": 0,
-                                    "io_configuration_flags": {
-                                        "frame_change_handling": "Absolute"
-                                    },
+                                    "io_configuration_flags": {"frame_change_handling": "Absolute"},
                                     "device_grouping": [
                                         {
                                             "friendly_name": "IL_L1_l",

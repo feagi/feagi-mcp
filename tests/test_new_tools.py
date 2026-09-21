@@ -485,9 +485,7 @@ class TestMotorGroupSummary:
         assert "device_grouping" not in groups[0]
 
     @pytest.mark.asyncio
-    async def test_explain_cortical_area_naming_uses_inspect_and_summary(
-        self, mock_client
-    ):
+    async def test_explain_cortical_area_naming_uses_inspect_and_summary(self, mock_client):
         mock_client.fetch_cortical_area_properties = AsyncMock(
             return_value={
                 "cortical_name": "ungrouped-1",
@@ -1399,9 +1397,7 @@ class TestEmbodimentStatusLiveRegistry:
         mock_client.get_registered_agents = AsyncMock(
             return_value={"count": 1, "agent_ids": ["video-1"]}
         )
-        mock_client.list_io_areas_compact = AsyncMock(
-            return_value={"count": 2, "areas": []}
-        )
+        mock_client.list_io_areas_compact = AsyncMock(return_value={"count": 2, "areas": []})
 
         result = await mock_client.get_embodiment_status()
 

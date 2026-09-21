@@ -90,9 +90,7 @@ def decode_cortical_id_interpretation(cortical_id: str) -> dict[str, Any]:
     flags = int.from_bytes(raw[4:6], "little")
     subunit = (flags >> _SUBUNIT_SHIFT) & _SUBUNIT_MASK
     unit_index = int.from_bytes(raw[6:8], "little")
-    frame_change = (
-        "Incremental" if ((flags >> _FRAME_CHANGE_SHIFT) & 0x01) == 1 else "Absolute"
-    )
+    frame_change = "Incremental" if ((flags >> _FRAME_CHANGE_SHIFT) & 0x01) == 1 else "Absolute"
 
     base.update(
         {

@@ -4203,9 +4203,7 @@ class FeagiClient:
                         "y": props.get("y"),
                         "z": props.get("z"),
                         "membrane_potential": props.get("membrane_potential"),
-                        "consecutive_fire_count": int(
-                            props.get("consecutive_fire_count", 0) or 0
-                        ),
+                        "consecutive_fire_count": int(props.get("consecutive_fire_count", 0) or 0),
                         "threshold": props.get("threshold"),
                     }
                 )
