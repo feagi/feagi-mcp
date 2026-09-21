@@ -58,7 +58,17 @@
     {
       "name": "get_area_parameters",
       "category": "inspection",
-      "description": "Get neuron properties and configuration"
+      "description": "Get neuron properties and configuration from cortical-area properties"
+    },
+    {
+      "name": "list_area_neuron_states",
+      "category": "inspection",
+      "description": "Compact x/y/z + membrane + fire-count rows for one area"
+    },
+    {
+      "name": "list_area_synapses",
+      "category": "inspection",
+      "description": "Realized synapse topology; summary view by default"
     },
     {
       "name": "list_memory_neurons",
@@ -79,6 +89,16 @@
       "name": "list_cortical_areas",
       "category": "inspection",
       "description": "List cortical areas; filter by name, id, or type to avoid a full-genome dump"
+    },
+    {
+      "name": "list_classifiers",
+      "category": "inspection",
+      "description": "List first-class genome classifiers without searching _twin / _kernel_mem area names"
+    },
+    {
+      "name": "inspect_classifier",
+      "category": "inspection",
+      "description": "One-call classifier assembly: slots, twin, and required mappings"
     },
     {
       "name": "get_genome_info",

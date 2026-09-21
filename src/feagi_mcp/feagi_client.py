@@ -12,8 +12,9 @@ from typing import Any, cast
 import httpx
 
 from feagi_mcp.area_metadata import (
+    area_record_matches_name_search,
+    area_title_matches_search,
     enrich_area_list,
-    enrich_area_with_name,
     get_semantic_info,
 )
 from feagi_mcp.bv_operations import BV_OPERATION_BY_ID, resolve_path
@@ -21,6 +22,12 @@ from feagi_mcp.circuit_naming import (
     extract_region_title,
     parent_circuit_naming_error,
     validate_circuit_title,
+)
+from feagi_mcp.classifiers import (
+    build_classifier_inspect,
+    filter_classifier_records,
+    project_classifier_row,
+    select_classifier_record,
 )
 from feagi_mcp.connectivity_rules import (
     PATTERN_LANGUAGE,
@@ -338,6 +345,320 @@ def _summarize_cortical_activity(payload: dict[str, Any]) -> dict[str, Any]:
     return summarized
 
 
+def mapping_rules_from_area_record(area: dict[str, Any], dst_area: str) -> list[Any]:
+    """Read stored ``cortical_mapping_dst[dst]`` rules from an area properties record.
+
+    This is the connectome source of truth. The mapping_properties GET formatter
+    400s when a non-plastic rule omits ``plasticity_constant``.
+    """
+    dst = dst_area.strip()
+    bags: list[Any] = [area.get("cortical_mapping_dst"), None]
+    props = area.get("properties")
+    if isinstance(props, dict):
+        bags[1] = props.get("cortical_mapping_dst")
+    for mapping_dst in bags:
+        if not isinstance(mapping_dst, dict):
+            continue
+        rules = mapping_dst.get(dst)
+        if isinstance(rules, list):
+            return rules
+    return []
+
+
+def summarize_synapse_edges(edges: list[Any]) -> dict[str, Any]:
+    """Compact topology for a synapse-edge list (no per-edge dump).
+
+    Reports unique sources/targets, unique weights and PSPs, and fan-in/fan-out
+    so a projector (32 sources x 10 dest) is visible without 320 JSON objects.
+    """
+    source_ids: list[int] = []
+    target_ids: list[int] = []
+    weights: list[float] = []
+    psps: list[float] = []
+    synapse_types: set[Any] = set()
+    fanout: dict[int, int] = {}
+    fanin: dict[int, int] = {}
+    for edge in edges:
+        if not isinstance(edge, dict):
+            continue
+        src = edge.get("source_neuron_id", edge.get("src_id"))
+        dst = edge.get("target_neuron_id", edge.get("dst_id"))
+        if isinstance(src, int):
+            source_ids.append(src)
+            fanout[src] = fanout.get(src, 0) + 1
+        if isinstance(dst, int):
+            target_ids.append(dst)
+            fanin[dst] = fanin.get(dst, 0) + 1
+        weight = edge.get("weight")
+        if isinstance(weight, (int, float)):
+            weights.append(float(weight))
+        psp = edge.get("postsynaptic_potential")
+        if isinstance(psp, (int, float)):
+            psps.append(float(psp))
+        if "synapse_type" in edge:
+            synapse_types.add(edge["synapse_type"])
+
+    def _minmax_mean(values: list[int]) -> dict[str, float] | None:
+        if not values:
+            return None
+        total = float(sum(values))
+        return {
+            "min": float(min(values)),
+            "max": float(max(values)),
+            "mean": total / float(len(values)),
+        }
+
+    unique_weights = sorted(set(weights))
+    unique_psps = sorted(set(psps))
+    return {
+        "synapse_count": len(edges),
+        "unique_source_count": len(set(source_ids)),
+        "unique_target_count": len(set(target_ids)),
+        "unique_weights": unique_weights,
+        "unique_postsynaptic_potentials": unique_psps,
+        "all_weights_equal": len(unique_weights) <= 1,
+        "all_psp_equal": len(unique_psps) <= 1,
+        "synapse_types": sorted(synapse_types, key=lambda v: str(v)),
+        "fanout": _minmax_mean(list(fanout.values())),
+        "fanin": _minmax_mean(list(fanin.values())),
+    }
+
+
+def summarize_encoded_potentials(areas: Any) -> dict[str, Any]:
+    """Stats over post-encode voxel P values in a sensor snapshot.
+
+    FEAGI does not store pre-encode analog window samples. Identical P across
+    many channels usually means population encoding (P hardcoded to 1.0).
+    """
+    potentials: list[float] = []
+    per_area: list[dict[str, Any]] = []
+    if isinstance(areas, list):
+        for area in areas:
+            if not isinstance(area, dict):
+                continue
+            samples = area.get("samples")
+            area_p: list[float] = []
+            if isinstance(samples, list):
+                for sample in samples:
+                    if not isinstance(sample, dict):
+                        continue
+                    value = sample.get("potential")
+                    if isinstance(value, (int, float)):
+                        area_p.append(float(value))
+            unique = sorted(set(area_p))
+            potentials.extend(area_p)
+            per_area.append(
+                {
+                    "cortical_id": area.get("cortical_id"),
+                    "sample_count": len(area_p),
+                    "unique_potentials": unique,
+                    "all_equal": len(unique) <= 1,
+                }
+            )
+    unique_all = sorted(set(potentials))
+    return {
+        "sample_count": len(potentials),
+        "unique_potentials": unique_all,
+        "min": min(unique_all) if unique_all else None,
+        "max": max(unique_all) if unique_all else None,
+        "all_equal": len(unique_all) <= 1,
+        "analog_values_available": False,
+        "note": (
+            "Potentials are post-encode voxel P values FEAGI consumed. "
+            "Pre-encode analog window samples are not stored in FEAGI."
+        ),
+        "areas": per_area,
+    }
+
+
+def _axis_potential_stats(
+    samples: list[Any],
+    axis: str,
+    threshold: float | None,
+) -> list[dict[str, Any]]:
+    """Per-axis histogram of snapshot sample potentials."""
+    buckets: dict[int, list[float]] = {}
+    for sample in samples:
+        if not isinstance(sample, dict):
+            continue
+        coord = sample.get(axis)
+        value = sample.get("potential")
+        if not isinstance(coord, int) or isinstance(coord, bool):
+            continue
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            continue
+        buckets.setdefault(coord, []).append(float(value))
+    rows: list[dict[str, Any]] = []
+    for coord in sorted(buckets):
+        values = buckets[coord]
+        row: dict[str, Any] = {
+            axis: coord,
+            "n": len(values),
+            "min": min(values),
+            "max": max(values),
+            "mean": sum(values) / float(len(values)),
+        }
+        if threshold is not None:
+            row["count_gte_threshold"] = sum(1 for value in values if value >= threshold)
+            row["threshold"] = float(threshold)
+        rows.append(row)
+    return rows
+
+
+def summarize_sensor_snapshot_areas(
+    areas: Any,
+    threshold: float | None = None,
+) -> list[dict[str, Any]]:
+    """Per-area snapshot rows with Z-layer stats and no voxel samples."""
+    summaries: list[dict[str, Any]] = []
+    if not isinstance(areas, list):
+        return summaries
+    for area in areas:
+        if not isinstance(area, dict):
+            continue
+        samples = area.get("samples")
+        sample_list = samples if isinstance(samples, list) else []
+        summaries.append(
+            {
+                "cortical_id": area.get("cortical_id"),
+                "cortical_idx": area.get("cortical_idx"),
+                "neuron_count": area.get("neuron_count"),
+                "sample_count": len(sample_list),
+                "by_z": _axis_potential_stats(sample_list, "z", threshold),
+            }
+        )
+    return summaries
+
+
+def summarize_voxel_synapse_endpoints(
+    synapses: Any,
+    *,
+    source_side: bool,
+) -> dict[str, Any]:
+    """Count unique partners and Z-layer fan-in/out for one synapse list."""
+    z_key = "source_z" if source_side else "target_z"
+    area_key = "source_cortical_id" if source_side else "target_cortical_id"
+    x_key = "source_x" if source_side else "target_x"
+    y_key = "source_y" if source_side else "target_y"
+    z_counts: dict[int, int] = {}
+    area_ids: set[str] = set()
+    xy_pairs: set[tuple[Any, Any]] = set()
+    weights: list[float] = []
+    edge_count = 0
+    if isinstance(synapses, list):
+        for edge in synapses:
+            if not isinstance(edge, dict):
+                continue
+            edge_count += 1
+            z_value = edge.get(z_key)
+            if isinstance(z_value, int) and not isinstance(z_value, bool):
+                z_counts[z_value] = z_counts.get(z_value, 0) + 1
+            area_id = edge.get(area_key)
+            if isinstance(area_id, str) and area_id:
+                area_ids.add(area_id)
+            x_value = edge.get(x_key)
+            y_value = edge.get(y_key)
+            if x_value is not None and y_value is not None:
+                xy_pairs.add((x_value, y_value))
+            weight = edge.get("weight")
+            if isinstance(weight, (int, float)) and not isinstance(weight, bool):
+                weights.append(float(weight))
+    unique_weights = sorted(set(weights))
+    return {
+        "synapse_count": edge_count,
+        "unique_cortical_ids": sorted(area_ids),
+        "unique_xy_count": len(xy_pairs),
+        "z_counts": [{"z": z, "count": z_counts[z]} for z in sorted(z_counts)],
+        "unique_weights": unique_weights,
+        "all_weights_equal": len(unique_weights) <= 1,
+    }
+
+
+def project_voxel_neurons_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    """Keep voxel neuron state and replace synapse lists with histograms."""
+    projected = dict(payload)
+    neurons = payload.get("neurons")
+    if not isinstance(neurons, list):
+        projected["view"] = "summary"
+        return projected
+    summarized: list[dict[str, Any]] = []
+    for neuron in neurons:
+        if not isinstance(neuron, dict):
+            continue
+        row = {
+            key: neuron[key]
+            for key in (
+                "neuron_id",
+                "x",
+                "y",
+                "z",
+                "membrane_potential",
+                "threshold",
+                "consecutive_fire_count",
+                "incoming_synapse_count",
+                "outgoing_synapse_count",
+            )
+            if key in neuron
+        }
+        row["incoming"] = summarize_voxel_synapse_endpoints(
+            neuron.get("incoming_synapses"),
+            source_side=True,
+        )
+        row["outgoing"] = summarize_voxel_synapse_endpoints(
+            neuron.get("outgoing_synapses"),
+            source_side=False,
+        )
+        summarized.append(row)
+    projected["neurons"] = summarized
+    projected["view"] = "summary"
+    return projected
+
+
+def summarize_neuron_state_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Uniqueness stats for compact neuron-state rows."""
+    membranes: list[float] = []
+    fires: list[int] = []
+    for row in rows:
+        mp = row.get("membrane_potential")
+        if isinstance(mp, (int, float)):
+            membranes.append(float(mp))
+        count = row.get("consecutive_fire_count")
+        if isinstance(count, int):
+            fires.append(count)
+    unique_mp = sorted(set(membranes))
+    unique_fire = sorted(set(fires))
+    return {
+        "unique_membrane_potentials": unique_mp,
+        "unique_consecutive_fire_counts": unique_fire,
+        "all_membrane_potentials_equal": len(unique_mp) <= 1,
+        "all_fire_counts_equal": len(unique_fire) <= 1,
+    }
+
+
+def _shape_synapse_view(
+    edges: list[Any],
+    view: str,
+    limit: int | None,
+    offset: int,
+    *,
+    raw_list_when_unpaged: bool = False,
+) -> Any:
+    """Apply summary or optional paging to a synapse-edge list."""
+    if view == "summary":
+        return summarize_synapse_edges(edges)
+    if raw_list_when_unpaged and limit is None and offset == 0:
+        return edges
+    start = offset
+    window = edges[start:] if limit is None else edges[start : start + limit]
+    return {
+        "synapse_count": len(edges),
+        "returned": len(window),
+        "offset": start,
+        "truncated": (start + len(window)) < len(edges),
+        "synapses": window,
+    }
+
+
 def _morphology_parameter_count(parameters: Any) -> int:
     """Count patterns or vectors in a morphology parameters object."""
     if not isinstance(parameters, dict):
@@ -521,12 +842,13 @@ def filter_cortical_area_records(
 ) -> list[dict[str, Any]]:
     """Filter cortical-area dicts locally. Empty filters are ignored.
 
-    ``name_contains`` is a case-insensitive substring of the area title.
+    ``name_contains`` is a case-insensitive substring of the area title,
+    subtype, or a known alias (``vision`` matches ``iimg`` / ``isvi``).
     ``cortical_id_contains`` matches ``cortical_id`` or ``cortical_id_s``.
     ``cortical_type`` is a case-insensitive exact match against
     ``cortical_type``, ``cortical_group``, or ``area_type``.
     """
-    name_needle = _optional_filter_text(name_contains).lower()
+    name_needle = _optional_filter_text(name_contains)
     id_needle = _optional_filter_text(cortical_id_contains).lower()
     type_needle = validate_cortical_list_type_filter(cortical_type)
     if limit is not None and (not isinstance(limit, int) or isinstance(limit, bool) or limit < 1):
@@ -534,7 +856,7 @@ def filter_cortical_area_records(
 
     matched: list[dict[str, Any]] = []
     for area in areas:
-        if name_needle and name_needle not in _cortical_area_name(area).lower():
+        if name_needle and not area_record_matches_name_search(area, name_needle):
             continue
         if id_needle:
             cortical_id = str(area.get("cortical_id") or "").lower()
@@ -1004,13 +1326,120 @@ class FeagiClient:
             else:
                 logger.error(f"list_cortical_area_names failed: HTTP {response.status_code}")
                 return []
-            needle = _optional_filter_text(name_contains).lower()
+            needle = _optional_filter_text(name_contains)
             if not needle:
                 return names
-            return [name for name in names if needle in name.lower()]
+            return [name for name in names if area_title_matches_search(name, needle)]
         except Exception as e:
             logger.error(f"list_cortical_area_names failed: {e}")
             return []
+
+    async def list_classifiers(
+        self,
+        name_contains: str | None = None,
+        classifier_id: str | None = None,
+    ) -> list[dict[str, Any]] | dict[str, Any]:
+        """List genome classifiers from ``GET /v1/cortical_area/classifiers``.
+
+        Filtering is local after one FEAGI fetch. This is the catalog for
+        first-class classifier assemblies (not cortical areas).
+        """
+        try:
+            response = await self._client.get(f"{self.base_url}/v1/cortical_area/classifiers")
+            if response.status_code != 200:
+                return {
+                    "error": f"HTTP {response.status_code}",
+                    "message": response.text,
+                }
+            payload = response.json()
+            if not isinstance(payload, list):
+                return {
+                    "error": "invalid_payload",
+                    "message": "Expected a JSON array from /v1/cortical_area/classifiers",
+                }
+            records = [item for item in payload if isinstance(item, dict)]
+            matches = filter_classifier_records(
+                records,
+                name_contains=name_contains,
+                classifier_id=classifier_id,
+            )
+            return [project_classifier_row(item) for item in matches]
+        except Exception as e:
+            logger.error("list_classifiers failed: %s", e)
+            return {"error": str(e)}
+
+    async def get_classifier(self, classifier_id: str) -> dict[str, Any]:
+        """Fetch one classifier record from ``GET /v1/cortical_area/classifier/{id}``."""
+        cleaned = (classifier_id or "").strip()
+        if not cleaned:
+            return {
+                "error": "invalid_input",
+                "message": "classifier_id is required",
+            }
+        try:
+            response = await self._client.get(
+                f"{self.base_url}/v1/cortical_area/classifier/{cleaned}"
+            )
+            if response.status_code != 200:
+                return {
+                    "error": f"HTTP {response.status_code}",
+                    "message": response.text,
+                    "classifier_id": cleaned,
+                }
+            payload = response.json()
+            if not isinstance(payload, dict):
+                return {
+                    "error": "invalid_payload",
+                    "message": "Expected a JSON object from get_classifier",
+                    "classifier_id": cleaned,
+                }
+            return payload
+        except Exception as e:
+            logger.error("get_classifier failed: %s", e)
+            return {"error": str(e), "classifier_id": cleaned}
+
+    async def inspect_classifier(
+        self,
+        classifier_id: str | None = None,
+        name_contains: str | None = None,
+    ) -> dict[str, Any]:
+        """One-call classifier assembly: slots, twin, and required mappings.
+
+        Uses ``GET /v1/cortical_area/classifiers`` (or one classifier GET),
+        the cortical-area catalog, and the mapping table. Do not walk areas
+        and mappings separately when this tool is available.
+        """
+        wanted_id = (classifier_id or "").strip()
+        if wanted_id:
+            record = await self.get_classifier(wanted_id)
+            if "error" in record:
+                return record
+        else:
+            listed = await self.list_classifiers(name_contains=name_contains)
+            if isinstance(listed, dict) and "error" in listed:
+                return listed
+            if not isinstance(listed, list):
+                return {"error": "invalid_payload", "message": "Classifier list was not an array"}
+            selected = select_classifier_record(
+                listed,
+                name_contains=name_contains,
+            )
+            if "error" in selected:
+                return selected
+            record = selected["classifier"]
+
+        areas = await self.list_cortical_areas()
+        if not isinstance(areas, list):
+            return {"error": "invalid_payload", "message": "Cortical area catalog was not an array"}
+        mapping_summary = await self.get_connectivity_summary(limit=2000)
+        if isinstance(mapping_summary, dict) and "error" in mapping_summary:
+            return mapping_summary
+        items = []
+        if isinstance(mapping_summary, dict):
+            raw_items = mapping_summary.get("items", [])
+            if isinstance(raw_items, list):
+                items = raw_items
+        return build_classifier_inspect(record, areas, items)
 
     async def list_morphologies(self) -> dict[str, Any]:
         """Get all morphology definitions including connectivity rules."""
@@ -1258,15 +1687,16 @@ class FeagiClient:
             if not isinstance(parameters, dict):
                 parameters = {}
             morph_type = str(raw.get("type") or raw.get("morphology_type") or "")
+            judgment = validate_morphology_parameters(morph_type, parameters)
             result: dict[str, Any] = {
                 "name": str(raw.get("morphology_name") or raw.get("name") or name),
                 "type": morph_type,
                 "class": str(raw.get("class") or ""),
                 "pattern_count": _morphology_parameter_count(parameters),
-                "judgment": validate_morphology_parameters(morph_type, parameters),
+                "judgment": judgment,
                 "success": True,
             }
-            if include_parameters:
+            if include_parameters or not judgment.get("reject"):
                 result["parameters"] = parameters
             return result
         except Exception as e:
@@ -1729,34 +2159,55 @@ class FeagiClient:
             return {"error": str(e)}
 
     async def get_area_parameters(self, area_id: str) -> dict[str, Any]:
-        """Get parameters for a specific cortical area.
+        """Get neuron and geometry parameters for one cortical area.
+
+        Reads ``POST /v1/cortical_area/cortical_area_properties`` and projects
+        inspect fields. Does not download the genome or parse compact blueprint
+        key suffixes (those produced stubs such as ``{i, t, f, b}``).
 
         Args:
             area_id: Cortical area identifier
 
         Returns:
-            Area parameters including dimensions, neuron properties
+            Area id, dimensions, neuron properties, synapse counts, and
+            ``cortical_mapping_dst`` when present.
         """
         try:
-            genome = await self.download_genome()
-            if "error" in genome:
-                return genome
-
-            blueprint = genome.get("blueprint", {})
-            params = {}
-
-            for key, value in blueprint.items():
-                if area_id in key:
-                    param_name = key.split("-")[-1]
-                    params[param_name] = value
-
-            if not params:
-                return {"error": f"Area {area_id} not found"}
-
-            return {
-                "area_id": area_id,
-                "parameters": params,
+            cid = area_id.strip() if isinstance(area_id, str) else ""
+            if not cid:
+                return {"error": "area_id must be a non-empty string"}
+            area = await self.fetch_cortical_area_properties(cid)
+            if not isinstance(area, dict) or area.get("error"):
+                return area if isinstance(area, dict) else {"error": "bad_payload"}
+            projected: dict[str, Any] = {
+                "area_id": cid,
+                "cortical_id": area.get("cortical_id", cid),
             }
+            identity_fields = (
+                "cortical_name",
+                "area_type",
+                "cortical_type",
+                "cortical_group",
+                "cortical_dimensions",
+            )
+            for field in identity_fields:
+                if field in area:
+                    projected[field] = area[field]
+            for field in self._MINIMAL_AREA_FIELDS:
+                if field in projected:
+                    continue
+                if field in area:
+                    projected[field] = area[field]
+                    continue
+                bag = area.get("properties")
+                if isinstance(bag, dict) and field in bag:
+                    projected[field] = bag[field]
+            props = area.get("properties")
+            if isinstance(props, dict) and isinstance(props.get("cortical_mapping_dst"), dict):
+                projected["cortical_mapping_dst"] = props["cortical_mapping_dst"]
+            elif isinstance(area.get("cortical_mapping_dst"), dict):
+                projected["cortical_mapping_dst"] = area["cortical_mapping_dst"]
+            return projected
         except Exception as e:
             logger.error(f"get_area_parameters failed: {e}")
             return {"error": str(e)}
@@ -1888,40 +2339,20 @@ class FeagiClient:
             if response.status_code == 200:
                 return _as_json_dict(response.json())
 
-            genome = await self.download_genome()
-            if "error" not in genome:
-                opu_areas = []
-                ipu_areas = []
-                blueprint = genome.get("blueprint", {})
-
-                for key, value in blueprint.items():
-                    if "__name-t" in key:
-                        group_key = key.replace("__name-t", "_group-t")
-                        group = blueprint.get(group_key, "")
-                        if group == "OPU":
-                            area_id = key.split("-cx-")[0].replace("_____10c-", "")
-                            device_count_key = key.replace("__name-t", "devcnt-i")
-                            device_count = blueprint.get(device_count_key, 0)
-                            enriched = enrich_area_with_name(area_id, value, device_count)
-                            opu_areas.append(enriched)
-                        elif group == "IPU":
-                            area_id = key.split("-cx-")[0].replace("_____10c-", "")
-                            device_count_key = key.replace("__name-t", "devcnt-i")
-                            device_count = blueprint.get(device_count_key, 0)
-                            enriched = enrich_area_with_name(area_id, value, device_count)
-                            ipu_areas.append(enriched)
-
-                return {
-                    "status": "genome_info",
-                    "opu_areas": opu_areas,
-                    "ipu_areas": ipu_areas,
-                    "message": (
-                        "Embodiment status endpoint unavailable, "
-                        "showing genome I/O config with semantic metadata"
-                    ),
-                }
-
-            return {"error": "Could not retrieve embodiment status"}
+            agents = await self.get_registered_agents()
+            io_areas = await self.list_io_areas_compact()
+            return {
+                "status": "live_registry",
+                "embodiment_status_endpoint": "unavailable",
+                "http_status": response.status_code,
+                "registered_agents": agents,
+                "io_areas": io_areas,
+                "message": (
+                    "GET /v1/embodiment/status is not on this FEAGI. "
+                    "This payload is the live agent registry plus compact I/O "
+                    "catalog, not a genome dump."
+                ),
+            }
         except Exception as e:
             logger.error(f"get_embodiment_status failed: {e}")
             return {"error": str(e)}
@@ -2595,20 +3026,29 @@ class FeagiClient:
             return {"error": str(e)}
 
     async def get_cortical_mapping(self, src_area: str, dst_area: str) -> dict[str, Any]:
-        """Get cortical mapping configuration between two areas."""
+        """Get stored mapping rules from the source area properties record.
+
+        Reads ``cortical_mapping_dst`` on the source area. Avoids
+        ``POST /v1/cortical_mapping/mapping_properties``, which 400s when a
+        stored non-plastic rule omits ``plasticity_constant``.
+        """
         try:
-            response = await self._client.post(
-                f"{self.base_url}/v1/cortical_mapping/mapping_properties",
-                json={"src_cortical_area": src_area, "dst_cortical_area": dst_area},
-            )
-            if response.status_code == 200:
-                # Rules may be a JSON list or object depending on FEAGI version.
-                return {
-                    "src_area": src_area,
-                    "dst_area": dst_area,
-                    "rules": response.json(),
-                }
-            return {"error": f"HTTP {response.status_code}", "message": response.text}
+            src = src_area.strip() if isinstance(src_area, str) else ""
+            dst = dst_area.strip() if isinstance(dst_area, str) else ""
+            if not src or not dst:
+                return {"error": "src_area and dst_area must be non-empty strings"}
+            area = await self.fetch_cortical_area_properties(src)
+            if not isinstance(area, dict) or area.get("error"):
+                return area if isinstance(area, dict) else {"error": "bad_payload"}
+            rules = mapping_rules_from_area_record(area, dst)
+            return {
+                "src_area": src,
+                "dst_area": dst,
+                "src_name": area.get("cortical_name"),
+                "rule_count": len(rules),
+                "rules": rules,
+                "source": "cortical_area_properties",
+            }
         except Exception as e:
             logger.error(f"get_cortical_mapping failed: {e}")
             return {"error": str(e)}
@@ -3118,15 +3558,27 @@ class FeagiClient:
             logger.error("get_motor_snapshot_last failed: %s", e)
             return {"error": str(e)}
 
-    async def get_sensor_snapshot_last(self, cortical_id: str | None = None) -> dict[str, Any]:
+    async def get_sensor_snapshot_last(
+        self,
+        cortical_id: str | None = None,
+        summary_only: bool = True,
+        threshold: float | None = None,
+    ) -> dict[str, Any]:
         """GET /v1/input/sensor_snapshot/last - latest sensory input decoded this burst.
 
         Args:
             cortical_id: Optional base64 cortical id filter.
+            summary_only: When True (default), drop per-voxel ``samples`` and
+                return per-Z stats instead. Set False only when a raw XYZP dump
+                is required.
+            threshold: Optional potential cutoff. When set, each Z-layer row
+                includes ``count_gte_threshold``. Not hardcoded; pass the IPU
+                fire threshold when comparing against it.
 
         Returns:
             Dict with ``burst_num``, ``timestamp_ms``, ``has_data``, ``total_areas``,
-            ``total_neurons``, and ``areas`` (per-cortical-area decoded XYZP samples).
+            ``total_neurons``, ``encoded_potential_stats``, and either ``areas``
+            (raw) or ``areas_summary`` (compact).
         """
         try:
             params: dict[str, str] = {}
@@ -3137,7 +3589,17 @@ class FeagiClient:
                 params=params or None,
             )
             if response.status_code == 200:
-                return _as_json_dict(response.json())
+                payload = _as_json_dict(response.json())
+                areas = payload.get("areas")
+                payload["encoded_potential_stats"] = summarize_encoded_potentials(areas)
+                payload["areas_summary"] = summarize_sensor_snapshot_areas(
+                    areas,
+                    threshold=threshold,
+                )
+                payload["summary_only"] = bool(summary_only)
+                if summary_only:
+                    payload.pop("areas", None)
+                return payload
             return {
                 "error": f"HTTP {response.status_code}",
                 "message": response.text,
@@ -3259,7 +3721,20 @@ class FeagiClient:
             response = await self._client.get(f"{self.base_url}{endpoint}")
             if response.status_code == 200:
                 return _as_json_dict(response.json())
-            return self._http_failure_payload(endpoint=endpoint, response=response)
+            payload = self._http_failure_payload(endpoint=endpoint, response=response)
+            if response.status_code == 404:
+                payload["missing_on_this_feagi"] = True
+                payload["use_instead"] = [
+                    "get_registered_agents",
+                    "get_sensor_snapshot_last",
+                    "get_embodiment_status",
+                ]
+                payload["message"] = (
+                    "GET /v1/agent/liveness is not on this FEAGI build. "
+                    "Do not invent prune ages. Use get_registered_agents plus "
+                    "get_sensor_snapshot_last(summary_only=True) for feed presence."
+                )
+            return payload
         except Exception as e:
             logger.error("get_agent_liveness failed: %s", e)
             return self._request_exception_payload(endpoint=endpoint, exception=e)
@@ -3510,12 +3985,19 @@ class FeagiClient:
         y: int,
         z: int,
         synapse_page: int | None = None,
+        view: str = "summary",
     ) -> dict[str, Any]:
         """GET /v1/cortical_area/voxel_neurons - all neurons + synapses at a voxel.
 
         Same payload Brain Visualizer uses for its voxel inspector. ``synapse_page``
         (0-based) requests a paginated incoming/outgoing synapse list.
+        ``view=summary`` (default) replaces synapse lists with source-Z histograms
+        and unique-weight stats. Use ``view=edges`` only when a page of raw
+        synapses is required.
         """
+        view_n = str(view or "summary").strip().lower()
+        if view_n not in {"summary", "edges"}:
+            return {"error": "view must be 'summary' or 'edges'"}
         try:
             params: dict[str, str] = {
                 "cortical_id": str(cortical_id),
@@ -3530,7 +4012,11 @@ class FeagiClient:
                 params=params,
             )
             if response.status_code == 200:
-                return _as_json_dict(response.json())
+                payload = _as_json_dict(response.json())
+                if view_n == "summary":
+                    return project_voxel_neurons_summary(payload)
+                payload["view"] = "edges"
+                return payload
             return {
                 "error": f"HTTP {response.status_code}",
                 "message": response.text,
@@ -3543,6 +4029,9 @@ class FeagiClient:
         self,
         cortical_area_id: str,
         direction: str = "outgoing",
+        view: str = "edges",
+        limit: int | None = None,
+        offset: int = 0,
     ) -> dict[str, Any]:
         """List realized synapse edges for a cortical area (not just mapping rules).
 
@@ -3556,6 +4045,10 @@ class FeagiClient:
           a destination.
         - **both** — two round-trips; the dict contains ``outgoing`` and
           ``incoming`` lists and separate counts.
+
+        ``view=summary`` returns unique source/target counts, unique weights/PSP,
+        and fan-in/fan-out instead of every edge. ``view=edges`` can page with
+        ``limit`` / ``offset``.
         """
         area = str(cortical_area_id).strip()
         if not area:
@@ -3565,6 +4058,13 @@ class FeagiClient:
             return {
                 "error": "direction must be 'outgoing', 'incoming', or 'both'",
             }
+        view_n = str(view or "edges").strip().lower()
+        if view_n not in {"edges", "summary"}:
+            return {"error": "view must be 'edges' or 'summary'"}
+        if limit is not None and (not isinstance(limit, int) or limit < 1):
+            return {"error": "limit must be a positive integer"}
+        if not isinstance(offset, int) or offset < 0:
+            return {"error": "offset must be a non-negative integer"}
         try:
             if dir_n == "both":
                 r_out = await self._client.get(f"{self.base_url}/v1/connectome/{area}/synapses")
@@ -3585,8 +4085,13 @@ class FeagiClient:
                     "direction": "both",
                     "outgoing_synapse_count": len(out),
                     "incoming_synapse_count": len(ins),
-                    "outgoing": out,
-                    "incoming": ins,
+                    "outgoing": _shape_synapse_view(
+                        out, view_n, limit, offset, raw_list_when_unpaged=True
+                    ),
+                    "incoming": _shape_synapse_view(
+                        ins, view_n, limit, offset, raw_list_when_unpaged=True
+                    ),
+                    "view": view_n,
                 }
                 if r_out.status_code != 200:
                     result["outgoing_error"] = {
@@ -3609,11 +4114,19 @@ class FeagiClient:
             if response.status_code == 200:
                 payload = response.json()
                 if isinstance(payload, list):
+                    shaped = _shape_synapse_view(payload, view_n, limit, offset)
+                    if view_n == "summary":
+                        return {
+                            "cortical_area_id": area,
+                            "direction": dir_n,
+                            "view": "summary",
+                            **shaped,
+                        }
                     return {
                         "cortical_area_id": area,
                         "direction": dir_n,
-                        "synapse_count": len(payload),
-                        "synapses": payload,
+                        "view": "edges",
+                        **shaped,
                     }
                 return _as_json_dict(payload)
             return {
@@ -3622,6 +4135,82 @@ class FeagiClient:
             }
         except Exception as e:
             logger.error("list_area_synapses failed: %s", e)
+            return {"error": str(e)}
+
+    async def list_area_neuron_states(
+        self,
+        area_id: str,
+        neuron_cap: int = 64,
+    ) -> dict[str, Any]:
+        """Compact x/y/z + membrane + fire-count rows for neurons in one area.
+
+        One neuron-id list fetch, then capped parallel property fetches. Use this
+        instead of calling ``inspect_neuron_state_at`` once per voxel.
+        """
+        cid = area_id.strip() if isinstance(area_id, str) else ""
+        if not cid:
+            return {"error": "area_id must be a non-empty string"}
+        if not isinstance(neuron_cap, int) or neuron_cap < 1:
+            return {"error": "neuron_cap must be a positive integer"}
+        try:
+            response = await self._client.get(
+                f"{self.base_url}/v1/connectome/cortical_area/{cid}/neurons"
+            )
+            if response.status_code != 200:
+                return {
+                    "error": f"HTTP {response.status_code}",
+                    "message": response.text,
+                }
+            neuron_ids_raw = response.json()
+            if not isinstance(neuron_ids_raw, list):
+                return {
+                    "error": "unexpected_payload",
+                    "message": "neuron list not a JSON array",
+                }
+            total_in_area = len(neuron_ids_raw)
+            sampled_ids = [str(nid) for nid in neuron_ids_raw[:neuron_cap]]
+
+            async def _fetch(nid: str) -> dict[str, Any] | None:
+                try:
+                    r = await self._client.get(
+                        f"{self.base_url}/v1/connectome/neuron/{nid}/properties"
+                    )
+                    if r.status_code != 200:
+                        return None
+                    return _as_json_dict(r.json())
+                except Exception as exc:
+                    logger.debug("list_area_neuron_states: neuron %s failed: %s", nid, exc)
+                    return None
+
+            properties = await asyncio.gather(*[_fetch(nid) for nid in sampled_ids])
+            rows: list[dict[str, Any]] = []
+            for props in properties:
+                if not isinstance(props, dict):
+                    continue
+                rows.append(
+                    {
+                        "neuron_id": props.get("neuron_id"),
+                        "x": props.get("x"),
+                        "y": props.get("y"),
+                        "z": props.get("z"),
+                        "membrane_potential": props.get("membrane_potential"),
+                        "consecutive_fire_count": int(
+                            props.get("consecutive_fire_count", 0) or 0
+                        ),
+                        "threshold": props.get("threshold"),
+                    }
+                )
+            stats = summarize_neuron_state_rows(rows)
+            return {
+                "cortical_id": cid,
+                "total_neurons_in_area": total_in_area,
+                "returned": len(rows),
+                "truncated": total_in_area > len(rows),
+                "neurons": rows,
+                **stats,
+            }
+        except Exception as e:
+            logger.error("list_area_neuron_states failed: %s", e)
             return {"error": str(e)}
 
     # ------------------------------------------------------------------
@@ -4655,7 +5244,7 @@ class FeagiClient:
             cols = [int(c) for c in cols]
 
             async def _sensor_centroid_z() -> float | None:
-                snap = await self.get_sensor_snapshot_last(sensor_id)
+                snap = await self.get_sensor_snapshot_last(sensor_id, summary_only=False)
                 if not isinstance(snap, dict) or "error" in snap:
                     return None
                 areas = snap.get("areas")

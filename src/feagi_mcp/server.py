@@ -258,17 +258,17 @@ async def get_memory_area_runtime_config(cortical_id: str, page_size: int = 1) -
 
 @mcp.tool()
 async def get_area_parameters(area_id: str) -> dict[str, Any]:
-    """Get all parameters for a specific cortical area.
+    """Neuron and geometry parameters for one cortical area.
 
-    Retrieves dimensions, neuron properties (leak coefficient, fire threshold, PSC max),
-    connections, and other configuration. Use this to inspect existing areas or verify
-    parameter values after upload.
+    Uses ``POST /v1/cortical_area/cortical_area_properties`` and returns dimensions,
+    leak / fire threshold / PSP, synapse counts, and ``cortical_mapping_dst``.
+    Does not download the genome.
 
     Args:
         area_id: Cortical area identifier
 
     Returns:
-        Complete parameter set for the area
+        Projected parameter set for the area
     """
     result = await feagi.get_area_parameters(area_id)
     return result
@@ -279,9 +279,9 @@ async def get_embodiment_status() -> dict[str, Any]:
     """Get status of connected embodiment controllers (GET /v1/embodiment/status when available).
 
     When the **HTTP** embodiment status route is up, you get full registration
-    metadata. If it is **unavailable**, the client falls back to a **static**
-    read of the loaded genome (``status": "genome_info"``) and **must not** be
-    used as a substitute for live ZMQ/registration state.
+    metadata. If it is **unavailable**, this tool returns ``status=live_registry``
+    from ``get_registered_agents`` plus ``list_io_areas_compact``. That is live
+    session state, not a genome dump.
 
     For **which OPU / IPU the agent actually bound in this session** (cortical
     ids, group order, control modes), prefer
@@ -290,7 +290,7 @@ async def get_embodiment_status() -> dict[str, Any]:
     agent is online.
 
     Returns:
-        Online embodiment JSON, or fallback genome I/O description with a notice.
+        Online embodiment JSON, or live registry + compact I/O catalog.
     """
     result = await feagi.get_embodiment_status()
     return result
@@ -362,7 +362,8 @@ async def list_cortical_areas(
 
     Args:
         name_contains: Case-insensitive substring of the area title
-            (``cortical_name`` / ``name``).
+            (``cortical_name`` / ``name``), or a known alias such as
+            ``vision`` (matches ``iimg`` / ``isvi``).
         cortical_id_contains: Case-insensitive substring of ``cortical_id``
             or ``cortical_id_s``.
         cortical_type: Exact type match (case-insensitive) against
@@ -393,15 +394,66 @@ async def list_cortical_area_names(
     """Get cortical area names, optionally filtered by substring.
 
     Use ``name_contains`` instead of downloading every title when you are
-    looking for a specific area.
+    looking for a specific area. ``vision`` / ``simple vision`` / ``camera``
+    also match ``iimg`` / ``isvi`` titles.
 
     Args:
-        name_contains: Case-insensitive substring of the area name.
+        name_contains: Case-insensitive substring of the area name, or a
+            known alias such as ``vision``.
 
     Returns:
         Matching cortical area names.
     """
     return await feagi.list_cortical_area_names(name_contains=name_contains)
+
+
+@mcp.tool()
+async def list_classifiers(
+    name_contains: str | None = None,
+    classifier_id: str | None = None,
+) -> list[dict[str, Any]] | dict[str, Any]:
+    """List first-class genome classifiers.
+
+    Use this instead of searching cortical-area names for ``_kernel_mem``,
+    ``_class_mem``, or ``_twin``. Classifiers are not cortical areas.
+
+    Args:
+        name_contains: Case-insensitive substring of the classifier name.
+        classifier_id: Exact genome classifier id.
+
+    Returns:
+        Compact rows: id, name, parent region, 3D pose, input area ids,
+        and owned ``kernel_memory_id`` / ``class_memory_id`` / ``scan_twin_id``.
+    """
+    return await feagi.list_classifiers(
+        name_contains=name_contains,
+        classifier_id=classifier_id,
+    )
+
+
+@mcp.tool()
+async def inspect_classifier(
+    classifier_id: str | None = None,
+    name_contains: str | None = None,
+) -> dict[str, Any]:
+    """Inspect one classifier assembly in a single call.
+
+    Resolves kernel/class/field inputs, owned memory internals, the class-map
+    twin, and the four required mappings. Use this before walking areas or
+    mappings one by one.
+
+    Args:
+        classifier_id: Exact genome classifier id.
+        name_contains: Unique name substring when ``classifier_id`` is omitted.
+
+    Returns:
+        ``classifier``, resolved ``slots``, required ``mappings``,
+        ``missing_slots``, ``missing_mappings``, and ``twin_visible``.
+    """
+    return await feagi.inspect_classifier(
+        classifier_id=classifier_id,
+        name_contains=name_contains,
+    )
 
 
 @mcp.tool()
@@ -674,17 +726,18 @@ async def get_morphology(
     """Fetch one morphology by name (``POST /v1/morphology/morphology_properties``).
 
     Use this instead of ``list_morphologies`` when you need a single rule.
-    Parameters are omitted by default. ``judgment`` is computed locally and
-    includes ``compact_form`` when stored rows should be rewritten as ``N..M``.
-    Set ``include_parameters=True`` only when you need the raw rows.
+    Compact rules include ``parameters`` by default. Enumerated dumps omit
+    ``parameters`` unless ``include_parameters=True``; use
+    ``judgment.compact_form`` for those.
 
     Args:
         morphology_name: Existing morphology name
-        include_parameters: When true, include the stored parameters object
+        include_parameters: Force-include stored rows even when they are an
+            enumerated dump
 
     Returns:
         ``name``, ``type``, ``class``, ``pattern_count``, ``judgment``,
-        and ``parameters`` when requested
+        and ``parameters`` when the rule is compact or requested
     """
     return await feagi.get_morphology(
         morphology_name,
@@ -1065,7 +1118,9 @@ async def get_agent_liveness() -> dict[str, Any]:
 
     Returns:
         ``heartbeat_timeout_s``, ``stale_check_interval_s``, ``count``, and
-        ``agents`` with per-agent ages and countdown.
+        ``agents`` with per-agent ages and countdown. On HTTP 404 this FEAGI
+        build does not expose the route; the payload lists ``use_instead``
+        tools and does not invent prune ages.
     """
     return await feagi.get_agent_liveness()
 
@@ -1498,16 +1553,18 @@ async def delete_cortical_area(cortical_id: str) -> dict[str, Any]:
 
 @mcp.tool()
 async def get_cortical_mapping(src_area: str, dst_area: str) -> dict[str, Any]:
-    """Get detailed cortical mapping configuration between two areas.
+    """Get stored mapping rules from the source area properties record.
 
-    Shows morphology rules, synaptic weights, plasticity settings.
+    Reads ``cortical_mapping_dst`` on the source area (same bag Brain Visualizer
+    uses). Does not call ``mapping_properties``, which 400s when a non-plastic
+    rule omits ``plasticity_constant``.
 
     Args:
         src_area: Source cortical area ID
         dst_area: Destination cortical area ID
 
     Returns:
-        Mapping configuration with morphology and synapse parameters
+        ``rules`` list plus ``rule_count`` and ``src_name``
     """
     result = await feagi.get_cortical_mapping(src_area, dst_area)
     return result
@@ -2090,8 +2147,8 @@ async def interpret_cortical_id(cortical_id: str) -> dict[str, Any]:
 async def inspect_cortical_area(cortical_id: str) -> dict[str, Any]:
     """Full cortical area record from connectome (POST cortical_area/cortical_area_properties).
 
-    Natural language: prefer this over get_area_parameters when you need the same fields as
-    Brain Visualizer's cortical inspector (dimensions, types, neural params from services).
+    Natural language: full BV inspector dump. Prefer ``get_area_parameters`` when you
+    only need dimensions, neuron params, synapse counts, and mapping destinations.
 
     The response always includes ``cortical_id_interpretation`` (see ``interpret_cortical_id``)
     so agents can align ``deviceGroupId`` / BV unit index with bytes 6-7 without manual base64 work.
@@ -2300,17 +2357,29 @@ async def get_motor_snapshot_last(
 
 
 @mcp.tool()
-async def get_sensor_snapshot_last(cortical_id: str | None = None) -> dict[str, Any]:
+async def get_sensor_snapshot_last(
+    cortical_id: str | None = None,
+    summary_only: bool = True,
+    threshold: float | None = None,
+) -> dict[str, Any]:
     """Latest sensory input decoded by the burst loop (`/v1/input/sensor_snapshot/last`).
 
-    Surfaces exactly what FEAGI consumed from connected sensors this burst -
-    eliminating the need to poke at the embodiment side to ground-truth IPU
-    encoding direction or device wiring.
+    Surfaces exactly what FEAGI consumed from connected sensors this burst.
+    Default ``summary_only=True`` drops per-voxel ``samples`` and returns
+    ``areas_summary`` with per-Z count/min/max/mean. Pass ``threshold`` (the
+    IPU fire threshold) to add ``count_gte_threshold`` per Z layer. Set
+    ``summary_only=False`` only when a raw XYZP dump is required.
 
     Args:
         cortical_id: Optional base64 cortical id filter.
+        summary_only: Drop voxel samples (default True).
+        threshold: Optional potential cutoff for per-Z counts. Not hardcoded.
     """
-    return await feagi.get_sensor_snapshot_last(cortical_id)
+    return await feagi.get_sensor_snapshot_last(
+        cortical_id,
+        summary_only=summary_only,
+        threshold=threshold,
+    )
 
 
 @mcp.tool()
@@ -2506,21 +2575,29 @@ async def get_voxel_neurons(
     y: int,
     z: int,
     synapse_page: int | None = None,
+    view: str = "summary",
 ) -> dict[str, Any]:
     """All neurons + synapses at a voxel (`/v1/cortical_area/voxel_neurons`).
 
-    Same payload Brain Visualizer uses for its voxel inspector. ``synapse_page``
-    (0-based) requests a paginated incoming/outgoing synapse list.
+    Default ``view=summary`` keeps neuron state and replaces synapse lists
+    with source-Z histograms, unique source areas, and unique weights. Use
+    ``view=edges`` with ``synapse_page`` only when a raw synapse page is
+    required.
     """
-    return await feagi.get_voxel_neurons(cortical_id, x, y, z, synapse_page)
+    return await feagi.get_voxel_neurons(
+        cortical_id, x, y, z, synapse_page, view=view
+    )
 
 
 @mcp.tool()
 async def list_area_synapses(
     cortical_area_id: str,
     direction: str = "outgoing",
+    view: str = "summary",
+    limit: int | None = None,
+    offset: int = 0,
 ) -> dict[str, Any]:
-    """Realized synapse **edges** for a cortical area (not morphology rules only).
+    """Realized synapse topology for a cortical area (not morphology rules only).
 
     **``direction`` (important):** The default path lists **efferent** (outgoing)
     synapses from this area. IPU→OPU plastic synapses for a **motor** area are
@@ -2528,12 +2605,37 @@ async def list_area_synapses(
     ``direction="both"``. Otherwise you will see 200 with an empty list even when
     ``inspect_cortical_areas_minimal`` reports a large ``incoming_synapse_count``.
 
+    **``view`` (default ``summary``):** unique source/target counts, unique
+    weights/PSP, and fan-in/fan-out. Use ``view="edges"`` only when a paged
+    edge list is required (``limit`` / ``offset``).
+
     ``direction=both`` returns one dict with ``outgoing`` and ``incoming`` keys.
 
     For morphology **rules** (morphology id, PSC, plasticity mode), use
     ``get_cortical_mapping`` or ``get_connectivity_summary`` instead of this tool.
     """
-    return await feagi.list_area_synapses(cortical_area_id, direction=direction)
+    return await feagi.list_area_synapses(
+        cortical_area_id,
+        direction=direction,
+        view=view,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@mcp.tool()
+async def list_area_neuron_states(
+    area_id: str,
+    neuron_cap: int = 64,
+) -> dict[str, Any]:
+    """Compact neuron rows for one area: x/y/z, membrane potential, fire count.
+
+    One-shot alternative to calling ``inspect_neuron_state_at`` per voxel.
+    Includes uniqueness stats (``all_membrane_potentials_equal``,
+    ``all_fire_counts_equal``) so identical magnitudes are visible without
+    reading every row.
+    """
+    return await feagi.list_area_neuron_states(area_id, neuron_cap=neuron_cap)
 
 
 @mcp.tool()

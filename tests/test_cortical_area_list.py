@@ -204,3 +204,42 @@ async def test_list_cortical_area_names_filters_by_substring() -> None:
     result = await client.list_cortical_area_names(name_contains="pointer")
 
     assert result == ["Spatial Pointer Absolute", "Spatial Pointer Speed"]
+
+
+@pytest.mark.asyncio
+async def test_list_cortical_area_names_matches_vision_alias() -> None:
+    client = FeagiClient()
+    client._client = AsyncMock()
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "cortical_area_name_list": [
+            "iimg Unit 0",
+            "Color Extractor",
+            "iten Unit 0",
+        ]
+    }
+    client._client.get.return_value = mock_response
+
+    result = await client.list_cortical_area_names(name_contains="vision")
+
+    assert result == ["iimg Unit 0"]
+
+
+def test_filter_cortical_area_records_matches_vision_alias() -> None:
+    areas = [
+        {
+            "cortical_id": "aWltZwkAAAA=",
+            "cortical_name": "iimg Unit 0",
+            "cortical_subtype": "iimg",
+            "cortical_group": "IPU",
+        },
+        {
+            "cortical_id": "aXRlbgoAAAA=",
+            "cortical_name": "iten Unit 0",
+            "cortical_subtype": "iten",
+            "cortical_group": "IPU",
+        },
+    ]
+    matched = filter_cortical_area_records(areas, name_contains="vision")
+    assert [area["cortical_id"] for area in matched] == ["aWltZwkAAAA="]

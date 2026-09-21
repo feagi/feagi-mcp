@@ -18,7 +18,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from feagi_mcp.feagi_client import FeagiClient, filter_log_tail_records
+from feagi_mcp.feagi_client import (
+    FeagiClient,
+    filter_log_tail_records,
+    mapping_rules_from_area_record,
+    summarize_encoded_potentials,
+    summarize_neuron_state_rows,
+    summarize_synapse_edges,
+)
 from feagi_mcp.snapshots import SnapshotInfo, SnapshotManager, validate_label
 
 
@@ -70,8 +77,59 @@ class TestRuntimeTaps:
         mock_client._client.get.return_value = _ok({"has_data": True, "areas": []})
         result = await mock_client.get_sensor_snapshot_last(cortical_id="aXN2bQEAAAM=")
         assert result["has_data"] is True
+        assert result["encoded_potential_stats"]["sample_count"] == 0
+        assert result["encoded_potential_stats"]["analog_values_available"] is False
+        assert result["summary_only"] is True
+        assert "areas" not in result
+        assert result["areas_summary"] == []
         params = mock_client._client.get.call_args.kwargs["params"]
         assert params == {"cortical_id": "aXN2bQEAAAM="}
+
+    @pytest.mark.asyncio
+    async def test_get_sensor_snapshot_last_summary_by_z(self, mock_client):
+        mock_client._client.get.return_value = _ok(
+            {
+                "has_data": True,
+                "total_neurons": 3,
+                "areas": [
+                    {
+                        "cortical_id": "aWltZwkAAAA=",
+                        "neuron_count": 3,
+                        "samples": [
+                            {"x": 0, "y": 0, "z": 1, "potential": 162.0},
+                            {"x": 1, "y": 0, "z": 1, "potential": 162.0},
+                            {"x": 0, "y": 0, "z": 2, "potential": 255.0},
+                        ],
+                    }
+                ],
+            }
+        )
+        result = await mock_client.get_sensor_snapshot_last(threshold=200.0)
+        assert "areas" not in result
+        summary = result["areas_summary"][0]
+        assert summary["sample_count"] == 3
+        by_z = {row["z"]: row for row in summary["by_z"]}
+        assert by_z[1]["n"] == 2
+        assert by_z[1]["count_gte_threshold"] == 0
+        assert by_z[2]["n"] == 1
+        assert by_z[2]["count_gte_threshold"] == 1
+
+    @pytest.mark.asyncio
+    async def test_get_sensor_snapshot_last_raw_keeps_samples(self, mock_client):
+        mock_client._client.get.return_value = _ok(
+            {
+                "has_data": True,
+                "areas": [
+                    {
+                        "cortical_id": "aWltZwkAAAA=",
+                        "samples": [{"x": 0, "y": 0, "z": 2, "potential": 255.0}],
+                    }
+                ],
+            }
+        )
+        result = await mock_client.get_sensor_snapshot_last(summary_only=False)
+        assert result["areas"][0]["samples"][0]["potential"] == 255.0
+        assert result["areas_summary"][0]["by_z"][0]["z"] == 2
 
     @pytest.mark.asyncio
     async def test_get_log_tail_builds_query(self, mock_client):
@@ -321,11 +379,67 @@ class TestNeuronInspection:
     @pytest.mark.asyncio
     async def test_get_voxel_neurons_with_pagination(self, mock_client):
         mock_client._client.get.return_value = _ok({"voxel_neurons": []})
-        result = await mock_client.get_voxel_neurons("c", 0, 0, 0, synapse_page=2)
-        assert result == {"voxel_neurons": []}
+        result = await mock_client.get_voxel_neurons(
+            "c", 0, 0, 0, synapse_page=2, view="edges"
+        )
+        assert result == {"voxel_neurons": [], "view": "edges"}
         params = mock_client._client.get.call_args.kwargs["params"]
         assert params["synapse_page"] == "2"
         assert params["x"] == "0"
+
+    @pytest.mark.asyncio
+    async def test_get_voxel_neurons_summary_uses_source_z_histogram(self, mock_client):
+        mock_client._client.get.return_value = _ok(
+            {
+                "cortical_id": "Y0NvbG9yX2U=",
+                "neurons": [
+                    {
+                        "neuron_id": 12331,
+                        "x": 2,
+                        "y": 0,
+                        "z": 0,
+                        "membrane_potential": 0.0,
+                        "threshold": 0.01,
+                        "consecutive_fire_count": 962,
+                        "incoming_synapse_count": 3,
+                        "outgoing_synapse_count": 0,
+                        "incoming_synapses": [
+                            {
+                                "source_cortical_id": "aWltZwkAAAA=",
+                                "source_x": 0,
+                                "source_y": 0,
+                                "source_z": 2,
+                                "weight": 100.0,
+                            },
+                            {
+                                "source_cortical_id": "aWltZwkAAAA=",
+                                "source_x": 0,
+                                "source_y": 1,
+                                "source_z": 2,
+                                "weight": 100.0,
+                            },
+                            {
+                                "source_cortical_id": "aWltZwkAAAA=",
+                                "source_x": 1,
+                                "source_y": 0,
+                                "source_z": 2,
+                                "weight": 100.0,
+                            },
+                        ],
+                        "outgoing_synapses": [],
+                    }
+                ],
+            }
+        )
+        result = await mock_client.get_voxel_neurons("Y0NvbG9yX2U=", 2, 0, 0)
+        assert result["view"] == "summary"
+        neuron = result["neurons"][0]
+        assert "incoming_synapses" not in neuron
+        assert neuron["incoming"]["z_counts"] == [{"z": 2, "count": 3}]
+        assert neuron["incoming"]["unique_cortical_ids"] == ["aWltZwkAAAA="]
+        assert neuron["incoming"]["unique_xy_count"] == 3
+        assert neuron["incoming"]["all_weights_equal"] is True
+        assert neuron["consecutive_fire_count"] == 962
 
     @pytest.mark.asyncio
     async def test_list_area_synapses_normalizes_list(self, mock_client):
@@ -373,6 +487,151 @@ class TestNeuronInspection:
         urls = [c[0][0] for c in mock_client._client.get.call_args_list]
         assert any(str(u).endswith("/synapses") and "/incoming" not in str(u) for u in urls)
         assert any("/synapses/incoming" in str(u) for u in urls)
+
+    @pytest.mark.asyncio
+    async def test_list_area_synapses_summary_avoids_edge_dump(self, mock_client):
+        edges = [
+            {
+                "source_neuron_id": 62,
+                "target_neuron_id": 126 + i,
+                "weight": 1.0,
+                "postsynaptic_potential": 1.0,
+                "synapse_type": 0,
+            }
+            for i in range(10)
+        ]
+        mock_client._client.get.return_value = _ok(edges)
+        result = await mock_client.list_area_synapses(
+            "Y0VDR19leAA=",
+            direction="incoming",
+            view="summary",
+        )
+        assert result["view"] == "summary"
+        assert result["synapse_count"] == 10
+        assert result["unique_source_count"] == 1
+        assert result["unique_target_count"] == 10
+        assert result["all_weights_equal"] is True
+        assert result["fanout"]["max"] == 10.0
+        assert "synapses" not in result
+
+    @pytest.mark.asyncio
+    async def test_list_area_neuron_states_reports_equal_magnitudes(self, mock_client):
+        async def fake_get(url: str, **_kwargs: Any):
+            if url.endswith("/neurons"):
+                return _ok([62, 63])
+            if url.endswith("/neuron/62/properties"):
+                return _ok(
+                    {
+                        "neuron_id": 62,
+                        "x": 0,
+                        "y": 0,
+                        "z": 0,
+                        "membrane_potential": 0.0,
+                        "consecutive_fire_count": 226,
+                        "threshold": 0.01,
+                    }
+                )
+            if url.endswith("/neuron/63/properties"):
+                return _ok(
+                    {
+                        "neuron_id": 63,
+                        "x": 1,
+                        "y": 0,
+                        "z": 0,
+                        "membrane_potential": 0.0,
+                        "consecutive_fire_count": 226,
+                        "threshold": 0.01,
+                    }
+                )
+            raise AssertionError(f"unexpected URL {url}")
+
+        mock_client._client.get.side_effect = fake_get
+        result = await mock_client.list_area_neuron_states("aW1pcwoAAAA=")
+        assert result["returned"] == 2
+        assert result["all_membrane_potentials_equal"] is True
+        assert result["all_fire_counts_equal"] is True
+        assert result["unique_consecutive_fire_counts"] == [226]
+
+
+class TestInspectionHelpers:
+    def test_mapping_rules_from_nested_properties(self):
+        area = {
+            "cortical_name": "ECG Window IPU",
+            "properties": {
+                "cortical_mapping_dst": {
+                    "Y0VDR19leAA=": [{"morphology_id": "projector"}],
+                }
+            },
+        }
+        rules = mapping_rules_from_area_record(area, "Y0VDR19leAA=")
+        assert rules == [{"morphology_id": "projector"}]
+        assert mapping_rules_from_area_record(area, "missing") == []
+
+    def test_summarize_synapse_edges_projector_fanout(self):
+        edges = [
+            {
+                "source_neuron_id": 1,
+                "target_neuron_id": i,
+                "weight": 1.0,
+                "postsynaptic_potential": 1.0,
+            }
+            for i in range(10)
+        ]
+        summary = summarize_synapse_edges(edges)
+        assert summary["unique_source_count"] == 1
+        assert summary["unique_target_count"] == 10
+        assert summary["all_weights_equal"] is True
+        assert summary["fanout"] == {"min": 10.0, "max": 10.0, "mean": 10.0}
+
+    def test_summarize_encoded_potentials_all_one(self):
+        stats = summarize_encoded_potentials(
+            [
+                {
+                    "cortical_id": "aW1pcwoAAAA=",
+                    "samples": [{"x": i, "y": 0, "z": 0, "potential": 1.0} for i in range(32)],
+                }
+            ]
+        )
+        assert stats["sample_count"] == 32
+        assert stats["all_equal"] is True
+        assert stats["unique_potentials"] == [1.0]
+        assert stats["analog_values_available"] is False
+
+    def test_summarize_neuron_state_rows(self):
+        stats = summarize_neuron_state_rows(
+            [
+                {"membrane_potential": 0.0, "consecutive_fire_count": 155},
+                {"membrane_potential": 0.0, "consecutive_fire_count": 155},
+            ]
+        )
+        assert stats["all_membrane_potentials_equal"] is True
+        assert stats["all_fire_counts_equal"] is True
+
+
+class TestAreaParameters:
+    @pytest.mark.asyncio
+    async def test_get_area_parameters_projects_inspect_fields(self, mock_client):
+        mock_client.fetch_cortical_area_properties = AsyncMock(
+            return_value={
+                "cortical_id": "Y0VDR19leAA=",
+                "cortical_name": "ECG expander",
+                "area_type": "CUSTOM",
+                "cortical_dimensions": [32, 10, 1],
+                "neuron_count": 32,
+                "neuron_fire_threshold": 0.01,
+                "neuron_leak_coefficient": 0.0,
+                "incoming_synapse_count": 320,
+                "properties": {
+                    "cortical_mapping_dst": {},
+                },
+            }
+        )
+        result = await mock_client.get_area_parameters("Y0VDR19leAA=")
+        assert result["cortical_name"] == "ECG expander"
+        assert result["cortical_dimensions"] == [32, 10, 1]
+        assert result["neuron_fire_threshold"] == 0.01
+        assert result["incoming_synapse_count"] == 320
+        assert "parameters" not in result or "i" not in result.get("parameters", {})
 
 
 class TestAgentAndMonitoring:
@@ -699,6 +958,27 @@ class TestMonitorActivityLifetimeStats:
         result = await server.monitor_activity_batch(["a"], summary_only=True)
         assert result["summary_only"] is True
         assert result["area_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_server_list_area_synapses_defaults_to_summary(self, monkeypatch):
+        from feagi_mcp import server
+
+        captured: dict[str, Any] = {}
+
+        async def fake_list(
+            cortical_area_id: str,
+            direction: str = "outgoing",
+            view: str = "edges",
+            **_kwargs: Any,
+        ):
+            captured["view"] = view
+            captured["direction"] = direction
+            return {"cortical_area_id": cortical_area_id, "view": view}
+
+        monkeypatch.setattr(server.feagi, "list_area_synapses", fake_list)
+        result = await server.list_area_synapses("Y0VDR19leAA=")
+        assert captured["view"] == "summary"
+        assert result["view"] == "summary"
 
 
 class TestSnapshotManager:

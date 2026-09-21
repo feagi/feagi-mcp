@@ -88,6 +88,22 @@ Use this instead of `list_ipu_areas_with_metadata` / `list_opu_areas_with_metada
 
 `include_areas=False` returns the subtype summary only. `mismatches_only=True` lists only collapsed I/O strips.
 
+## Classifier assembly
+
+### `list_classifiers`
+
+**Endpoint**: `GET /v1/cortical_area/classifiers`  
+**Returns**: compact rows (`classifier_id`, name, parent, 3D pose, input ids, owned `kernel_memory_id` / `class_memory_id` / `scan_twin_id`)
+
+Use this instead of searching cortical-area names for `_kernel_mem`, `_class_mem`, or `_twin`. Classifiers are first-class genome objects, not cortical areas.
+
+### `inspect_classifier`
+
+**Endpoints**: classifier GET/list + cortical-area catalog + mapping table  
+**Returns**: resolved slots (kernel/class/field + internals + twin), the four required mappings, `missing_slots`, `missing_mappings`, `twin_visible`
+
+One call for "where is the twin and is the assembly wired?". Do not walk `list_cortical_areas` / `get_connectivity_summary` by hand when this tool is available.
+
 ## Connectivity rule authoring
 
 ### `propose_connectivity_rule`
@@ -119,10 +135,30 @@ context. Set `summary_only=False` only when you need the raw spike list.
 One-rule fetch (`POST /v1/morphology/morphology_properties`). Do not use
 `list_morphologies` for a single name.
 
-- Default response: `name`, `type`, `class`, `pattern_count`, `judgment`.
-- `include_parameters=True` adds the stored rows (only when you need them).
+- Compact rules include `parameters` by default (the actual pattern/vector rows).
+- Enumerated dumps omit `parameters` unless `include_parameters=True`.
 - When stored rows are an enumerable dump, `judgment.compact_form` is the
   `N..M` rewrite.
+
+### `get_sensor_snapshot_last`
+
+Default `summary_only=True` returns `areas_summary` (per-Z count/min/max/mean)
+and `encoded_potential_stats`. It does not dump every vision voxel. Pass
+`threshold` (the IPU fire threshold) for `count_gte_threshold` per Z layer.
+Set `summary_only=False` only for a raw XYZP dump.
+
+### `get_voxel_neurons`
+
+Default `view=summary` keeps neuron state and replaces synapse lists with
+source-Z histograms, unique source areas, and unique weights. Use
+`view=edges` plus `synapse_page` only when a raw page is required.
+
+### Area name aliases
+
+`list_cortical_area_names` / `list_cortical_areas` treat `vision`,
+`simple vision`, and `camera` as aliases for `iimg` / `isvi` / `isvm` /
+`isig`. `iimg Unit 0` is simple vision even though the title does not
+contain the word vision.
 
 ### `update_morphology`
 
@@ -228,9 +264,12 @@ Set `skip_placement_validation=True` only if you must bypass these checks.
 ## Connection Management Tools
 
 ### 8. `get_cortical_mapping`
-**Purpose**: Get detailed connection configuration between two areas  
-**Endpoint**: `/v1/cortical_mapping/mapping_properties` (POST)  
-**Returns**: Connection rules with morphology, weights, plasticity
+**Purpose**: Get stored connection rules between two areas  
+**Source**: source-area `cortical_mapping_dst` via `POST /v1/cortical_area/cortical_area_properties`  
+**Returns**: Connection rules with morphology, weights, plasticity (as stored)
+
+Does not call `POST /v1/cortical_mapping/mapping_properties`, which 400s when a
+non-plastic rule omits `plasticity_constant`.
 
 **Use case**: Instead of parsing genome JSON, directly query "What's the connection from cHipFL to opose1?"
 

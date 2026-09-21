@@ -96,7 +96,8 @@ Add to your Cursor MCP settings (`~/.cursor/mcp.json`):
 - `monitor_activity` / `monitor_activity_batch` - Firing rates and lifetime stats. `summary_only=True` (default) omits `spike_history` and neuron-id lists.
 - `get_connectivity` - Inspect synaptic connections between areas
 - `trace_signal_path` - Verify signal propagation paths
-- `get_embodiment_status` - Check controller connections and mappings
+- `get_embodiment_status` - Live controller registry + compact I/O catalog (`/v1/embodiment/status` when present)
+- `get_sensor_snapshot_last` - Latest sensor tap. Default `summary_only` returns per-Z stats, not every voxel.
 - `get_area_parameters` - Inspect neuron properties
 - `get_cortical_synapse_counts` - Get incoming/outgoing synapse counts
 - `get_log_tail` - FEAGI process logs. Pass `message_contains` instead of dumping the ring buffer.
@@ -115,7 +116,7 @@ Add to your Cursor MCP settings (`~/.cursor/mcp.json`):
 
 ### Connection Management (NEW)
 - `propose_connectivity_rule` - Local compact-rule judgment (`*` / `?` / `?+N`). Call before `create_morphology`.
-- `get_morphology` - Fetch one morphology (parameters omitted by default; `judgment.compact_form` when rows should be `N..M`). Prefer this over `list_morphologies`.
+- `get_morphology` - Fetch one morphology. Compact rules include parameters by default; enumerated dumps omit them unless requested (`judgment.compact_form` when rows should be `N..M`). Prefer this over `list_morphologies`.
 - `update_morphology` - Replace an existing morphology and rebuild mappings that use it. Same compactness gate as `create_morphology`.
 - `get_cortical_mapping` - Get connection configuration between two areas
 - `update_cortical_mapping` - Create/update connections with morphology rules

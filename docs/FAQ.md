@@ -281,6 +281,8 @@ IPU→OPU synapses. Use MCP `list_area_synapses` with
 `direction="incoming"` (or `direction="both"`), or call
 `GET /v1/connectome/{id}/synapses/incoming` on a recent feagi-api build.
 `get_cortical_mapping` is still the right place for *rules* (morphology, PSC, plasticity).
+The MCP tool defaults to ``view="summary"`` (unique sources/targets and fan-in/fan-out).
+Pass ``view="edges"`` only when a paged edge list is required.
 
 ### `health_check` says 0 connected agents, but the sim works?
 

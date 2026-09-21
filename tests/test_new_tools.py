@@ -626,22 +626,32 @@ class TestConnectionManagement:
 
     @pytest.mark.asyncio
     async def test_get_cortical_mapping(self, mock_client):
-        """Test fetching cortical mapping."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = [
-            {
-                "morphology_id": "all_to_all",
-                "postSynapticCurrent_multiplier": 25.0,
+        """Test fetching cortical mapping from source area properties."""
+        mock_client.fetch_cortical_area_properties = AsyncMock(
+            return_value={
+                "cortical_name": "ECG Window IPU",
+                "properties": {
+                    "cortical_mapping_dst": {
+                        "dst_area": [
+                            {
+                                "morphology_id": "projector",
+                                "postSynapticCurrent_multiplier": 1.0,
+                                "plasticity_flag": False,
+                            }
+                        ]
+                    }
+                },
             }
-        ]
-        mock_client._client.post.return_value = mock_response
+        )
 
         result = await mock_client.get_cortical_mapping("src_area", "dst_area")
 
         assert result["src_area"] == "src_area"
         assert result["dst_area"] == "dst_area"
-        assert len(result["rules"]) > 0
+        assert result["src_name"] == "ECG Window IPU"
+        assert result["rule_count"] == 1
+        assert result["rules"][0]["morphology_id"] == "projector"
+        assert result["source"] == "cortical_area_properties"
 
     @pytest.mark.asyncio
     async def test_update_cortical_mapping(self, mock_client):
@@ -1361,6 +1371,46 @@ class TestAgentLiveness:
         assert result["error"] == "HTTP 500"
         assert result["endpoint"] == "/v1/agent/liveness"
 
+    @pytest.mark.asyncio
+    async def test_404_does_not_invent_prune_ages(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_response.text = "Not Found"
+        mock_client._client.get.return_value = mock_response
+
+        result = await mock_client.get_agent_liveness()
+
+        assert result["error"] == "HTTP 404"
+        assert result["missing_on_this_feagi"] is True
+        assert "get_registered_agents" in result["use_instead"]
+        assert "agents" not in result
+        assert "prune_in_s" not in result
+
+
+class TestEmbodimentStatusLiveRegistry:
+    """Missing /v1/embodiment/status must use live registry, not a genome dump."""
+
+    @pytest.mark.asyncio
+    async def test_uses_registered_agents_when_route_missing(self, mock_client):
+        missing = MagicMock()
+        missing.status_code = 404
+        missing.text = "Not Found"
+        mock_client._client.get.return_value = missing
+        mock_client.get_registered_agents = AsyncMock(
+            return_value={"count": 1, "agent_ids": ["video-1"]}
+        )
+        mock_client.list_io_areas_compact = AsyncMock(
+            return_value={"count": 2, "areas": []}
+        )
+
+        result = await mock_client.get_embodiment_status()
+
+        assert result["status"] == "live_registry"
+        assert result["registered_agents"]["agent_ids"] == ["video-1"]
+        assert result["io_areas"]["count"] == 2
+        assert "opu_areas" not in result
+        assert "ipu_areas" not in result
+
 
 class TestLogTailDisabledHint:
     """A disabled log ring buffer must say how to enable it.
@@ -1798,6 +1848,31 @@ class TestGetMorphology:
         result = await mock_client.get_morphology("babble_sit", include_parameters=True)
 
         assert result["parameters"]["patterns"] == [[[0, "*", "*"], ["?", "?", 0]]]
+
+    @pytest.mark.asyncio
+    async def test_compact_rule_includes_parameters_by_default(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "morphology_name": "Color Extractor",
+            "type": "patterns",
+            "class": "custom",
+            "parameters": {
+                "patterns": [
+                    [["*", "*", 0], [0, 0, "*"]],
+                    [["*", "*", 1], [1, 0, "*"]],
+                    [["*", "*", 2], [2, 0, "*"]],
+                ]
+            },
+        }
+        mock_client._client.post.return_value = mock_response
+
+        result = await mock_client.get_morphology("Color Extractor")
+
+        assert result["success"] is True
+        assert result["pattern_count"] == 3
+        assert result["judgment"]["reject"] is False
+        assert result["parameters"]["patterns"][0] == [["*", "*", 0], [0, 0, "*"]]
 
     @pytest.mark.asyncio
     async def test_empty_name_skips_http(self, mock_client):

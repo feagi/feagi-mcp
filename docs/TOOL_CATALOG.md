@@ -53,10 +53,11 @@ activity = await monitor_activity("cCPGa_", 2000)
 **Example:**
 ```python
 status = await get_embodiment_status()
-# Returns opu_areas, ipu_areas, connected_agents
+# /v1/embodiment/status when present; otherwise live_registry
+# (registered agents + compact I/O catalog, not a genome dump)
 ```
 
-**Status:** Fallback to genome analysis (API endpoint pending)
+**Status:** Live registry composition when the dedicated HTTP route is missing
 
 ---
 
@@ -106,8 +107,11 @@ paths = await trace_signal_path("cCPGa_", "opose0")
 
 ### get_area_parameters
 **Category:** Inspection  
-**Purpose:** Get complete parameter set for a cortical area  
+**Purpose:** Neuron and geometry parameters for one cortical area  
 **Signature:** `(area_id: str) -> dict`
+
+Reads cortical-area properties (not the genome blueprint). Returns dimensions,
+leak / fire threshold / PSP, synapse counts, and ``cortical_mapping_dst``.
 
 **When to use:**
 - Inspect existing circuit designs
@@ -118,8 +122,31 @@ paths = await trace_signal_path("cCPGa_", "opose0")
 **Example:**
 ```python
 params = await get_area_parameters("cCPGa_")
-# Returns dimensions, leak_coefficient, fire_threshold, connections, etc.
+# Returns cortical_dimensions, neuron_fire_threshold, neuron_leak_coefficient, ...
 ```
+
+**Status:** Fully functional
+
+---
+
+### list_area_neuron_states
+**Category:** Inspection  
+**Purpose:** Compact x/y/z + membrane + fire-count rows for one area  
+**Signature:** `(area_id: str, neuron_cap: int = 64) -> dict`
+
+Includes uniqueness stats so identical magnitudes are visible without sampling voxels.
+
+**Status:** Fully functional
+
+---
+
+### list_area_synapses
+**Category:** Inspection  
+**Purpose:** Realized synapse topology (summary by default)  
+**Signature:** `(cortical_area_id: str, direction="outgoing", view="summary", limit=None, offset=0) -> dict`
+
+Use ``view="summary"`` for unique sources/targets, weights, and fan-in/fan-out.
+Use ``view="edges"`` only when a paged edge list is required.
 
 **Status:** Fully functional
 

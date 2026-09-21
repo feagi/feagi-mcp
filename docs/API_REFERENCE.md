@@ -197,6 +197,62 @@ FEAGI list fetch. Prefer filters; an unfiltered call returns every area.
 **Example:**
 ```python
 areas = await list_cortical_areas(name_contains="Speed")
+
+---
+
+## Classifier Assembly
+
+### list_classifiers(name_contains=None, classifier_id=None)
+
+List first-class genome classifiers. Filtering is local after one
+`GET /v1/cortical_area/classifiers` fetch.
+
+**Parameters:**
+- `name_contains` (str, optional): Case-insensitive substring of the classifier name
+- `classifier_id` (str, optional): Exact genome classifier id
+
+**Returns:** Compact rows with id, name, parent region, 3D pose, input area ids,
+and owned `kernel_memory_id` / `class_memory_id` / `scan_twin_id`.
+
+**Example:**
+```python
+rows = await list_classifiers(name_contains="Ela")
+```
+
+**Use when:**
+- Finding a classifier without guessing `_twin` / `_kernel_mem` area names
+- Resolving `scan_twin_id` before inspecting the class-map area
+
+### inspect_classifier(classifier_id=None, name_contains=None)
+
+Inspect one classifier assembly in a single call: resolved input/internal/twin
+slots and the four required mappings.
+
+**Parameters:**
+- `classifier_id` (str, optional): Exact genome classifier id
+- `name_contains` (str, optional): Unique name substring when id is omitted
+
+**Returns:**
+```python
+{
+    "classifier": {"classifier_id": str, "name": str, "scan_twin_id": str, ...},
+    "slots": {"scan_twin": {"present": bool, "name": str, "visible": bool, ...}, ...},
+    "mappings": [{"role": str, "present": bool, "expected_morphology": str, ...}, ...],
+    "missing_slots": list[str],
+    "missing_mappings": list[str],
+    "twin_visible": bool,
+}
+```
+
+**Example:**
+```python
+assembly = await inspect_classifier(name_contains="Ela joon")
+# assembly["slots"]["scan_twin"]["name"] == "Ela joon_twin"
+```
+
+**Use when:**
+- Asking where the classifier twin is
+- Checking kernel/class/field wiring without multiple area/mapping calls
 # [
 #   {"name": "Spatial Pointer Speed", "cortical_id": "...", "cortical_dimensions": [3,1,100]},
 #   {"name": "Positional Servo Speed", "cortical_id": "...", "cortical_dimensions": [6,1,50]}
@@ -212,7 +268,7 @@ areas = await list_cortical_areas(name_contains="Speed")
 
 ### get_area_parameters(area_id: str)
 
-Get complete parameter set for a cortical area.
+Neuron and geometry parameters from cortical-area properties (not genome blueprint keys).
 
 **Parameters:**
 - `area_id` (str, required): Cortical area identifier
@@ -221,19 +277,15 @@ Get complete parameter set for a cortical area.
 ```python
 {
     "area_id": str,
-    "parameters": {
-        "__name-t": str,            # Area name
-        "_group-t": str,            # IPU/OPU/CUSTOM/etc
-        "___bbx-i": int,            # X dimension
-        "___bby-i": int,            # Y dimension
-        "___bbz-i": int,            # Z dimension
-        "excite-f": float,          # Excitability
-        "fire_t-f": float,          # Fire threshold
-        "leak_c-f": float,          # Leak coefficient
-        "pstcr_-f": float,          # Post-synaptic current
-        "dstmap-d": dict,           # Destination connections
-        ...
-    }
+    "cortical_id": str,
+    "cortical_name": str,
+    "cortical_dimensions": [int, int, int],
+    "neuron_fire_threshold": float,
+    "neuron_leak_coefficient": float,
+    "neuron_post_synaptic_potential": float,
+    "incoming_synapse_count": int,
+    "outgoing_synapse_count": int,
+    "cortical_mapping_dst": dict,
 }
 ```
 
@@ -242,12 +294,9 @@ Get complete parameter set for a cortical area.
 params = await get_area_parameters("cCPGa_")
 # {
 #   "area_id": "cCPGa_",
-#   "parameters": {
-#     "__name-t": "CPG_Diagonal_A",
-#     "leak_c-f": 18.0,
-#     "fire_t-f": 0.05,
-#     "excite-f": 80.0
-#   }
+#   "cortical_name": "CPG_Diagonal_A",
+#   "neuron_leak_coefficient": 18.0,
+#   "neuron_fire_threshold": 0.05
 # }
 ```
 

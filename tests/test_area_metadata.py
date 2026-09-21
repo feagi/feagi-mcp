@@ -3,6 +3,8 @@
 import pytest
 
 from feagi_mcp.area_metadata import (
+    area_record_matches_name_search,
+    area_title_matches_search,
     enrich_area_list,
     enrich_area_with_name,
     get_area_type_from_id,
@@ -18,6 +20,7 @@ def test_get_area_type_from_id():
         ("b2ltZwkAAAA=", "oimg"),
         ("aXN2aQkAAAA=", "isvi"),
         ("aXRlbgoAAAA=", "iten"),
+        ("aWltZwkAAAA=", "iimg"),
     ]
 
     for cortical_id, expected_type in test_cases:
@@ -101,6 +104,25 @@ def test_all_area_types_have_metadata():
         assert isinstance(metadata["supported_devices"], list)
         assert len(metadata["purpose"]) > 0
         assert len(metadata["typical_use"]) > 0
+
+
+def test_vision_alias_matches_iimg_title() -> None:
+    """Spoken 'vision' must find simple-vision IPU titles."""
+    assert area_title_matches_search("iimg Unit 0", "vision")
+    assert area_title_matches_search("iimg Unit 0", "simple vision")
+    assert not area_title_matches_search("iten Unit 0", "vision")
+
+
+def test_vision_alias_matches_iimg_record_by_id() -> None:
+    """Catalog rows titled without 'vision' still match via decoded subtype."""
+    area = {
+        "cortical_id": "aWltZwkAAAA=",
+        "cortical_name": "iimg Unit 0",
+        "cortical_subtype": "iimg",
+    }
+    assert area_record_matches_name_search(area, "vision")
+    assert area_record_matches_name_search(area, "simple vision")
+    assert not area_record_matches_name_search(area, "text")
 
 
 if __name__ == "__main__":

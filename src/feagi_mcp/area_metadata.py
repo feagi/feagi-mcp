@@ -2,6 +2,8 @@
 
 from typing import Any
 
+from feagi_mcp.cortical_id_decode import decode_cortical_id_interpretation
+
 CORTICAL_TYPE_METADATA = {
     "opse": {
         "category": "motor_control",
@@ -74,6 +76,33 @@ CORTICAL_TYPE_METADATA = {
         "supported_devices": ["camera", "image_sensor"],
         "data_format": "raw_image_data",
         "typical_use": "Camera input, visual perception, image capture",
+    },
+    "iimg": {
+        "category": "vision_input",
+        "type": "simple_vision",
+        "purpose": "Receives RGB simple-vision frames as a 3-layer image IPU",
+        "capabilities": ["image_input", "rgb_layers"],
+        "supported_devices": ["camera", "video_controller"],
+        "data_format": "rgb_voxel_potentials",
+        "typical_use": "Simple vision, webcam, video-controller iimg areas",
+    },
+    "isig": {
+        "category": "vision_input",
+        "type": "image_sensor",
+        "purpose": "Receives image-sensor frames as a vision IPU",
+        "capabilities": ["image_input"],
+        "supported_devices": ["camera", "image_sensor"],
+        "data_format": "image_voxel_potentials",
+        "typical_use": "Image-sensor input",
+    },
+    "isvm": {
+        "category": "vision_input",
+        "type": "vision_encoder",
+        "purpose": "Vision encoder IPU used by some embodiment packs",
+        "capabilities": ["image_input", "visual_processing"],
+        "supported_devices": ["camera"],
+        "data_format": "encoded_vision",
+        "typical_use": "Encoded / pack-specific vision input",
     },
     "iten": {
         "category": "language_input",
@@ -177,3 +206,57 @@ def enrich_area_with_name(area_id: str, area_name: str, device_count: int = 0) -
     info["name"] = area_name
     info["device_count"] = device_count
     return info
+
+
+# Spoken names that do not appear in IPU titles such as ``iimg Unit 0``.
+_AREA_SEARCH_ALIASES: dict[str, tuple[str, ...]] = {
+    "vision": ("iimg", "isvi", "isvm", "isig", "camera", "image"),
+    "simple vision": ("iimg", "isig"),
+    "simple_vision": ("iimg", "isig"),
+    "segmented vision": ("isvi",),
+    "segmented_vision": ("isvi",),
+    "camera": ("iimg", "isvi", "isvm", "isig", "camera"),
+    "image": ("iimg", "isig", "image"),
+}
+
+
+def expand_area_search_tokens(needle: str) -> tuple[str, ...]:
+    """Return the lowercased needle plus alias tokens for IPU/OPU slang."""
+    text = needle.strip().lower()
+    if not text:
+        return ()
+    extras = _AREA_SEARCH_ALIASES.get(text, ())
+    return (text, *extras)
+
+
+def area_title_matches_search(name: str, needle: str) -> bool:
+    """True when an area title contains the needle or a known alias token."""
+    name_l = name.lower()
+    return any(token in name_l for token in expand_area_search_tokens(needle) if token)
+
+
+def area_record_matches_name_search(area: dict[str, Any], needle: str) -> bool:
+    """Match a catalog row by title, subtype, or decoded 4-char cortical id."""
+    text = needle.strip()
+    if not text:
+        return True
+    tokens = expand_area_search_tokens(text)
+    if not tokens:
+        return True
+
+    for key in ("cortical_name", "name", "friendly_name"):
+        raw = area.get(key)
+        if isinstance(raw, str) and any(token in raw.lower() for token in tokens if token):
+            return True
+
+    subtype = str(area.get("cortical_subtype") or "").strip().lower()
+    if subtype and subtype in tokens:
+        return True
+
+    cortical_id = str(area.get("cortical_id") or "").strip()
+    if cortical_id:
+        decoded = decode_cortical_id_interpretation(cortical_id)
+        subtype_4 = str(decoded.get("subtype_4char") or "").strip().lower()
+        if subtype_4 and subtype_4 in tokens:
+            return True
+    return False

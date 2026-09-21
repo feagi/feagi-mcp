@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`list_classifiers` / `inspect_classifier`**: first-class genome classifier
+  catalog and one-call assembly inspect (slots, twin, required mappings).
+  Use these instead of walking `_kernel_mem` / `_twin` cortical-area names.
+- **`get_sensor_snapshot_last` `summary_only`** (default True): drop per-voxel
+  ``samples`` and return ``areas_summary`` with per-Z count/min/max/mean.
+  Optional ``threshold`` adds ``count_gte_threshold`` per layer. Pass the IPU
+  fire threshold; it is not hardcoded.
+- **`get_voxel_neurons(view="summary")`**: source-Z histogram, unique source
+  areas, and unique weights instead of a synapse-page dump.
+- **Area name aliases**: ``vision`` / ``simple vision`` / ``camera`` match
+  ``iimg`` / ``isvi`` / ``isvm`` / ``isig`` titles and subtypes.
+- **`list_area_neuron_states`**: compact x/y/z + membrane + fire-count rows
+  for one area, plus uniqueness stats. Prefer this over per-voxel
+  ``inspect_neuron_state_at``.
+- **`list_area_synapses(view="summary")`**: unique sources/targets, unique
+  weights/PSP, and fan-in/fan-out. MCP tool default is summary so a 320-edge
+  projector does not dump every synapse.
+- **`get_sensor_snapshot_last` `encoded_potential_stats`**: unique P and
+  `all_equal`. Analog window samples are not stored in FEAGI.
 - **`compare_device_registration_store`**: compact session vs descriptor
   device-registration comparison (`GET /v1/agent/device_registration_store`).
   Use this when IPU areas (especially ``isvi`` / ``SegmentedVision``) return
@@ -37,9 +56,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Absolute pattern range ``N..M``**: source-side contiguous channels collapse
   to one ``["1..98", "*", "*"]`` row instead of one exact-X row per channel.
 - **`get_morphology`**: fetch one rule via
-  ``POST /v1/morphology/morphology_properties``. Parameters are omitted by
-  default; local ``judgment`` includes ``compact_form`` when rows collapse to
-  ``N..M``. Use this instead of ``list_morphologies``.
+  ``POST /v1/morphology/morphology_properties``. Compact rules include
+  ``parameters`` by default. Enumerated dumps omit them unless
+  ``include_parameters=True``; local ``judgment`` includes ``compact_form``
+  when rows collapse to ``N..M``. Use this instead of ``list_morphologies``.
 - **`update_morphology`**: ``PUT /v1/morphology/morphology`` with the same
   compactness gate as ``create_morphology``. Rebuilds mappings that use the
   rule.
@@ -48,6 +68,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   False only when a raw spike dump is required.
 
 ### Changed
+- **`get_embodiment_status`**: when ``GET /v1/embodiment/status`` is missing,
+  return live ``get_registered_agents`` plus ``list_io_areas_compact``
+  (``status=live_registry``). No genome dump.
+- **`get_agent_liveness`**: HTTP 404 reports ``missing_on_this_feagi`` and
+  ``use_instead`` tools. It does not invent prune ages.
+- **`get_area_parameters`** reads cortical-area properties instead of
+  genome blueprint key suffixes (those produced stubs such as ``{i, t, f, b}``).
+- **`get_cortical_mapping`** reads ``cortical_mapping_dst`` on the source
+  area. Avoids ``mapping_properties`` HTTP 400 when ``plasticity_constant``
+  is omitted on a non-plastic rule.
 - **`create_morphology` / `build_reflex_mapping`** reject enumerated exact
   voxel dumps that share one offset, and reject high dest Z on PositionalServo
   absolute areas. ``recommend_connectivity_rules`` / ``describe_connectivity_rules``
