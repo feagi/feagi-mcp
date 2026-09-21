@@ -104,6 +104,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as well as ``joint_name``, and reports ambiguity instead of silently
   driving the first duplicate.
 
+## [0.0.16] - 2026-09-21
+
+### Changed
+- **Dependencies**: require `feagi-core>=2.2.0` (Python SDK from PyPI; aligns with Brain Visualizer 2.5.x).
+
 ## [0.0.15] - 2026-09-18
 
 ### Changed

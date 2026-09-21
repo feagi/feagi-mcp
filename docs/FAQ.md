@@ -216,7 +216,7 @@ Future versions will support API keys and role-based access.
 
 ### What FEAGI versions are supported?
 
-Tested with FEAGI 2.1.x. Should work with any version that has:
+Tested with FEAGI 2.2.x (Python SDK) and Brain Visualizer 2.5.x. Should work with any version that has:
 - REST API on port 8000
 - `/v1/genome/*` endpoints
 - JSON genome format v2.1
