@@ -198,8 +198,20 @@ def _attach_memory_runtime(
         slot["longterm_mem_threshold"] = params.get("longterm_mem_threshold")
 
 
+def _scan_slot(slots: dict[str, dict[str, Any] | bool], key: str) -> dict[str, Any]:
+    """Return a slot record; non-dict values (e.g. ``fields_present``) become ``{}``."""
+    raw = slots.get(key, {})
+    return raw if isinstance(raw, dict) else {}
+
+
+def _fields_present(slots: dict[str, dict[str, Any] | bool]) -> bool:
+    """Read the optional ``fields_present`` flag from a scan-blocker slot map."""
+    raw = slots.get("fields_present", True)
+    return raw if isinstance(raw, bool) else True
+
+
 def scan_blockers(
-    slots: dict[str, dict[str, Any]],
+    slots: dict[str, dict[str, Any] | bool],
     missing_slots: list[str],
     missing_mappings: list[str],
 ) -> list[str]:
@@ -207,7 +219,7 @@ def scan_blockers(
     blockers: list[str] = []
     if "kernel_memory" in missing_slots:
         blockers.append("kernel_memory_missing")
-    if not slots.get("fields_present", True):
+    if not _fields_present(slots):
         blockers.append("no_field_mappings")
     if "scan_twin" in missing_slots:
         blockers.append("twin_missing")
@@ -215,13 +227,13 @@ def scan_blockers(
         blockers.append("field_missing")
     if "field_to_kernel_mem" in missing_mappings:
         blockers.append("field_to_kernel_mem_mapping_missing")
-    field = slots.get("field_area", {})
+    field = _scan_slot(slots, "field_area")
     if field.get("present") and field.get("neuron_burst_engine_active") is False:
         blockers.append("field_burst_engine_off")
-    twin = slots.get("scan_twin", {})
+    twin = _scan_slot(slots, "scan_twin")
     if twin.get("present") and twin.get("neuron_burst_engine_active") is False:
         blockers.append("twin_burst_engine_off")
-    kmem = slots.get("kernel_memory", {})
+    kmem = _scan_slot(slots, "kernel_memory")
     if kmem.get("present") and kmem.get("long_term_neuron_count") == 0:
         blockers.append("kernel_memory_no_ltm")
     return blockers
