@@ -1403,11 +1403,10 @@ class FeagiClient:
         classifier_id: str | None = None,
         name_contains: str | None = None,
     ) -> dict[str, Any]:
-        """One-call classifier assembly: slots, twin, and required mappings.
+        """One-call classifier assembly: slots, mappings, and scan blockers.
 
-        Uses ``GET /v1/cortical_area/classifiers`` (or one classifier GET),
-        the cortical-area catalog, and the mapping table. Do not walk areas
-        and mappings separately when this tool is available.
+        Uses classifier GET/list, the cortical-area catalog, the mapping table,
+        and memory ST/LT counts. Do not walk those endpoints separately.
         """
         wanted_id = (classifier_id or "").strip()
         if wanted_id:
@@ -1439,7 +1438,17 @@ class FeagiClient:
             raw_items = mapping_summary.get("items", [])
             if isinstance(raw_items, list):
                 items = raw_items
-        return build_classifier_inspect(record, areas, items)
+        memory_runtime: dict[str, dict[str, Any]] = {}
+        for memory_key in ("kernel_memory_id", "class_memory_id"):
+            memory_id = str(record.get(memory_key, "")).strip()
+            if not memory_id:
+                continue
+            memory_page = await self.list_memory_neurons(memory_id, page=0, page_size=1)
+            if isinstance(memory_page, dict) and "error" in memory_page:
+                return memory_page
+            if isinstance(memory_page, dict):
+                memory_runtime[memory_id] = memory_page
+        return build_classifier_inspect(record, areas, items, memory_runtime)
 
     async def list_morphologies(self) -> dict[str, Any]:
         """Get all morphology definitions including connectivity rules."""

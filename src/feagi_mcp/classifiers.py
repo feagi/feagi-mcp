@@ -16,33 +16,60 @@ CLASSIFIER_LIST_KEYS: tuple[str, ...] = (
     "coordinates_3d",
     "kernel_area_id",
     "class_area_id",
-    "field_area_id",
+    "fields",
     "kernel_memory_id",
     "class_memory_id",
-    "scan_twin_id",
 )
 
-# Genome contract: referenced inputs, owned internals, required mappings.
+# Shared assembly slots. Field twins are per binding, not a single slot.
 CLASSIFIER_SLOT_FIELDS: tuple[tuple[str, str], ...] = (
     ("kernel_area", "kernel_area_id"),
     ("class_area", "class_area_id"),
-    ("field_area", "field_area_id"),
     ("kernel_memory", "kernel_memory_id"),
     ("class_memory", "class_memory_id"),
-    ("scan_twin", "scan_twin_id"),
 )
 
-CLASSIFIER_EXPECTED_MAPPINGS: tuple[tuple[str, str, str, str], ...] = (
+CLASSIFIER_SHARED_MAPPINGS: tuple[tuple[str, str, str, str], ...] = (
     ("kernel_to_kernel_mem", "kernel_area", "kernel_memory", "episodic_memory"),
     ("class_to_class_mem", "class_area", "class_memory", "episodic_memory"),
     ("kernel_mem_to_class_mem", "kernel_memory", "class_memory", "associative_memory"),
-    ("field_to_kernel_mem", "field_area", "kernel_memory", "episodic_scan"),
 )
 
 
+def classifier_field_bindings(record: dict[str, Any]) -> list[dict[str, str]]:
+    """Field bindings for one classifier.
+
+    A previous genome stored one ``field_area_id`` and ``scan_twin_id``.
+    That record loads as a one-element list. New records use ``fields`` only.
+    """
+    raw = record.get("fields")
+    bindings: list[dict[str, str]] = []
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            field_id = str(item.get("field_area_id", "")).strip()
+            twin_id = str(item.get("scan_twin_id", "")).strip()
+            if field_id and twin_id:
+                bindings.append({"field_area_id": field_id, "scan_twin_id": twin_id})
+    if bindings:
+        return bindings
+    field_id = str(record.get("field_area_id") or "").strip()
+    twin_id = str(record.get("scan_twin_id") or "").strip()
+    if field_id and twin_id:
+        return [{"field_area_id": field_id, "scan_twin_id": twin_id}]
+    return []
+
+
 def project_classifier_row(record: dict[str, Any]) -> dict[str, Any]:
-    """Keep classifier identity, parent, pose, and slot IDs."""
-    return {key: record.get(key) for key in CLASSIFIER_LIST_KEYS}
+    """Keep classifier identity, parent, pose, shared slots, and field bindings."""
+    row = {
+        key: record.get(key)
+        for key in CLASSIFIER_LIST_KEYS
+        if key != "fields"
+    }
+    row["fields"] = classifier_field_bindings(record)
+    return row
 
 
 def filter_classifier_records(
@@ -157,6 +184,54 @@ def resolve_classifier_slot(
     }
 
 
+def _attach_memory_runtime(
+    slot: dict[str, Any],
+    memory_runtime: dict[str, dict[str, Any]] | None,
+) -> None:
+    """Copy ST/LT counts onto a memory slot. Local; no FEAGI call."""
+    area_id = slot.get("area_id")
+    if not area_id or not memory_runtime:
+        return
+    runtime = memory_runtime.get(str(area_id))
+    if not isinstance(runtime, dict):
+        return
+    slot["short_term_neuron_count"] = runtime.get("short_term_neuron_count")
+    slot["long_term_neuron_count"] = runtime.get("long_term_neuron_count")
+    params = runtime.get("memory_parameters")
+    if isinstance(params, dict):
+        slot["init_lifespan"] = params.get("init_lifespan")
+        slot["longterm_mem_threshold"] = params.get("longterm_mem_threshold")
+
+
+def scan_blockers(
+    slots: dict[str, dict[str, Any]],
+    missing_slots: list[str],
+    missing_mappings: list[str],
+) -> list[str]:
+    """Shared plus single-field blockers. ``slots`` may include field_area and scan_twin."""
+    blockers: list[str] = []
+    if "kernel_memory" in missing_slots:
+        blockers.append("kernel_memory_missing")
+    if not slots.get("fields_present", True):
+        blockers.append("no_field_mappings")
+    if "scan_twin" in missing_slots:
+        blockers.append("twin_missing")
+    if "field_area" in missing_slots:
+        blockers.append("field_missing")
+    if "field_to_kernel_mem" in missing_mappings:
+        blockers.append("field_to_kernel_mem_mapping_missing")
+    field = slots.get("field_area", {})
+    if field.get("present") and field.get("neuron_burst_engine_active") is False:
+        blockers.append("field_burst_engine_off")
+    twin = slots.get("scan_twin", {})
+    if twin.get("present") and twin.get("neuron_burst_engine_active") is False:
+        blockers.append("twin_burst_engine_off")
+    kmem = slots.get("kernel_memory", {})
+    if kmem.get("present") and kmem.get("long_term_neuron_count") == 0:
+        blockers.append("kernel_memory_no_ltm")
+    return blockers
+
+
 def _mapping_index(
     items: list[dict[str, Any]],
 ) -> dict[tuple[str, str], list[str]]:
@@ -177,8 +252,9 @@ def build_classifier_inspect(
     classifier: dict[str, Any],
     areas: list[dict[str, Any]],
     mapping_items: list[dict[str, Any]],
+    memory_runtime: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Project classifier + resolved slots + required mapping presence."""
+    """Project classifier + slots + mappings + scan blockers."""
     catalog = _catalog_by_id(areas)
     slots: dict[str, dict[str, Any]] = {}
     slot_ids: dict[str, str | None] = {}
@@ -193,7 +269,7 @@ def build_classifier_inspect(
     mapping_lookup = _mapping_index(mapping_items)
     mappings: list[dict[str, Any]] = []
     missing_mappings: list[str] = []
-    for role, src_slot, dst_slot, expected in CLASSIFIER_EXPECTED_MAPPINGS:
+    for role, src_slot, dst_slot, expected in CLASSIFIER_SHARED_MAPPINGS:
         src_id = slot_ids.get(src_slot)
         dst_id = slot_ids.get(dst_slot)
         morphologies = (
@@ -216,12 +292,89 @@ def build_classifier_inspect(
         if not present:
             missing_mappings.append(role)
 
-    twin = slots["scan_twin"]
+    for memory_role in ("kernel_memory", "class_memory"):
+        _attach_memory_runtime(slots[memory_role], memory_runtime)
+
+    kernel_memory_id = slot_ids.get("kernel_memory")
+    field_rows: list[dict[str, Any]] = []
+    blockers = scan_blockers(
+        {**slots, "fields_present": bool(classifier_field_bindings(classifier))},
+        missing_slots,
+        missing_mappings,
+    )
+    for binding in classifier_field_bindings(classifier):
+        field_slot = resolve_classifier_slot(
+            "field_area", binding["field_area_id"], catalog
+        )
+        twin_slot = resolve_classifier_slot(
+            "scan_twin", binding["scan_twin_id"], catalog
+        )
+        field_missing = [] if field_slot.get("present") else ["field_area"]
+        twin_missing = [] if twin_slot.get("present") else ["scan_twin"]
+        morphologies = (
+            mapping_lookup.get((binding["field_area_id"], str(kernel_memory_id)), [])
+            if kernel_memory_id
+            else []
+        )
+        mapping_present = "episodic_scan" in morphologies
+        field_mapping_missing = (
+            [] if mapping_present else ["field_to_kernel_mem"]
+        )
+        field_blockers = scan_blockers(
+            {
+                "field_area": field_slot,
+                "scan_twin": twin_slot,
+                "kernel_memory": slots.get("kernel_memory", {}),
+                "fields_present": True,
+            },
+            [*missing_slots, *field_missing, *twin_missing],
+            [*missing_mappings, *field_mapping_missing],
+        )
+        field_rows.append(
+            {
+                "field_area_id": binding["field_area_id"],
+                "scan_twin_id": binding["scan_twin_id"],
+                "field_area": field_slot,
+                "scan_twin": twin_slot,
+                "mapping_present": mapping_present,
+                "twin_visible": bool(
+                    twin_slot.get("present") and twin_slot.get("visible") is not False
+                ),
+                "scan_blockers": field_blockers,
+                "scan_ready": field_blockers == [],
+            }
+        )
+        mappings.append(
+            {
+                "role": "field_to_kernel_mem",
+                "src_slot": "field_area",
+                "dst_slot": "kernel_memory",
+                "src": binding["field_area_id"],
+                "dst": kernel_memory_id,
+                "expected_morphology": "episodic_scan",
+                "present": mapping_present,
+                "actual_morphologies": morphologies,
+            }
+        )
+        if not mapping_present:
+            missing_mappings.append(
+                f"field_to_kernel_mem:{binding['field_area_id']}"
+            )
+        for name in field_blockers:
+            if name not in blockers:
+                blockers.append(name)
+
+    if not field_rows and "no_field_mappings" not in blockers:
+        blockers.insert(0, "no_field_mappings")
+
     return {
         "classifier": project_classifier_row(classifier),
         "slots": slots,
+        "fields": field_rows,
         "mappings": mappings,
         "missing_slots": missing_slots,
         "missing_mappings": missing_mappings,
-        "twin_visible": bool(twin.get("present") and twin.get("visible") is not False),
+        "twin_visible": bool(field_rows) and all(row["twin_visible"] for row in field_rows),
+        "scan_blockers": blockers,
+        "scan_ready": bool(field_rows) and all(row["scan_ready"] for row in field_rows),
     }

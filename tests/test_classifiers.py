@@ -8,6 +8,7 @@ from feagi_mcp.classifiers import (
     build_classifier_inspect,
     filter_classifier_records,
     project_classifier_row,
+    scan_blockers,
     select_classifier_record,
 )
 from feagi_mcp.feagi_client import FeagiClient
@@ -55,6 +56,7 @@ def _areas() -> list[dict]:
             "cortical_type": "custom",
             "cortical_dimensions": [10, 6, 1],
             "visible": True,
+            "neuron_burst_engine_active": True,
         },
         {
             "cortical_id": "kmem",
@@ -95,8 +97,9 @@ def _mappings() -> list[dict]:
 def test_project_classifier_row_drops_properties() -> None:
     row = project_classifier_row(_classifier())
     assert row["classifier_id"] == "clf-1"
-    assert row["scan_twin_id"] == "twin"
+    assert row["fields"] == [{"field_area_id": "field", "scan_twin_id": "twin"}]
     assert "properties" not in row
+    assert "scan_twin_id" not in row
 
 
 def test_filter_and_select_classifier() -> None:
@@ -116,8 +119,8 @@ def test_filter_and_select_classifier() -> None:
 def test_inspect_reports_twin_and_required_mappings() -> None:
     payload = build_classifier_inspect(_classifier(), _areas(), _mappings())
     assert payload["twin_visible"] is True
-    assert payload["slots"]["scan_twin"]["name"] == "Ela joon_twin"
-    assert payload["slots"]["scan_twin"]["cortical_dimensions"] == [10, 6, 6]
+    assert payload["fields"][0]["scan_twin"]["name"] == "Ela joon_twin"
+    assert payload["fields"][0]["scan_twin"]["cortical_dimensions"] == [10, 6, 6]
     assert payload["missing_slots"] == []
     assert payload["missing_mappings"] == []
     roles = [row["role"] for row in payload["mappings"]]
@@ -131,12 +134,44 @@ def test_inspect_reports_twin_and_required_mappings() -> None:
 
 def test_inspect_flags_missing_twin_and_scan_mapping() -> None:
     classifier = _classifier()
+    classifier["field_area_id"] = ""
     classifier["scan_twin_id"] = ""
     mappings = [row for row in _mappings() if row["morphology"] != "episodic_scan"]
     payload = build_classifier_inspect(classifier, _areas(), mappings)
     assert payload["twin_visible"] is False
-    assert "scan_twin" in payload["missing_slots"]
-    assert "field_to_kernel_mem" in payload["missing_mappings"]
+    assert payload["fields"] == []
+    assert "no_field_mappings" in payload["scan_blockers"]
+    assert payload["scan_ready"] is False
+
+
+def test_inspect_reports_scan_blockers_for_ltm_and_burst() -> None:
+    areas = _areas()
+    for area in areas:
+        if area["cortical_id"] in {"field", "twin"}:
+            area["neuron_burst_engine_active"] = False
+    payload = build_classifier_inspect(
+        _classifier(),
+        areas,
+        _mappings(),
+        {
+            "kmem": {
+                "short_term_neuron_count": 0,
+                "long_term_neuron_count": 0,
+                "memory_parameters": {
+                    "init_lifespan": 9,
+                    "longterm_mem_threshold": 100,
+                },
+            }
+        },
+    )
+    assert payload["slots"]["kernel_memory"]["long_term_neuron_count"] == 0
+    assert payload["slots"]["kernel_memory"]["init_lifespan"] == 9
+    assert "kernel_memory_no_ltm" in payload["scan_blockers"]
+    assert "field_burst_engine_off" in payload["scan_blockers"]
+    assert "twin_burst_engine_off" in payload["scan_blockers"]
+    assert payload["scan_ready"] is False
+    blockers = scan_blockers(payload["slots"], [], [])
+    assert "kernel_memory_no_ltm" in blockers
 
 
 @pytest.mark.asyncio
@@ -173,10 +208,19 @@ async def test_client_inspect_classifier_uses_one_assembly_payload() -> None:
     client.get_connectivity_summary = AsyncMock(
         return_value={"items": _mappings(), "total_filtered": 4}
     )
+    client.list_memory_neurons = AsyncMock(
+        return_value={
+            "short_term_neuron_count": 0,
+            "long_term_neuron_count": 2,
+            "memory_parameters": {"init_lifespan": 9, "longterm_mem_threshold": 100},
+        }
+    )
     payload = await client.inspect_classifier(classifier_id="clf-1")
     assert payload["classifier"]["name"] == "Ela joon"
     assert payload["twin_visible"] is True
     assert payload["missing_mappings"] == []
+    assert payload["scan_ready"] is True
+    assert client.list_memory_neurons.await_count == 2
 
 
 @pytest.mark.asyncio

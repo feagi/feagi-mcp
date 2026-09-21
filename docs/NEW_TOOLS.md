@@ -100,9 +100,11 @@ Use this instead of searching cortical-area names for `_kernel_mem`, `_class_mem
 ### `inspect_classifier`
 
 **Endpoints**: classifier GET/list + cortical-area catalog + mapping table  
-**Returns**: resolved slots (kernel/class/field + internals + twin), the four required mappings, `missing_slots`, `missing_mappings`, `twin_visible`
+**Returns**: resolved slots (kernel/class/field + internals + twin), the four required mappings, `missing_slots`, `missing_mappings`, `twin_visible`, memory ST/LT counts, `scan_blockers`, `scan_ready`
 
-One call for "where is the twin and is the assembly wired?". Do not walk `list_cortical_areas` / `get_connectivity_summary` by hand when this tool is available.
+`scan_blockers` answers "why did field stimulation not stamp the twin?" without calling `diagnose_memory_twin_mapping` (that tool is leftover `episodic_memory` twins only). Blockers include `kernel_memory_no_ltm`, `field_burst_engine_off`, `twin_burst_engine_off`, and missing scan mapping/slots.
+
+One call for assembly + scan readiness. Do not walk `list_cortical_areas` / `get_connectivity_summary` / `list_memory_neurons` by hand when this tool is available.
 
 ## Connectivity rule authoring
 

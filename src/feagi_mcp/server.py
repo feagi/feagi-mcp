@@ -423,7 +423,8 @@ async def list_classifiers(
 
     Returns:
         Compact rows: id, name, parent region, 3D pose, input area ids,
-        and owned ``kernel_memory_id`` / ``class_memory_id`` / ``scan_twin_id``.
+        owned ``kernel_memory_id`` / ``class_memory_id``, and ``fields``
+        (each field area with its detection twin).
     """
     return await feagi.list_classifiers(
         name_contains=name_contains,
@@ -439,16 +440,17 @@ async def inspect_classifier(
     """Inspect one classifier assembly in a single call.
 
     Resolves kernel/class/field inputs, owned memory internals, the class-map
-    twin, and the four required mappings. Use this before walking areas or
-    mappings one by one.
+    twin, required mappings, memory ST/LT counts, and ``scan_blockers``.
+    Use this before walking areas, mappings, or memory lists one by one.
 
     Args:
         classifier_id: Exact genome classifier id.
         name_contains: Unique name substring when ``classifier_id`` is omitted.
 
     Returns:
-        ``classifier``, resolved ``slots``, required ``mappings``,
-        ``missing_slots``, ``missing_mappings``, and ``twin_visible``.
+        ``classifier``, ``slots``, ``mappings``, ``missing_slots``,
+        ``missing_mappings``, ``twin_visible``, ``scan_blockers``,
+        and ``scan_ready``.
     """
     return await feagi.inspect_classifier(
         classifier_id=classifier_id,

@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`inspect_classifier` `scan_blockers` / `scan_ready`**: ST/LT counts plus
+  why episodic scan will not stamp the twin (`kernel_memory_no_ltm`,
+  field/twin burst off). Do not use `diagnose_memory_twin_mapping` for this.
 - **`list_classifiers` / `inspect_classifier`**: first-class genome classifier
   catalog and one-call assembly inspect (slots, twin, required mappings).
   Use these instead of walking `_kernel_mem` / `_twin` cortical-area names.

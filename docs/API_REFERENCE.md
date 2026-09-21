@@ -226,7 +226,7 @@ rows = await list_classifiers(name_contains="Ela")
 ### inspect_classifier(classifier_id=None, name_contains=None)
 
 Inspect one classifier assembly in a single call: resolved input/internal/twin
-slots and the four required mappings.
+slots, the four required mappings, memory ST/LT counts, and scan blockers.
 
 **Parameters:**
 - `classifier_id` (str, optional): Exact genome classifier id
@@ -241,6 +241,8 @@ slots and the four required mappings.
     "missing_slots": list[str],
     "missing_mappings": list[str],
     "twin_visible": bool,
+    "scan_blockers": list[str],
+    "scan_ready": bool,
 }
 ```
 
@@ -252,6 +254,7 @@ assembly = await inspect_classifier(name_contains="Ela joon")
 
 **Use when:**
 - Asking where the classifier twin is
+- Asking why field stimulation did not stamp the twin
 - Checking kernel/class/field wiring without multiple area/mapping calls
 # [
 #   {"name": "Spatial Pointer Speed", "cortical_id": "...", "cortical_dimensions": [3,1,100]},
