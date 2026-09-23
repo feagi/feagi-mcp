@@ -302,6 +302,26 @@ health = await health_check()
 
 **Status:** Fully functional
 
+### diagnose_feagi_runtime
+**Category:** Utility  
+**Purpose:** Classify a dead or stalled FEAGI process without dumping logs  
+**Signature:** `() -> dict`
+
+**When to use:**
+- `health_check` times out or the connection is refused
+- Sensory start failed with "FEAGI is unresponsive"
+- The FEAGI process exited (SIGTERM / `zsh: terminated`)
+- Injection reports unknown cortical areas
+- The NPU watchdog reports a stall
+
+Reads `FEAGI_LOG_FILE` (if set), then desktop `feagi-core.log`, then
+`neurorobotics-studio.log`. When those have no FEAGI markers and HTTP
+answers, classifies `/v1/system/log_tail`. Returns `likely_cause`,
+`paths_checked`, and compact evidence events. Prefer this over
+`health_check` + `get_log_tail` when HTTP is not answering.
+
+**Status:** Fully functional
+
 ---
 
 ## Tool Combinations

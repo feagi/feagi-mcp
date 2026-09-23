@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`diagnose_feagi_runtime`**: local-first stall diagnosis. Reads
+  ``FEAGI_LOG_FILE`` (if set), the latest desktop ``feagi-core.log``, then
+  ``neurorobotics-studio.log``. When those have no FEAGI markers and HTTP
+  answers, classifies ``/v1/system/log_tail`` (no record dump). Always
+  returns ``paths_checked``. Health probe uses ``FEAGI_PROBE_TIMEOUT_SECONDS``.
 - **`inspect_classifier` `scan_blockers` / `scan_ready`**: ST/LT counts plus
   why episodic scan will not stamp the twin (`kernel_memory_no_ltm`,
   field/twin burst off). Do not use `diagnose_memory_twin_mapping` for this.
@@ -103,6 +108,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`send_motor_command`** matches ``actuator_name`` and ``source_entity``
   as well as ``joint_name``, and reports ambiguity instead of silently
   driving the first duplicate.
+
+## [0.0.17] - 2026-09-22
+
+### Changed
+- **Dependencies**: pin `feagi-core==2.2.2` (Python SDK from PyPI; aligns with Brain Visualizer 2.5.1 and embodiment controllers).
 
 ## [0.0.16] - 2026-09-21
 

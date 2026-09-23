@@ -100,7 +100,8 @@ Add to your Cursor MCP settings (`~/.cursor/mcp.json`):
 - `get_sensor_snapshot_last` - Latest sensor tap. Default `summary_only` returns per-Z stats, not every voxel.
 - `get_area_parameters` - Inspect neuron properties
 - `get_cortical_synapse_counts` - Get incoming/outgoing synapse counts
-- `get_log_tail` - FEAGI process logs. Pass `message_contains` instead of dumping the ring buffer.
+- `get_log_tail` - FEAGI process logs. Pass `message_contains` instead of dumping the ring buffer. Requires HTTP.
+- `diagnose_feagi_runtime` - Local-first stall diagnosis (`feagi-core.log`, desktop log, `FEAGI_LOG_FILE`, then HTTP ring). Returns `paths_checked`. Use when `health_check` times out or FEAGI has exited.
 
 ### Genome Editing (NEW)
 - `create_brain_region` - Create the named circuit container. Title must name the function (Sit, Walk CPG); Autogen Circuit / Untitled are rejected.

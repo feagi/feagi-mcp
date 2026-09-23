@@ -66,6 +66,20 @@ only shows the live session.
 Pass `message_contains` (`isvi`, `SegmentedVision`, `auto-create`) instead of
 fetching the unfiltered ring dump.
 
+### 2d. `diagnose_feagi_runtime`
+**Purpose**: Classify a dead or stalled FEAGI process without dumping logs  
+**Sources**: `FEAGI_LOG_FILE` if set, latest desktop `feagi-core.log`,
+`neurorobotics-studio.log`, then `GET /v1/system/log_tail` when HTTP answers
+and local files have no FEAGI markers. Health probe uses
+`FEAGI_PROBE_TIMEOUT_SECONDS`.
+
+Use this instead of `health_check` + `get_log_tail` when HTTP is not answering.
+`paths_checked` lists every file or ring source inspected.
+Returns `likely_cause` (`npu_lock_during_structural_rebuild`,
+`npu_watchdog_stall`, `outstanding_control_reply_then_client_stop`,
+`npu_missing_cortical_registration`, `health_check_timeout`,
+`feagi_unreachable`) plus compact evidence events.
+
 ### 3. `list_opu_areas`
 **Purpose**: List only motor output areas  
 **Endpoint**: `/v1/cortical_area/opu`  

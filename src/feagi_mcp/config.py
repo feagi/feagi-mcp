@@ -21,6 +21,10 @@ class FeagiMcpConfig(BaseSettings):
     host: str = "localhost"
     port: int = 8000
     timeout_seconds: float = 30.0
+    #: Short probe used by ``diagnose_feagi_runtime`` so a dead FEAGI process
+    #: does not consume ``timeout_seconds``. Override with
+    #: ``FEAGI_PROBE_TIMEOUT_SECONDS``.
+    probe_timeout_seconds: float = 5.0
     max_retries: int = 3
     connection_check_interval_seconds: float = 5.0
 

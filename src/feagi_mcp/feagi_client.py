@@ -61,6 +61,20 @@ from feagi_mcp.placement_policy import (
     check_min_separation_to_existing,
     check_origin_exclusion,
 )
+from feagi_mcp.runtime_diagnostics import (
+    KIND_RING,
+    LOG_READ_MAX_BYTES,
+    RING_TAIL_LIMIT,
+    STATUS_RING_DISABLED,
+    STATUS_RING_FAILED,
+    STATUS_USED,
+    classify_feagi_core_log_lines,
+    combine_runtime_diagnosis,
+    lines_from_log_tail_records,
+    local_log_candidate_paths,
+    log_missing_reason,
+    select_local_log_diagnosis,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -5452,6 +5466,110 @@ class FeagiClient:
                 if newest is None or mtime > newest[0]:
                     newest = (mtime, child)
         return newest[1] if newest is not None else None
+
+    @staticmethod
+    def _explicit_feagi_log_file() -> Path | None:
+        """Return ``FEAGI_LOG_FILE`` when set. Empty means the env is unset."""
+        raw = str(os.environ.get("FEAGI_LOG_FILE", "")).strip()
+        if not raw:
+            return None
+        return Path(raw).expanduser()
+
+    async def _probe_health_check_async(
+        self, probe_timeout_seconds: float
+    ) -> tuple[bool, str | None, str]:
+        """Async health probe used by ``diagnose_feagi_runtime``."""
+        endpoint = f"{self.base_url}/v1/system/health_check"
+        try:
+            response = await self._client.get(endpoint, timeout=probe_timeout_seconds)
+        except Exception as exc:
+            payload = self._request_exception_payload(endpoint=endpoint, exception=exc)
+            return False, str(payload.get("error_type")), endpoint
+        if response.status_code == 200:
+            return True, None, endpoint
+        return False, f"http_{response.status_code}", endpoint
+
+    async def _classify_ring_buffer_tail(
+        self, probe_timeout_seconds: float
+    ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+        """Classify the HTTP ring buffer. Does not return raw records."""
+        endpoint = f"{self.base_url}/v1/system/log_tail"
+        check: dict[str, Any] = {"kind": KIND_RING, "endpoint": endpoint}
+        try:
+            response = await self._client.get(
+                endpoint,
+                params={"limit": str(RING_TAIL_LIMIT)},
+                timeout=probe_timeout_seconds,
+            )
+        except Exception as exc:
+            payload = self._request_exception_payload(endpoint=endpoint, exception=exc)
+            check["status"] = STATUS_RING_FAILED
+            check["error_type"] = payload.get("error_type")
+            return None, check
+        if response.status_code != 200:
+            check["status"] = STATUS_RING_FAILED
+            check["error_type"] = f"http_{response.status_code}"
+            return None, check
+        payload = _as_json_dict(response.json())
+        if payload.get("enabled") is False:
+            check["status"] = STATUS_RING_DISABLED
+            check["capacity"] = payload.get("capacity")
+            return None, check
+        records = payload.get("records")
+        if not isinstance(records, list):
+            records = []
+        diagnosis = classify_feagi_core_log_lines(lines_from_log_tail_records(records))
+        check["status"] = STATUS_USED
+        check["event_count"] = diagnosis["event_count"]
+        check["returned"] = len(records)
+        return diagnosis, check
+
+    async def diagnose_feagi_runtime(self, probe_timeout_seconds: float) -> dict[str, Any]:
+        """Classify a dead or stalled FEAGI process from local logs plus a short probe.
+
+        Local files are read first so a process that already exited still yields
+        a cause. When ``feagi-core.log`` is missing, desktop and ``FEAGI_LOG_FILE``
+        are classified next. If those have no FEAGI markers and HTTP answers,
+        the ring buffer is classified. The health probe uses
+        ``probe_timeout_seconds`` instead of the client-wide HTTP timeout.
+        """
+        session_dir = self._latest_runtime_session_dir()
+        candidates = local_log_candidate_paths(
+            session_dir=session_dir,
+            explicit_log_file=self._explicit_feagi_log_file(),
+        )
+        log_diagnosis, paths_checked, log_source, log_path = select_local_log_diagnosis(
+            candidates,
+            LOG_READ_MAX_BYTES,
+        )
+
+        http_reachable, http_error_type, endpoint = await self._probe_health_check_async(
+            probe_timeout_seconds
+        )
+        if log_diagnosis is None and http_reachable:
+            ring_diagnosis, ring_check = await self._classify_ring_buffer_tail(
+                probe_timeout_seconds
+            )
+            paths_checked.append(ring_check)
+            if ring_diagnosis is not None and int(ring_diagnosis["event_count"]) > 0:
+                log_diagnosis = ring_diagnosis
+                log_source = KIND_RING
+
+        report = combine_runtime_diagnosis(
+            log_diagnosis=log_diagnosis,
+            http_reachable=http_reachable,
+            http_error_type=http_error_type,
+        )
+        report["probe_timeout_seconds"] = probe_timeout_seconds
+        report["health_endpoint"] = endpoint
+        report["session_dir"] = str(session_dir) if session_dir is not None else None
+        report["log_source"] = log_source
+        report["paths_checked"] = paths_checked
+        if log_path is not None:
+            report["feagi_core_log"] = str(log_path)
+        if log_diagnosis is None:
+            report["log_missing_reason"] = log_missing_reason(paths_checked)
+        return report
 
     @classmethod
     def _collect_lifecycle_events_from_log(

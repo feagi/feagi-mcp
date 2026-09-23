@@ -2425,6 +2425,30 @@ async def get_log_tail(
 
 
 @mcp.tool()
+async def diagnose_feagi_runtime() -> dict[str, Any]:
+    """Diagnose a dead or stalled FEAGI process without dumping logs.
+
+    Local-first: reads ``FEAGI_LOG_FILE`` (if set), then the latest desktop
+    ``feagi-core.log``, then ``neurorobotics-studio.log``. When those have no
+    FEAGI markers and HTTP answers, classifies ``/v1/system/log_tail``.
+    Health probe uses ``FEAGI_PROBE_TIMEOUT_SECONDS`` so a dead process does
+    not consume the full HTTP timeout. Returns ``paths_checked``.
+
+    Use this instead of ``health_check`` + ``get_log_tail`` when:
+    - health_check times out or the connection is refused
+    - a sensory start failed with "FEAGI is unresponsive"
+    - the FEAGI process exited (SIGTERM / ``zsh: terminated``)
+    - injection reports unknown cortical areas
+    - the NPU watchdog reports a stall
+
+    Returns a compact ``likely_cause`` plus evidence events.
+    """
+    return await feagi.diagnose_feagi_runtime(
+        probe_timeout_seconds=config.probe_timeout_seconds,
+    )
+
+
+@mcp.tool()
 async def compare_device_registration_store(
     agent_name: str | None = None,
 ) -> dict[str, Any]:

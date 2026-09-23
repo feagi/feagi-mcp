@@ -2,7 +2,7 @@
   "name": "feagi",
   "displayName": "FEAGI Neural Monitor",
   "description": "Observe and control FEAGI neural systems for LLM-assisted circuit design",
-  "version": "0.0.16",
+  "version": "0.0.17",
   "publisher": "neuraville",
   "categories": ["AI", "Robotics", "Science"],
   "keywords": ["feagi", "neural", "brain", "robotics", "mcp", "ai"],
@@ -39,6 +39,11 @@
       "name": "health_check",
       "category": "monitoring",
       "description": "Check FEAGI server health and connectivity"
+    },
+    {
+      "name": "diagnose_feagi_runtime",
+      "category": "monitoring",
+      "description": "Local-first stall diagnosis with paths_checked and ring-buffer fallback"
     },
     {
       "name": "monitor_activity",
