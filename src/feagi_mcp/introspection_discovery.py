@@ -65,10 +65,15 @@ class IntrospectionEndpoint:
     descriptor_path: str
     #: Base64 AgentDescriptor from the launcher, when the descriptor includes it.
     agent_id: str | None = None
+    #: Loopback MuJoCo settings control server, when the descriptor includes one.
+    control_url: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """Return a plain dict suitable for JSON/MCP transport."""
-        return asdict(self)
+        payload = asdict(self)
+        if payload.get("control_url") is None:
+            payload.pop("control_url", None)
+        return payload
 
 
 def _sanitize_controller_id(controller_id: str) -> str:
@@ -112,6 +117,13 @@ def _candidate_runtime_roots(*, env_override: str | None = None) -> list[Path]:
 
 def _descriptor_path(root: Path, controller_id: str) -> Path:
     return root / "controllers" / INTROSPECTION_SUBDIR / f"{controller_id}.json"
+
+
+def _optional_str(value: Any) -> str | None:
+    """Return a non-empty string, or None."""
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
 
 
 def _load_descriptor(path: Path) -> IntrospectionEndpoint | None:
@@ -164,6 +176,7 @@ def _load_descriptor(path: Path) -> IntrospectionEndpoint | None:
             started_at=str(data["started_at"]),
             descriptor_path=str(path),
             agent_id=agent_id,
+            control_url=_optional_str(data.get("control_url")),
         )
     except (KeyError, TypeError, ValueError) as exc:
         logger.warning(

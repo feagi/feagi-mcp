@@ -22,6 +22,13 @@ CLASSIFIER_LIST_KEYS: tuple[str, ...] = (
     "fields",
     "kernel_memory_id",
     "class_memory_id",
+    "reward_training",
+    "answer_feedback_area_id",
+    "pain_area_id",
+    "pleasure_area_id",
+    "answer_latency_bursts",
+    "learn_area_id",
+    "confidence_area_id",
 )
 
 # Shared assembly slots. Field twins are per binding, not a single slot.

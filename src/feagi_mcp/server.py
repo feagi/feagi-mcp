@@ -22,6 +22,7 @@ from feagi_mcp.genome_artifact import (
     is_genome_artifact_file_name,
 )
 from feagi_mcp.io_cortical_id_encode import encode_io_cortical_id
+from feagi_mcp.mujoco_scene_control import MujocoSceneControl, scene_object_payload
 from feagi_mcp.placement_policy import (
     LAYOUT_XY_PLANE,
     MIN_ANCHOR_SEPARATION_VOXELS,
@@ -3265,6 +3266,119 @@ async def embodiment_reset_simulation_time_stats(
         timeout_s=timeout_s,
         controller_id=controller_id,
     )
+
+
+@mcp.tool()
+async def get_mujoco_scene_config(controller_id: str = "mujoco") -> dict[str, Any]:
+    """Read the live MuJoCo settings: safety boundary, objects, cameras, embodiment, feedback, rate.
+
+    Call this before replacing a list (objects, cameras, embodiment bodies, feedback
+    rules) so an edit keeps what is already in the scene. Positions are millimeters.
+    Object weight is ``mass_g`` in grams and is used only when ``dynamic`` is true.
+    Object friction is optional ``[sliding, torsional, rolling]``. Omit it to keep
+    MuJoCo's default contact.
+    """
+    return await MujocoSceneControl().read_config(controller_id)
+
+
+@mcp.tool()
+async def configure_mujoco_scene(
+    action: str,
+    body: dict[str, Any] | None = None,
+    controller_id: str = "mujoco",
+) -> dict[str, Any]:
+    """Apply one MuJoCo settings action on the running controller.
+
+    ``apply_scene_objects``, ``apply_scene_cameras``, ``apply_embodiment_attachments``,
+    and ``set_environment_feedback`` replace the full document. Read
+    ``get_mujoco_scene_config`` first and send the complete list back.
+
+    Actions and body fields:
+    - ``set_cartesian_safety_boundary``: ``enabled``, ``workspace_min_mm``,
+      ``workspace_max_mm`` (each ``[x, y, z]`` mm), optional ``center_approach_mm_s``.
+    - ``apply_scene_objects``: ``objects`` list of ``{id, shape, size_mm,
+      position_mm, rgba, dynamic, mass_g, friction}``. ``shape`` is sphere, box, or capsule.
+      Sphere ``size_mm[0]`` is radius; box uses three half-extents; capsule uses
+      radius then half-length. ``mass_g`` is weight in grams for dynamic objects.
+      ``friction`` is optional ``[sliding, torsional, rolling]``.
+    - ``apply_scene_cameras``: ``disabled_model_camera_names``, ``added_cameras``
+      with ``id``, ``position_mm``, ``fovy_deg``, ``aim_at_safety_zone``,
+      ``orientation_yaw_deg``, ``orientation_pitch_deg``, ``orientation_roll_deg``,
+      ``vision_mode`` (``simple`` or ``segmented``), ``feagi_group``,
+      ``resolution_px`` (``[width, height]``, default ``[128, 128]``).
+    - ``apply_embodiment_attachments``: ``bodies`` of ``{body_name, motor_enabled,
+      sensory_enabled, imu_enabled, cameras}``.
+    - ``set_environment_feedback``: ``rules`` of ``{id, enabled, display_name, source}``
+      where ``source`` is ``safety_boundary``, ``imu_tilt``, ``body_height``, or
+      ``body_contact``. Tilt adds ``target_body``, ``tilt_limit_deg``, ``up_axis``.
+      Height adds ``target_body``, ``min_height_mm``. Contact adds ``target_body``,
+      ``contact_body``.
+    """
+    return await MujocoSceneControl().command(action, body, controller_id)
+
+
+@mcp.tool()
+async def add_mujoco_scene_object(
+    object_id: str,
+    shape: str,
+    size_mm: list[float],
+    position_mm: list[float],
+    dynamic: bool,
+    mass_g: float | None = None,
+    rgba: list[float] | None = None,
+    friction: list[float] | None = None,
+    controller_id: str = "mujoco",
+) -> dict[str, Any]:
+    """Add one primitive to the running MuJoCo scene without removing the others.
+
+    ``position_mm`` is ``[x, y, z]`` in millimeters. ``shape`` is ``sphere``,
+    ``box``, or ``capsule``. For a sphere, ``size_mm[0]`` is the radius in mm.
+    A weight means ``dynamic=true`` and ``mass_g`` in grams. Optional ``friction``
+    is ``[sliding, torsional, rolling]``; omit it to keep MuJoCo's default contact.
+    Reusing ``object_id`` replaces that object.
+    """
+    try:
+        scene_object = scene_object_payload(
+            object_id=object_id,
+            shape=shape,
+            size_mm=size_mm,
+            position_mm=position_mm,
+            dynamic=dynamic,
+            mass_g=mass_g,
+            rgba=rgba,
+            friction=friction,
+        )
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    return await MujocoSceneControl().add_scene_object(scene_object, controller_id)
+
+
+@mcp.tool()
+async def set_mujoco_safety_boundary(
+    enabled: bool,
+    workspace_min_mm: list[float] | None = None,
+    workspace_max_mm: list[float] | None = None,
+    center_approach_mm_s: float | None = None,
+    controller_id: str = "mujoco",
+) -> dict[str, Any]:
+    """Turn the Cartesian safety box on or off in the running MuJoCo scene.
+
+    When ``enabled`` is true, ``workspace_min_mm`` and ``workspace_max_mm`` are
+    required ``[x, y, z]`` corners in millimeters, and max must exceed min on
+    every axis. ``center_approach_mm_s`` is the optional homing speed.
+    """
+    body: dict[str, Any] = {"enabled": enabled}
+    if enabled:
+        if workspace_min_mm is None or workspace_max_mm is None:
+            return {
+                "ok": False,
+                "error": "workspace_min_mm and workspace_max_mm are required when enabled.",
+            }
+        body["workspace_min_mm"] = workspace_min_mm
+        body["workspace_max_mm"] = workspace_max_mm
+        if center_approach_mm_s is not None:
+            body["center_approach_mm_s"] = center_approach_mm_s
+    return await MujocoSceneControl().command("set_cartesian_safety_boundary", body, controller_id)
 
 
 @mcp.tool()

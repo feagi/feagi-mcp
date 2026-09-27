@@ -2,7 +2,7 @@
   "name": "feagi",
   "displayName": "FEAGI Neural Monitor",
   "description": "Observe and control FEAGI neural systems for LLM-assisted circuit design",
-  "version": "0.0.17",
+  "version": "0.0.18",
   "publisher": "neuraville",
   "categories": ["AI", "Robotics", "Science"],
   "keywords": ["feagi", "neural", "brain", "robotics", "mcp", "ai"],
@@ -134,6 +134,26 @@
       "name": "validate_genome",
       "category": "genome",
       "description": "Validate genome structure before upload"
+    },
+    {
+      "name": "get_mujoco_scene_config",
+      "category": "embodiment",
+      "description": "Read live MuJoCo safety boundary, objects, cameras, embodiment, feedback, and rate"
+    },
+    {
+      "name": "configure_mujoco_scene",
+      "category": "embodiment",
+      "description": "Apply one MuJoCo settings action on the running controller"
+    },
+    {
+      "name": "add_mujoco_scene_object",
+      "category": "embodiment",
+      "description": "Add one primitive to the running MuJoCo scene"
+    },
+    {
+      "name": "set_mujoco_safety_boundary",
+      "category": "embodiment",
+      "description": "Turn the Cartesian safety box on or off in the running MuJoCo scene"
     },
     {
       "name": "composer_list_simulator_packs",

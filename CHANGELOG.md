@@ -7,7 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.18] - 2026-09-24
+
 ### Added
+- **`get_mujoco_scene_config` / `configure_mujoco_scene` / `add_mujoco_scene_object` / `set_mujoco_safety_boundary`**: live MuJoCo scene settings through the controller control server. Uses optional `control_url` on the introspection descriptor. Positions are millimeters; dynamic object weight is `mass_g` in grams.
 - **`diagnose_feagi_runtime`**: local-first stall diagnosis. Reads
   ``FEAGI_LOG_FILE`` (if set), the latest desktop ``feagi-core.log``, then
   ``neurorobotics-studio.log``. When those have no FEAGI markers and HTTP

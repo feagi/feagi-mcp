@@ -76,6 +76,21 @@ class TestDiscoverEndpoint:
         assert ep.descriptor_path == str(path)
         assert ep.schema_version.startswith(f"{SUPPORTED_INTROSPECTION_SCHEMA_MAJOR}.")
 
+    def test_reads_optional_control_url(self, tmp_path: Path) -> None:
+        _write_descriptor(
+            tmp_path,
+            "mujoco",
+            extra={
+                "control_url": "http://127.0.0.1:44000",
+                "experiment_id": "exp-1",
+            },
+        )
+        ep = discover_endpoint("mujoco", env_override=str(tmp_path))
+        assert ep is not None
+        assert ep.control_url == "http://127.0.0.1:44000"
+        assert ep.as_dict()["control_url"] == "http://127.0.0.1:44000"
+        assert "experiment_id" not in ep.as_dict()
+
     def test_returns_none_when_no_descriptor_present(self, tmp_path: Path) -> None:
         empty_root = tmp_path / "empty"
         empty_root.mkdir()
