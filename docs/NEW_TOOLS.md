@@ -66,12 +66,22 @@ only shows the live session.
 Pass `message_contains` (`isvi`, `SegmentedVision`, `auto-create`) instead of
 fetching the unfiltered ring dump.
 
+### 2c2. `get_last_failed_mutation`
+**Purpose**: Compact record of the most recent failed mutating API call  
+**Endpoint**: `/v1/system/last_failed_mutation`  
+**Returns**: `mutation` with `method`, `path`, `status`, `content_type`,
+`content_length`, `error_message`, `timestamp_ms` (or `mutation: null`)
+
+Use when health is fine but connectome/genome upload or experiment launch
+failed (body-limit / multipart parse). Prefer this over scraping `get_log_tail`.
+
 ### 2d. `diagnose_feagi_runtime`
 **Purpose**: Classify a dead or stalled FEAGI process without dumping logs  
 **Sources**: `FEAGI_LOG_FILE` if set, latest desktop `feagi-core.log`,
 `neurorobotics-studio.log`, then `GET /v1/system/log_tail` when HTTP answers
-and local files have no FEAGI markers. Health probe uses
-`FEAGI_PROBE_TIMEOUT_SECONDS`.
+and local files have no FEAGI markers. When HTTP answers, also attaches
+`last_failed_mutation` from `GET /v1/system/last_failed_mutation`.
+Health probe uses `FEAGI_PROBE_TIMEOUT_SECONDS`.
 
 Use this instead of `health_check` + `get_log_tail` when HTTP is not answering.
 `paths_checked` lists every file or ring source inspected.
@@ -119,6 +129,58 @@ Use this instead of searching cortical-area names for `_kernel_mem`, `_class_mem
 `scan_blockers` answers "why did field stimulation not stamp the twin?" without calling `diagnose_memory_twin_mapping` (that tool is leftover `episodic_memory` twins only). Blockers include `kernel_memory_no_ltm`, `field_burst_engine_off`, `twin_burst_engine_off`, and missing scan mapping/slots.
 
 One call for assembly + scan readiness. Do not walk `list_cortical_areas` / `get_connectivity_summary` / `list_memory_neurons` by hand when this tool is available.
+
+`value_findings` (local, no extra calls) flags value-coding problems: `class_count_missing` /
+`class_count_invalid` (scanner), `mask_not_single_layer`, `twin_not_single_layer`, and
+`twin_not_forwarding_value` (twin `mp_driven_psp` off, with a fix payload). Errors are also
+added to `scan_blockers` and clear `scan_ready`.
+
+### `create_classifier` / `update_classifier` / `attach_classifier_field`
+
+**Endpoints**: `POST /v1/cortical_area/classifier`, `PUT /v1/cortical_area/classifier/{id}`,
+`POST /v1/cortical_area/classifier/{id}/field` (one HTTP call each)
+
+Kernel mode takes `kernel_area_id` and a `1x1xn` `class_area_id`. Scanner mode takes a
+`W x H x 1` `mask_area_id`, `kernel_size` (`z` = field depth), and `class_count` (1..9999).
+Arguments are validated locally before any call. Each attached field gets a `W x H x 1`
+detection twin with `mp_driven_psp` on.
+
+## Value-coded planes (class maps, depth)
+
+Object segmentation input/output, classifier twins, and the Depth Map are `W x H x 1`. The
+payload is the potential: class `(class_id + 1) / class_count`, depth `level / depth_levels`,
+0 = silent. Logic: `src/feagi_mcp/value_coding.py` (pure).
+
+### `wire_value_passthrough`
+**Purpose**: Hand a value plane to another area exactly (twin -> `oseg` OPU, depth copies)  
+**Calls**: 1 batch properties read, 2 area updates, 1 mapping write, then the passthrough validator
+
+Sets the source to forward its potential (`mp_driven_psp`, uniform PSP), the destination
+threshold to half the smallest value with no leak/accumulation/refractory/snooze, and maps with
+`projector` (weight 1, not plastic). Pass exactly one of `class_count` or `value_levels`.
+Shapes must match. The source settings are area-wide; the result notes it.
+
+### `validate_magnitude_passthrough(..., class_count=N)`
+With `class_count`, scaling, fan-out, accumulation, and runtime threshold drift become errors
+(any drift decodes to a different class), and the destination threshold must be below
+`1 / class_count` (`threshold_above_smallest_class`, with a fix).
+
+### `expand_value_to_bins`
+**Purpose**: Give downstream areas neurons per depth range or per class  
+**Calls**: 1 properties read, 1 create, 2 area updates, 1 mapping write
+
+Creates `W x H x levels` with `neuron_fire_threshold = step/2` and
+`neuron_fire_threshold_increment = [0, 0, step]` (`step = value_max / levels`) and maps the
+plane with `projector` (one source voxel fans across the column). Bin `z` fires when the value
+is at least `(z + 0.5) * step`: a cumulative code. For one-hot bins add an inhibitory mapping
+from each bin to the bin below.
+
+### `decode_class_map`
+**Purpose**: See what a class map labeled on the last burst  
+**Calls**: 1 (`GET /v1/burst_engine/fire_queue/detailed`), decoding is local
+
+Returns `class_histogram`, `undecodable` (potentials that name no class), and at most
+`max_pixels` `{x, y, class_id}` rows (default 200) so a full frame does not flood the context.
 
 ## Connectivity rule authoring
 
@@ -288,6 +350,32 @@ Does not call `POST /v1/cortical_mapping/mapping_properties`, which 400s when a
 non-plastic rule omits `plasticity_constant`.
 
 **Use case**: Instead of parsing genome JSON, directly query "What's the connection from cHipFL to opose1?"
+
+### `validate_magnitude_passthrough`
+**Purpose**: Confirm graded magnitudes in a source area reach a destination unchanged  
+**Source**: `POST /v1/cortical_area/multi/cortical_area_properties` plus two `GET /v1/cortical_area/voxel_neurons` samples at the far shared voxel (3 HTTP calls, 1 MCP call)  
+**Logic**: `src/feagi_mcp/io_passthrough.py` (pure, no I/O)
+
+Graded encoders carry magnitude as membrane potential. It is lost or distorted when:
+- the source has `neuron_mp_driven_psp` off (every spike delivers the fixed PSP, so output saturates);
+- the destination threshold is above the source threshold (quiet magnitudes are dropped);
+- the PSC multiplier, synapse weight, or fan-out rescales the potential;
+- the destination accumulates charge, has a refractory period, or reduced excitability;
+- dimensions differ, or the far edge voxel is unwired (stale resize or truncated mapping).
+
+Errors set `passes: false`. Each finding has `{severity, code, message, fix}`; `fix`
+is an `update_cortical_area` payload when one setting resolves it.
+
+**Use case**: The Perception Inspector plays an audio output as full-scale noise. One
+call reports `magnitude_discarded` and `output_threshold_gates_magnitude` with the two
+updates that fix it.
+
+### `measure_audio_io_disparity`
+**Purpose**: Measure the live gap between audio entering FEAGI and audio leaving it  
+**Source**: repeated `GET /v1/input/sensor_snapshot/last` and `GET /v1/output/motor_snapshot/last` for up to 8 seconds  
+**Logic**: `src/feagi_mcp/audio_io_disparity.py` (pure). Columns are matched by frequency. Phase row is allowed to be a different y.
+
+Call while audio is streaming. ``dominant_gap`` is one of `not_streaming`, `frames_merged`, `frames_dropped`, `columns_dropped`, `phase_changed`, `magnitude_changed`, or `close`.
 
 ### 9. `update_cortical_mapping`
 **Purpose**: Create or update connections between cortical areas  

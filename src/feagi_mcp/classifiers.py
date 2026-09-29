@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from feagi_mcp.value_coding import classifier_value_findings
+
 CLASSIFIER_LIST_KEYS: tuple[str, ...] = (
     "classifier_id",
     "name",
@@ -19,6 +21,8 @@ CLASSIFIER_LIST_KEYS: tuple[str, ...] = (
     "training_mode",
     "mask_area_id",
     "kernel_size",
+    # Scanner mode: mask and twins are W x H x 1; potential = (class_id + 1) / class_count.
+    "class_count",
     "fields",
     "kernel_memory_id",
     "class_memory_id",
@@ -374,6 +378,15 @@ def build_classifier_inspect(
     if not field_rows and "no_field_mappings" not in blockers:
         blockers.insert(0, "no_field_mappings")
 
+    value_findings = classifier_value_findings(
+        classifier,
+        catalog,
+        [binding["scan_twin_id"] for binding in classifier_field_bindings(classifier)],
+    )
+    for finding in value_findings:
+        if finding["severity"] == "error" and finding["code"] not in blockers:
+            blockers.append(finding["code"])
+
     return {
         "classifier": project_classifier_row(classifier),
         "slots": slots,
@@ -382,6 +395,9 @@ def build_classifier_inspect(
         "missing_slots": missing_slots,
         "missing_mappings": missing_mappings,
         "twin_visible": bool(field_rows) and all(row["twin_visible"] for row in field_rows),
+        "value_findings": value_findings,
         "scan_blockers": blockers,
-        "scan_ready": bool(field_rows) and all(row["scan_ready"] for row in field_rows),
+        "scan_ready": bool(field_rows)
+        and all(row["scan_ready"] for row in field_rows)
+        and not any(f["severity"] == "error" for f in value_findings),
     }

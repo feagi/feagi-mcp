@@ -132,6 +132,27 @@ class TestRuntimeTaps:
         assert result["areas_summary"][0]["by_z"][0]["z"] == 2
 
     @pytest.mark.asyncio
+    async def test_get_last_failed_mutation(self, mock_client):
+        mock_client._client.get.return_value = _ok(
+            {
+                "mutation": {
+                    "method": "POST",
+                    "path": "/v1/connectome/upload",
+                    "status": 400,
+                    "content_type": "multipart/form-data",
+                    "content_length": 22160173,
+                    "error_message": "Invalid multipart upload",
+                    "timestamp_ms": 1,
+                }
+            }
+        )
+        result = await mock_client.get_last_failed_mutation()
+        assert result["mutation"]["path"] == "/v1/connectome/upload"
+        assert result["mutation"]["content_length"] == 22160173
+        call = mock_client._client.get.call_args
+        assert call.args[0].endswith("/v1/system/last_failed_mutation")
+
+    @pytest.mark.asyncio
     async def test_get_log_tail_builds_query(self, mock_client):
         mock_client._client.get.return_value = _ok(
             {"enabled": True, "capacity": 2000, "records": [], "returned": 0}

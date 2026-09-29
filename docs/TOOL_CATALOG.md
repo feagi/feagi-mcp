@@ -302,6 +302,21 @@ health = await health_check()
 
 **Status:** Fully functional
 
+### get_last_failed_mutation
+**Category:** Utility  
+**Purpose:** Most recent failed mutating FEAGI API request  
+**Signature:** `() -> dict`
+
+**When to use:**
+- Experiment launch / connectome upload / genome load failed
+- `health_check` still reports healthy
+- You need path, status, content-length, and error without log scraping
+
+Returns `{ "mutation": { method, path, status, content_type, content_length,
+error_message, timestamp_ms } }` or `{ "mutation": null }`.
+
+**Status:** Fully functional
+
 ### diagnose_feagi_runtime
 **Category:** Utility  
 **Purpose:** Classify a dead or stalled FEAGI process without dumping logs  
@@ -313,12 +328,14 @@ health = await health_check()
 - The FEAGI process exited (SIGTERM / `zsh: terminated`)
 - Injection reports unknown cortical areas
 - The NPU watchdog reports a stall
+- Upload/load failed but health looks fine (inspect `last_failed_mutation`)
 
 Reads `FEAGI_LOG_FILE` (if set), then desktop `feagi-core.log`, then
 `neurorobotics-studio.log`. When those have no FEAGI markers and HTTP
-answers, classifies `/v1/system/log_tail`. Returns `likely_cause`,
-`paths_checked`, and compact evidence events. Prefer this over
-`health_check` + `get_log_tail` when HTTP is not answering.
+answers, classifies `/v1/system/log_tail`. When HTTP answers, also attaches
+`last_failed_mutation`. Returns `likely_cause`, `paths_checked`, and compact
+evidence events. Prefer this over `health_check` + `get_log_tail` when HTTP
+is not answering.
 
 **Status:** Fully functional
 

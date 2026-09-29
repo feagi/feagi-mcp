@@ -449,6 +449,17 @@ class TestDiagnoseAlternateSources:
                         }
                     ],
                 },
+                "/v1/system/last_failed_mutation": {
+                    "mutation": {
+                        "method": "POST",
+                        "path": "/v1/connectome/upload",
+                        "status": 400,
+                        "content_type": "multipart/form-data",
+                        "content_length": 22160173,
+                        "error_message": "Invalid multipart upload",
+                        "timestamp_ms": 1,
+                    }
+                },
             }
         )
         client = FeagiClient(host="localhost", port=port, timeout=30.0)
@@ -460,6 +471,7 @@ class TestDiagnoseAlternateSources:
         assert report["likely_cause"] == CAUSE_MISSING_NPU_REG
         assert report["log_source"] == KIND_RING
         assert report["http_reachable"] is True
+        assert report["last_failed_mutation"]["path"] == "/v1/connectome/upload"
         ring_checks = [item for item in report["paths_checked"] if item["kind"] == KIND_RING]
         assert ring_checks[0]["status"] == STATUS_USED
 

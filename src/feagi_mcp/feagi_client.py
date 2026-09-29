@@ -5,6 +5,7 @@ import logging
 import math
 import os
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
@@ -17,6 +18,7 @@ from feagi_mcp.area_metadata import (
     enrich_area_list,
     get_semantic_info,
 )
+from feagi_mcp.audio_io_disparity import measure_frame_disparity, take_audio_frame
 from feagi_mcp.bv_operations import BV_OPERATION_BY_ID, resolve_path
 from feagi_mcp.circuit_naming import (
     extract_region_title,
@@ -57,6 +59,7 @@ from feagi_mcp.io_naming_provenance import (
     build_area_naming_explanation,
     summarize_motor_groups_from_registrations,
 )
+from feagi_mcp.io_passthrough import edge_voxel, evaluate_magnitude_passthrough
 from feagi_mcp.placement_policy import (
     check_min_separation_to_existing,
     check_origin_exclusion,
@@ -74,6 +77,18 @@ from feagi_mcp.runtime_diagnostics import (
     local_log_candidate_paths,
     log_missing_reason,
     select_local_log_diagnosis,
+)
+from feagi_mcp.value_coding import (
+    PROJECTOR_MORPHOLOGY,
+    bins_geometry,
+    class_count_error,
+    decode_fire_queue_classes,
+    destination_threshold_finding,
+    escalate_for_exact_values,
+    identity_projector_rule,
+    passthrough_threshold,
+    value_destination_updates,
+    value_source_updates,
 )
 
 logger = logging.getLogger(__name__)
@@ -2447,34 +2462,28 @@ class FeagiClient:
             return {"error": str(e)}
 
     async def get_cortical_synapse_counts(self, area_id: str) -> dict[str, Any]:
-        """Get synapse counts for a cortical area."""
+        """Incoming and outgoing synapse counts from ``cortical_area_properties``.
+
+        FEAGI has no per-area count route; the properties record carries the
+        connectome's running counters. Those counters can drift after a resize,
+        so confirm realized wiring with ``get_voxel_neurons`` or
+        ``validate_magnitude_passthrough`` when the numbers look wrong.
+        """
         try:
-            incoming_response = await self._client.get(
-                f"{self.base_url}/v1/cortical_area/{area_id}/incoming_count"
-            )
-            outgoing_response = await self._client.get(
-                f"{self.base_url}/v1/cortical_area/{area_id}/outgoing_count"
-            )
-
-            result: dict[str, Any] = {"area_id": area_id}
-
-            if incoming_response.status_code == 200:
-                result["incoming_synapses"] = incoming_response.json()
-            else:
-                result["incoming_synapses"] = {
-                    "error": f"HTTP {incoming_response.status_code}",
-                    "message": incoming_response.text,
-                }
-
-            if outgoing_response.status_code == 200:
-                result["outgoing_synapses"] = outgoing_response.json()
-            else:
-                result["outgoing_synapses"] = {
-                    "error": f"HTTP {outgoing_response.status_code}",
-                    "message": outgoing_response.text,
-                }
-
-            return result
+            cid = area_id.strip() if isinstance(area_id, str) else ""
+            if not cid:
+                return {"error": "area_id must be a non-empty string"}
+            area = await self.fetch_cortical_area_properties(cid)
+            if not isinstance(area, dict) or area.get("error"):
+                return area if isinstance(area, dict) else {"error": "bad_payload"}
+            return {
+                "area_id": cid,
+                "cortical_name": area.get("cortical_name"),
+                "incoming_synapses": area.get("incoming_synapse_count"),
+                "outgoing_synapses": area.get("outgoing_synapse_count"),
+                "neuron_count": area.get("neuron_count"),
+                "source": "cortical_area_properties",
+            }
         except Exception as e:
             logger.error(f"get_cortical_synapse_counts failed: {e}")
             return {"error": str(e), "area_id": area_id}
@@ -2871,6 +2880,8 @@ class FeagiClient:
                 output); the first char selects input (``i``) vs output (``o``).
             channels: Number of channels (the area's x-width per device).
             depth: Neuron depth / bins (the area's z-extent); must match the coder's bins.
+                Value-coded units (Depth Map ``idpt``, Object Segmentation ``iseg``/``oseg``)
+                are always 1: their payload is the potential, not a Z index.
             variant: IO configuration variant (default ``percentage`` for the count family).
             framing: ``absolute`` or ``incremental``.
             positioning: ``linear`` or ``fractional``.
@@ -3075,6 +3086,378 @@ class FeagiClient:
         except Exception as e:
             logger.error(f"get_cortical_mapping failed: {e}")
             return {"error": str(e)}
+
+    async def validate_magnitude_passthrough(
+        self, src_area: str, dst_area: str, class_count: int | None = None
+    ) -> dict[str, Any]:
+        """Check that graded magnitudes in ``src_area`` reach ``dst_area`` unchanged.
+
+        One batch properties call plus one voxel sample per side at the far
+        shared corner. See :mod:`feagi_mcp.io_passthrough` for the checks.
+        With ``class_count`` the value is a class id: any scaling is fatal and the
+        destination threshold must admit class 0 (``1 / class_count``).
+        """
+        src = src_area.strip() if isinstance(src_area, str) else ""
+        dst = dst_area.strip() if isinstance(dst_area, str) else ""
+        if not src or not dst:
+            return {"error": "src_area and dst_area must be non-empty strings"}
+        if class_count is not None and class_count_error(class_count):
+            return {"error": "invalid_input", "message": class_count_error(class_count)}
+        records = await self.fetch_multi_cortical_area_properties([src, dst])
+        if not isinstance(records, dict) or records.get("error"):
+            return records if isinstance(records, dict) else {"error": "bad_payload"}
+        src_record = records.get(src)
+        dst_record = records.get(dst)
+        missing = [cid for cid, rec in ((src, src_record), (dst, dst_record)) if not rec]
+        if missing or not isinstance(src_record, dict) or not isinstance(dst_record, dict):
+            return {"error": "cortical_area_not_found", "missing": missing}
+        x, y, z = edge_voxel(src_record, dst_record)
+        src_voxel, dst_voxel = await asyncio.gather(
+            self.get_voxel_neurons(src, x, y, z),
+            self.get_voxel_neurons(dst, x, y, z),
+        )
+        report = evaluate_magnitude_passthrough(
+            src, dst, src_record, dst_record, src_voxel, dst_voxel
+        )
+        for side, voxel in (("src_voxel", src_voxel), ("dst_voxel", dst_voxel)):
+            if isinstance(voxel, dict) and voxel.get("error"):
+                report[f"{side}_error"] = voxel
+        if class_count is not None:
+            threshold_finding = destination_threshold_finding(dst_record, dst, class_count)
+            if threshold_finding is not None:
+                report["findings"] = [
+                    f
+                    for f in report.get("findings", [])
+                    if f.get("code") != "output_threshold_gates_magnitude"
+                ] + [threshold_finding]
+            report = escalate_for_exact_values(report, class_count)
+        return report
+
+    async def wire_value_passthrough(
+        self,
+        src_area: str,
+        dst_area: str,
+        class_count: int | None = None,
+        value_levels: int | None = None,
+    ) -> dict[str, Any]:
+        """Wire a value-coded plane 1:1 so each voxel's potential reaches ``dst_area`` exactly.
+
+        Sets the source to forward its firing-time potential, sets the destination to fire
+        on the smallest value with no leak/accumulation/refractory, writes a projector
+        mapping with weight 1, then runs the passthrough validator. Exactly one of
+        ``class_count`` (class maps) or ``value_levels`` (depth planes) is required.
+        """
+        src = src_area.strip() if isinstance(src_area, str) else ""
+        dst = dst_area.strip() if isinstance(dst_area, str) else ""
+        if not src or not dst:
+            return {"error": "src_area and dst_area must be non-empty strings"}
+        if (class_count is None) == (value_levels is None):
+            return {
+                "error": "invalid_input",
+                "message": (
+                    "pass exactly one of class_count (class map) or value_levels (depth plane)"
+                ),
+            }
+        try:
+            threshold = passthrough_threshold(class_count, value_levels)
+        except ValueError as e:
+            return {"error": "invalid_input", "message": str(e)}
+        records = await self.fetch_multi_cortical_area_properties([src, dst])
+        if not isinstance(records, dict) or records.get("error"):
+            return records if isinstance(records, dict) else {"error": "bad_payload"}
+        missing = [cid for cid in (src, dst) if not isinstance(records.get(cid), dict)]
+        if missing:
+            return {"error": "cortical_area_not_found", "missing": missing}
+        src_dims = list(records[src].get("cortical_dimensions") or [])
+        dst_dims = list(records[dst].get("cortical_dimensions") or [])
+        if src_dims != dst_dims:
+            return {
+                "error": "dimension_mismatch",
+                "message": (
+                    f"1:1 value passthrough needs equal shapes; source {src_dims}, "
+                    f"destination {dst_dims}"
+                ),
+            }
+        steps: dict[str, Any] = {}
+        steps["source"] = await self.update_cortical_area(src, value_source_updates())
+        steps["destination"] = await self.update_cortical_area(
+            dst, value_destination_updates(threshold)
+        )
+        steps["mapping"] = await self.update_cortical_mapping(
+            src, dst, [identity_projector_rule()]
+        )
+        failed = {k: v for k, v in steps.items() if isinstance(v, dict) and v.get("error")}
+        if failed:
+            return {"error": "wiring_failed", "failed_steps": failed}
+        validation = await self.validate_magnitude_passthrough(src, dst, class_count)
+        return {
+            "src_area": src,
+            "dst_area": dst,
+            "destination_threshold": threshold,
+            "morphology_id": PROJECTOR_MORPHOLOGY,
+            "note": (
+                "neuron_mp_driven_psp and neuron_psp_uniform_distribution are area-wide on the "
+                "source; they also apply to its other outgoing mappings."
+            ),
+            "validation": validation,
+        }
+
+    async def expand_value_to_bins(
+        self,
+        src_area: str,
+        levels: int,
+        name: str,
+        brain_region_id: str,
+        position: list[int],
+        value_max: float = 1.0,
+    ) -> dict[str, Any]:
+        """Build a ``W x H x levels`` bin area from a one-layer value plane.
+
+        Bin ``z`` fires when the value is at least ``(z + 0.5) * value_max / levels``
+        (cumulative / thermometer code). Use this where downstream areas must learn from
+        depth ranges or class identity by neuron, not by potential.
+        """
+        src = src_area.strip() if isinstance(src_area, str) else ""
+        if not src:
+            return {"error": "src_area must be a non-empty string"}
+        try:
+            geometry = bins_geometry(levels, value_max)
+        except ValueError as e:
+            return {"error": "invalid_input", "message": str(e)}
+        record = await self.fetch_cortical_area_properties(src)
+        if not isinstance(record, dict) or record.get("error"):
+            return record if isinstance(record, dict) else {"error": "bad_payload"}
+        dims = list(record.get("cortical_dimensions") or [])
+        if len(dims) != 3 or int(dims[2]) != 1:
+            return {
+                "error": "not_a_value_plane",
+                "message": f"Source must be W x H x 1; got {dims}",
+            }
+        created = await self.create_cortical_area(
+            name=name,
+            cortical_type="CUSTOM",
+            dimensions=[int(dims[0]), int(dims[1]), int(levels)],
+            position=position,
+            brain_region_id=brain_region_id,
+        )
+        if not isinstance(created, dict) or created.get("error"):
+            return {"error": "create_failed", "create_result": created}
+        bins_id = created.get("cortical_id")
+        if not isinstance(bins_id, str) or not bins_id:
+            return {"error": "create_failed", "create_result": created}
+        dst_updates = value_destination_updates(geometry["base_threshold"])
+        dst_updates["neuron_fire_threshold_increment"] = [
+            0.0,
+            0.0,
+            geometry["threshold_increment_z"],
+        ]
+        steps: dict[str, Any] = {
+            "source": await self.update_cortical_area(src, value_source_updates()),
+            "bins": await self.update_cortical_area(bins_id, dst_updates),
+            "mapping": await self.update_cortical_mapping(
+                src, bins_id, [identity_projector_rule()]
+            ),
+        }
+        failed = {k: v for k, v in steps.items() if isinstance(v, dict) and v.get("error")}
+        result: dict[str, Any] = {
+            "src_area": src,
+            "bins_area": bins_id,
+            "levels": levels,
+            "value_max": value_max,
+            **geometry,
+            "coding": "cumulative: a value in level k fires bins 0..k-1",
+            "note": (
+                "Source neuron_mp_driven_psp and neuron_psp_uniform_distribution are area-wide; "
+                "uniform PSP stops the column fan-out from dividing the value."
+            ),
+        }
+        if failed:
+            result["error"] = "wiring_failed"
+            result["failed_steps"] = failed
+        return result
+
+    async def decode_class_map(
+        self, area_id: str, class_count: int, max_pixels: int = 200
+    ) -> dict[str, Any]:
+        """Decode the last burst of a one-layer class map into class ids.
+
+        One fire-queue read; decoding is local. Works for classifier twins, the
+        segmentation OPU, and the mask IPU.
+        """
+        area = area_id.strip() if isinstance(area_id, str) else ""
+        if not area:
+            return {"error": "area_id must be a non-empty string"}
+        if class_count_error(class_count):
+            return {"error": "invalid_input", "message": class_count_error(class_count)}
+        cap = max(0, min(int(max_pixels), 5000))
+        fire_queue = await self.get_fire_queue_detailed()
+        if not isinstance(fire_queue, dict) or fire_queue.get("error"):
+            return fire_queue if isinstance(fire_queue, dict) else {"error": "bad_payload"}
+        return decode_fire_queue_classes(fire_queue, area, class_count, cap)
+
+    async def create_classifier(
+        self,
+        name: str,
+        brain_region_id: str,
+        coordinates_3d: list[int],
+        training_mode: str,
+        kernel_area_id: str | None = None,
+        class_area_id: str | None = None,
+        mask_area_id: str | None = None,
+        kernel_size: list[int] | None = None,
+        class_count: int | None = None,
+    ) -> dict[str, Any]:
+        """Create a classifier assembly (``POST /v1/cortical_area/classifier``).
+
+        Kernel mode needs ``kernel_area_id`` and a ``1x1xn`` ``class_area_id``. Scanner mode
+        needs a ``W x H x 1`` ``mask_area_id``, ``kernel_size``, and ``class_count``.
+        """
+        mode = (training_mode or "").strip()
+        body: dict[str, Any] = {
+            "name": name,
+            "brain_region_id": brain_region_id,
+            "training_mode": mode,
+            "coordinates_3d": coordinates_3d,
+        }
+        if mode == "scanner":
+            if not mask_area_id or not kernel_size or class_count is None:
+                return {
+                    "error": "invalid_input",
+                    "message": "scanner mode needs mask_area_id, kernel_size, and class_count",
+                }
+            if class_count_error(class_count):
+                return {"error": "invalid_input", "message": class_count_error(class_count)}
+            body.update(
+                {
+                    "mask_area_id": mask_area_id,
+                    "kernel_size": kernel_size,
+                    "class_count": class_count,
+                }
+            )
+        elif mode == "kernel":
+            if not kernel_area_id or not class_area_id:
+                return {
+                    "error": "invalid_input",
+                    "message": "kernel mode needs kernel_area_id and class_area_id",
+                }
+            body.update({"kernel_area_id": kernel_area_id, "class_area_id": class_area_id})
+        else:
+            return {"error": "invalid_input", "message": "training_mode must be kernel or scanner"}
+        return await self._classifier_request("POST", "/v1/cortical_area/classifier", body)
+
+    async def update_classifier(
+        self, classifier_id: str, updates: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Update a classifier (``PUT /v1/cortical_area/classifier/{id}``)."""
+        cleaned = (classifier_id or "").strip()
+        if not cleaned:
+            return {"error": "invalid_input", "message": "classifier_id is required"}
+        count = updates.get("class_count") if isinstance(updates, dict) else None
+        if count is not None and class_count_error(count):
+            return {"error": "invalid_input", "message": class_count_error(count)}
+        return await self._classifier_request(
+            "PUT", f"/v1/cortical_area/classifier/{cleaned}", updates
+        )
+
+    async def attach_classifier_field(
+        self, classifier_id: str, field_area_id: str
+    ) -> dict[str, Any]:
+        """Bind an image field to a classifier; FEAGI creates its W x H x 1 detection twin."""
+        cleaned = (classifier_id or "").strip()
+        field = (field_area_id or "").strip()
+        if not cleaned or not field:
+            return {
+                "error": "invalid_input",
+                "message": "classifier_id and field_area_id are required",
+            }
+        return await self._classifier_request(
+            "POST",
+            f"/v1/cortical_area/classifier/{cleaned}/field",
+            {"field_area_id": field},
+        )
+
+    async def _classifier_request(
+        self, method: str, path: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        try:
+            response = await self._client.request(method, f"{self.base_url}{path}", json=body)
+        except Exception as e:
+            logger.error("classifier %s %s failed: %s", method, path, e)
+            return {"error": str(e)}
+        if response.status_code != 200:
+            return {"error": f"HTTP {response.status_code}", "message": response.text}
+        return _as_json_dict(response.json())
+
+    async def measure_audio_io_disparity(
+        self,
+        src_area: str,
+        dst_area: str,
+        duration_s: float = 2.0,
+    ) -> dict[str, Any]:
+        """Compare live audio input columns with the output columns they produce.
+
+        Polls the sensor and motor taps for ``duration_s`` (clamped to 0.2..8 s)
+        and keeps one frame per burst. See :mod:`feagi_mcp.audio_io_disparity`.
+        """
+        src = src_area.strip() if isinstance(src_area, str) else ""
+        dst = dst_area.strip() if isinstance(dst_area, str) else ""
+        if not src or not dst:
+            return {"error": "src_area and dst_area must be non-empty strings"}
+        window_s = min(8.0, max(0.2, float(duration_s)))
+        src_frames: dict[int, dict[int, tuple[float, int]]] = {}
+        dst_frames: dict[int, dict[int, tuple[float, int]]] = {}
+        src_merged = 0
+        dst_merged = 0
+        polls = 0
+        deadline = time.monotonic() + window_s
+        while time.monotonic() < deadline:
+            sensor, motor = await asyncio.gather(
+                self._audio_snapshot("/v1/input/sensor_snapshot/last", src),
+                self._audio_snapshot("/v1/output/motor_snapshot/last", dst),
+            )
+            polls += 1
+            if isinstance(sensor, dict) and sensor.get("error"):
+                return sensor
+            if isinstance(motor, dict) and motor.get("error"):
+                return motor
+            src_frame, src_extra = take_audio_frame(sensor, src)
+            dst_frame, dst_extra = take_audio_frame(motor, dst)
+            if src_frame is not None:
+                burst = int(sensor["burst_num"])
+                if burst not in src_frames:
+                    src_merged += src_extra
+                src_frames[burst] = src_frame
+            if dst_frame is not None:
+                burst = int(motor["burst_num"])
+                if burst not in dst_frames:
+                    dst_merged += dst_extra
+                dst_frames[burst] = dst_frame
+        report = measure_frame_disparity(
+            src_frames,
+            dst_frames,
+            src_merged_columns=src_merged,
+            dst_merged_columns=dst_merged,
+        )
+        report["src_area"] = src
+        report["dst_area"] = dst
+        report["polls"] = polls
+        report["duration_s"] = window_s
+        return report
+
+    async def _audio_snapshot(self, path: str, cortical_id: str) -> dict[str, Any]:
+        """Raw sensor or motor tap, including voxel samples."""
+        try:
+            response = await self._client.get(
+                f"{self.base_url}{path}",
+                params={"cortical_id": cortical_id},
+            )
+        except Exception as e:
+            logger.error("audio snapshot %s failed: %s", path, e)
+            return {"error": str(e)}
+        if response.status_code != 200:
+            return {"error": f"HTTP {response.status_code}", "message": response.text}
+        payload = response.json()
+        return payload if isinstance(payload, dict) else {"error": "bad_payload"}
 
     async def update_cortical_mapping(
         self, src_area: str, dst_area: str, mapping_rules: list[dict[str, Any]]
@@ -3629,6 +4012,28 @@ class FeagiClient:
             }
         except Exception as e:
             logger.error("get_sensor_snapshot_last failed: %s", e)
+            return {"error": str(e)}
+
+    async def get_last_failed_mutation(self) -> dict[str, Any]:
+        """GET /v1/system/last_failed_mutation - most recent failed mutating API call.
+
+        Use when health is fine but an upload/load just failed (connectome/genome
+        multipart, body-limit, validation). Returns ``mutation`` with method,
+        path, status, content_type, content_length, error_message, timestamp_ms,
+        or ``mutation: null`` when none have been recorded in this process.
+        """
+        try:
+            response = await self._client.get(
+                f"{self.base_url}/v1/system/last_failed_mutation",
+            )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error("get_last_failed_mutation failed: %s", e)
             return {"error": str(e)}
 
     async def get_log_tail(
@@ -5569,6 +5974,12 @@ class FeagiClient:
             report["feagi_core_log"] = str(log_path)
         if log_diagnosis is None:
             report["log_missing_reason"] = log_missing_reason(paths_checked)
+        # Upload/body-limit failures leave health "healthy"; surface the last
+        # failed mutation in one call so agents skip a second round-trip.
+        if http_reachable:
+            last_failed = await self.get_last_failed_mutation()
+            if "error" not in last_failed:
+                report["last_failed_mutation"] = last_failed.get("mutation")
         return report
 
     @classmethod

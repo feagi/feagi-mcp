@@ -99,9 +99,10 @@ Add to your Cursor MCP settings (`~/.cursor/mcp.json`):
 - `get_embodiment_status` - Live controller registry + compact I/O catalog (`/v1/embodiment/status` when present)
 - `get_sensor_snapshot_last` - Latest sensor tap. Default `summary_only` returns per-Z stats, not every voxel.
 - `get_area_parameters` - Inspect neuron properties
-- `get_cortical_synapse_counts` - Get incoming/outgoing synapse counts
+- `get_cortical_synapse_counts` - Incoming/outgoing synapse counts from `cortical_area_properties` (running counters; can drift after a resize)
 - `get_log_tail` - FEAGI process logs. Pass `message_contains` instead of dumping the ring buffer. Requires HTTP.
-- `diagnose_feagi_runtime` - Local-first stall diagnosis (`feagi-core.log`, desktop log, `FEAGI_LOG_FILE`, then HTTP ring). Returns `paths_checked`. Use when `health_check` times out or FEAGI has exited.
+- `get_last_failed_mutation` - Most recent failed mutating API call (method/path/status/content-length/error). Use when health is fine but upload/load failed.
+- `diagnose_feagi_runtime` - Local-first stall diagnosis (`feagi-core.log`, desktop log, `FEAGI_LOG_FILE`, then HTTP ring). Also attaches `last_failed_mutation` when HTTP answers. Returns `paths_checked`. Use when `health_check` times out or FEAGI has exited.
 
 ### Genome Editing (NEW)
 - `create_brain_region` - Create the named circuit container. Title must name the function (Sit, Walk CPG); Autogen Circuit / Untitled are rejected.
@@ -120,6 +121,12 @@ Add to your Cursor MCP settings (`~/.cursor/mcp.json`):
 - `get_morphology` - Fetch one morphology. Compact rules include parameters by default; enumerated dumps omit them unless requested (`judgment.compact_form` when rows should be `N..M`). Prefer this over `list_morphologies`.
 - `update_morphology` - Replace an existing morphology and rebuild mappings that use it. Same compactness gate as `create_morphology`.
 - `get_cortical_mapping` - Get connection configuration between two areas
+- `validate_magnitude_passthrough` - One-call check that graded IPU magnitudes (audio spectrum, analog sensors) reach an OPU unchanged: `mp_driven_psp`, threshold gating, scaling, fan-out, dimensions, and a realized-wiring sample at the far edge voxel. Each finding carries an `update_cortical_area` fix when one applies. Pass `class_count` for class maps: any drift becomes an error.
+- `wire_value_passthrough` - Wire a one-layer value plane (classifier twin, Depth Map) 1:1 so each potential arrives exactly (source forwarding, destination threshold/leak/accumulation, projector mapping), then validate.
+- `expand_value_to_bins` - Build a `W x H x levels` bin area from a value plane with a Z threshold ramp (cumulative code), for depth ranges or one neuron per class.
+- `decode_class_map` - Decode the last burst of a class map (`(class_id + 1) / class_count`) into a class histogram and capped pixel rows from one fire-queue read.
+- `create_classifier` / `update_classifier` / `attach_classifier_field` - Create and edit classifier assemblies (scanner mode takes `class_count`) and bind image fields (each gets a `W x H x 1` twin).
+- `measure_audio_io_disparity` - While audio is streaming, compare each input frequency column with the output column it produced. Reports which gap dominates: dropped frames, dropped columns, phase, or magnitude.
 - `update_cortical_mapping` - Create/update connections with morphology rules
 - `delete_cortical_mapping` - Remove connections between areas
 

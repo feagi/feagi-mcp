@@ -47,7 +47,7 @@ CORTICAL_TYPE_METADATA = {
         "purpose": "Outputs segmented object detection and classification",
         "capabilities": ["object_detection", "image_segmentation", "classification"],
         "supported_devices": ["vision_processor", "object_detector"],
-        "data_format": "segmentation_masks",
+        "data_format": "single_layer_class_map_potential_is_(class_id+1)/class_count",
         "typical_use": "Object recognition, scene understanding, visual categorization",
     },
     "onet": {

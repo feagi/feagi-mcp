@@ -1064,12 +1064,15 @@ async def get_cortical_synapse_counts(area_id: str) -> dict[str, Any]:
     """Get incoming and outgoing synapse counts for a cortical area.
 
     Use this to verify connections exist and diagnose signal propagation issues.
+    Values are the connectome's running counters from ``cortical_area_properties``
+    and can drift after a resize; confirm realized wiring with
+    ``get_voxel_neurons`` or ``validate_magnitude_passthrough``.
 
     Args:
         area_id: Cortical area identifier (e.g., "Y0NQR2FfX18=")
 
     Returns:
-        Synapse counts: incoming, outgoing, and connection summary
+        ``incoming_synapses``, ``outgoing_synapses``, ``neuron_count``, and ``source``
     """
     result = await feagi.get_cortical_synapse_counts(area_id)
     return result
@@ -1488,7 +1491,9 @@ async def create_io_area_for_unit(
         name: Human-readable area name (BV / genome label).
         subtype: 4-char ``cortical_subtype`` (e.g. ``icnt`` count input, ``ocnt`` count output).
         channels: Number of channels (the area's x-width per device).
-        depth: Neuron depth / bins (z-extent); must match the coder's bins.
+        depth: Neuron depth / bins (z-extent); must match the coder's bins. Value-coded units
+            (Depth Map ``idpt``, Object Segmentation ``iseg``/``oseg``) are always 1: the
+            payload is the potential. Build bins with ``expand_value_to_bins`` instead.
         variant: IO configuration variant (default ``percentage`` for the count family).
         framing: ``absolute`` or ``incremental``.
         positioning: ``linear`` or ``fractional``.
@@ -1571,6 +1576,211 @@ async def get_cortical_mapping(src_area: str, dst_area: str) -> dict[str, Any]:
     """
     result = await feagi.get_cortical_mapping(src_area, dst_area)
     return result
+
+
+@mcp.tool()
+async def validate_magnitude_passthrough(
+    src_area: str, dst_area: str, class_count: int | None = None
+) -> dict[str, Any]:
+    """Check that graded magnitudes in ``src_area`` reach ``dst_area`` unchanged.
+
+    Use for IPU -> OPU mirrors that carry magnitude as membrane potential
+    (audio spectrum, analog sensors) when the output sounds or looks saturated,
+    noisy, or truncated. One call replaces reading two property records and
+    sampling voxels by hand.
+
+    Checks: mapping exists; source ``neuron_mp_driven_psp`` is on; no
+    refractory, snooze, or reduced excitability on the source (it would drop
+    frames before any mapping); destination threshold is not above the source
+    threshold; no charge accumulation, refractory, snooze, or reduced
+    excitability on the destination; no PSC,
+    weight, or fan-out scaling; matching X/Y dimensions; the far shared voxel
+    is really wired (catches stale resizes); runtime threshold matches the
+    stored one.
+
+    Args:
+        src_area: Source cortical area ID (base64).
+        dst_area: Destination cortical area ID (base64).
+        class_count: Set when the value is a class id (classifier twin -> segmentation OPU).
+            Scaling, fan-out, accumulation, and threshold drift become errors (any drift is a
+            different class), and the destination threshold must be below ``1/class_count``.
+
+    Returns:
+        ``passes``, ``error_count``, ``warning_count``, ``edge_voxel``, and
+        ``findings`` rows of ``{severity, code, message, fix}`` where ``fix`` is
+        an ``update_cortical_area`` payload when one applies.
+    """
+    return await feagi.validate_magnitude_passthrough(src_area, dst_area, class_count)
+
+
+@mcp.tool()
+async def wire_value_passthrough(
+    src_area: str,
+    dst_area: str,
+    class_count: int | None = None,
+    value_levels: int | None = None,
+) -> dict[str, Any]:
+    """Wire a one-layer value plane 1:1 so each voxel's potential arrives exactly.
+
+    The standard way to hand a classifier detection twin's class map to the segmentation
+    OPU (``oseg``) the trainer reads, or to copy a Depth Map plane. One call: sets the source
+    to forward its potential (``mp_driven_psp``, uniform PSP), sets the destination threshold
+    to half the smallest value with no leak/accumulation/refractory/snooze, maps with
+    ``projector`` (weight 1, not plastic), then validates.
+
+    Class maps encode ``(class_id + 1) / class_count``; depth planes encode
+    ``level / value_levels``. Both areas must be the same ``W x H x 1`` shape.
+
+    Args:
+        src_area: Source value plane (base64), e.g. a classifier twin.
+        dst_area: Destination (base64), e.g. the ``oseg`` OPU.
+        class_count: For class maps. Pass exactly one of class_count / value_levels.
+        value_levels: For depth planes (the encoder's depth levels).
+
+    Returns:
+        ``destination_threshold``, ``morphology_id``, and ``validation`` (the passthrough report).
+    """
+    return await feagi.wire_value_passthrough(src_area, dst_area, class_count, value_levels)
+
+
+@mcp.tool()
+async def expand_value_to_bins(
+    src_area: str,
+    levels: int,
+    name: str,
+    brain_region_id: str,
+    position: list[int],
+    value_max: float = 1.0,
+) -> dict[str, Any]:
+    """Create a ``W x H x levels`` bin area driven by a one-layer value plane.
+
+    Use when downstream areas must learn by neuron, not by potential: "obstacle nearer
+    than X" from a Depth Map, or one neuron per class from a class map. The bins use a
+    firing threshold that rises along Z, so bin ``z`` fires when the value is at least
+    ``(z + 0.5) * value_max / levels``: a cumulative (thermometer) code. For a class map use
+    ``levels = class_count``; class ``c`` then fires bins ``0..c``. For one-hot bins add an
+    inhibitory mapping from each bin to the bin below.
+
+    Args:
+        src_area: Source value plane (base64), must be ``W x H x 1``.
+        levels: Bin count (Z depth of the new area), 1..9999.
+        name: Name for the new area (function-based, e.g. ``Depth_Near_Bins``).
+        brain_region_id: Functionally named parent circuit.
+        position: ``[x, y, z]`` anchor for the new area.
+        value_max: Largest value the plane carries (1.0 for class maps and depth planes).
+
+    Returns:
+        ``bins_area`` id, ``base_threshold``, ``threshold_increment_z``, and the coding note.
+    """
+    return await feagi.expand_value_to_bins(
+        src_area, levels, name, brain_region_id, position, value_max
+    )
+
+
+@mcp.tool()
+async def decode_class_map(area_id: str, class_count: int, max_pixels: int = 200) -> dict[str, Any]:
+    """Decode the last burst of a one-layer class map into class ids.
+
+    One fire-queue read, decoded locally with ``round(p * class_count) - 1``. Use on a
+    classifier twin, the segmentation OPU, or the mask IPU to see what the brain labeled.
+    Returns a class histogram and at most ``max_pixels`` pixel rows to limit tokens.
+
+    Args:
+        area_id: One-layer class map (base64).
+        class_count: Class count the map encodes.
+        max_pixels: Cap on returned ``{x, y, class_id}`` rows (0..5000).
+
+    Returns:
+        ``fired``, ``class_histogram``, ``undecodable`` (potentials that name no class),
+        ``pixels``, ``truncated``, and ``timestep``.
+    """
+    return await feagi.decode_class_map(area_id, class_count, max_pixels)
+
+
+@mcp.tool()
+async def create_classifier(
+    name: str,
+    brain_region_id: str,
+    coordinates_3d: list[int],
+    training_mode: str,
+    kernel_area_id: str | None = None,
+    class_area_id: str | None = None,
+    mask_area_id: str | None = None,
+    kernel_size: list[int] | None = None,
+    class_count: int | None = None,
+) -> dict[str, Any]:
+    """Create a classifier assembly (kernel memory + class memory) in a circuit.
+
+    Kernel mode: ``kernel_area_id`` plus a ``1x1xn`` ``class_area_id`` (depth ``z`` = class).
+    Scanner mode: a ``W x H x 1`` ``mask_area_id`` whose pixels carry
+    ``(class_id + 1) / class_count`` as potential, ``kernel_size`` ``[x, y, z]`` with ``z``
+    equal to the field depth, and ``class_count`` (1..9999). Attach image fields afterwards
+    with ``attach_classifier_field``; each gets a ``W x H x 1`` detection twin.
+
+    Returns:
+        ``classifier_id``, ``kernel_memory_id``, ``class_memory_id``.
+    """
+    return await feagi.create_classifier(
+        name,
+        brain_region_id,
+        coordinates_3d,
+        training_mode,
+        kernel_area_id,
+        class_area_id,
+        mask_area_id,
+        kernel_size,
+        class_count,
+    )
+
+
+@mcp.tool()
+async def update_classifier(classifier_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+    """Update a classifier record.
+
+    ``updates`` keys: ``name``, ``coordinates_3d``, ``parent_region_id``, ``training_mode``,
+    ``kernel_area_id``, ``class_area_id``, ``mask_area_id``, ``kernel_size``, ``class_count``,
+    ``reward_training``, ``answer_feedback_area_id`` (empty string clears),
+    ``answer_latency_bursts``, ``learn_area_id``, ``confidence_area_id``. Changing mode,
+    kernel size, or class count drops learned patterns.
+    """
+    return await feagi.update_classifier(classifier_id, updates)
+
+
+@mcp.tool()
+async def attach_classifier_field(classifier_id: str, field_area_id: str) -> dict[str, Any]:
+    """Bind an image field to a classifier; FEAGI creates its ``W x H x 1`` detection twin.
+
+    The twin forwards its class value (``mp_driven_psp`` on). Route it to an OPU with
+    ``wire_value_passthrough(twin, oseg, class_count=...)``.
+    """
+    return await feagi.attach_classifier_field(classifier_id, field_area_id)
+
+
+@mcp.tool()
+async def measure_audio_io_disparity(
+    src_area: str,
+    dst_area: str,
+    duration_s: float = 2.0,
+) -> dict[str, Any]:
+    """Measure the live gap between an audio input area and its audio output.
+
+    Call while the Sensory Generator is streaming and the Perception Inspector
+    is decoding that output. Columns are matched by frequency, because the
+    phase row changes every frame.
+
+    Args:
+        src_area: Audio input cortical id (base64).
+        dst_area: Audio output cortical id (base64).
+        duration_s: How long to sample, from 0.2 to 8 seconds.
+
+    Returns:
+        ``dominant_gap`` plus frame drop, input-gap, missing-column,
+        phase-mismatch, and magnitude-error fractions. ``input_gap_fraction`` is
+        the share of bursts that carried no new input frame; each one is a hole
+        in the original audio even when the copy through FEAGI is exact.
+        ``dominant_gap`` is ``not_streaming`` when fewer than two input frames arrive.
+    """
+    return await feagi.measure_audio_io_disparity(src_area, dst_area, duration_s)
 
 
 @mcp.tool()
@@ -2386,6 +2596,22 @@ async def get_sensor_snapshot_last(
 
 
 @mcp.tool()
+async def get_last_failed_mutation() -> dict[str, Any]:
+    """Most recent failed mutating FEAGI API request (`/v1/system/last_failed_mutation`).
+
+    Use when ``health_check`` / ``diagnose_feagi_runtime`` report healthy but an
+    experiment launch, connectome upload, or genome load just failed. Returns a
+    compact ``mutation`` object: ``method``, ``path``, ``status``,
+    ``content_type``, ``content_length``, ``error_message``, ``timestamp_ms``.
+    ``mutation`` is ``null`` when this FEAGI process has not recorded a failure.
+
+    Prefer this over ``get_log_tail`` for body-limit / multipart parse errors —
+    those often leave no useful ring-buffer signal.
+    """
+    return await feagi.get_last_failed_mutation()
+
+
+@mcp.tool()
 async def get_log_tail(
     level: str | None = None,
     target_prefix: str | None = None,
@@ -2433,7 +2659,9 @@ async def diagnose_feagi_runtime() -> dict[str, Any]:
     ``feagi-core.log``, then ``neurorobotics-studio.log``. When those have no
     FEAGI markers and HTTP answers, classifies ``/v1/system/log_tail``.
     Health probe uses ``FEAGI_PROBE_TIMEOUT_SECONDS`` so a dead process does
-    not consume the full HTTP timeout. Returns ``paths_checked``.
+    not consume the full HTTP timeout. When HTTP answers, also attaches
+    ``last_failed_mutation`` from ``/v1/system/last_failed_mutation``.
+    Returns ``paths_checked``.
 
     Use this instead of ``health_check`` + ``get_log_tail`` when:
     - health_check times out or the connection is refused
@@ -2441,6 +2669,7 @@ async def diagnose_feagi_runtime() -> dict[str, Any]:
     - the FEAGI process exited (SIGTERM / ``zsh: terminated``)
     - injection reports unknown cortical areas
     - the NPU watchdog reports a stall
+    - upload/load failed but health still looks fine (check ``last_failed_mutation``)
 
     Returns a compact ``likely_cause`` plus evidence events.
     """

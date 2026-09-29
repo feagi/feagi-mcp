@@ -76,7 +76,7 @@ def _areas() -> list[dict]:
             "cortical_id": "twin",
             "cortical_name": "Ela joon_twin",
             "cortical_type": "custom",
-            "cortical_dimensions": [10, 6, 6],
+            "cortical_dimensions": [10, 6, 1],
             "visible": True,
             "coordinates_3d": [-35, 0, 5],
             "neuron_burst_engine_active": True,
@@ -102,6 +102,19 @@ def test_project_classifier_row_drops_properties() -> None:
     assert "scan_twin_id" not in row
 
 
+def test_project_classifier_row_keeps_scanner_class_count() -> None:
+    scanner = {
+        **_classifier(),
+        "training_mode": "scanner",
+        "mask_area_id": "mask",
+        "kernel_size": [8, 8, 3],
+        "class_count": 19,
+    }
+    row = project_classifier_row(scanner)
+    assert row["class_count"] == 19
+    assert row["mask_area_id"] == "mask"
+
+
 def test_filter_and_select_classifier() -> None:
     records = [_classifier(), {**_classifier(), "classifier_id": "clf-2", "name": "Other"}]
     filtered = filter_classifier_records(records, name_contains="ela")
@@ -120,7 +133,8 @@ def test_inspect_reports_twin_and_required_mappings() -> None:
     payload = build_classifier_inspect(_classifier(), _areas(), _mappings())
     assert payload["twin_visible"] is True
     assert payload["fields"][0]["scan_twin"]["name"] == "Ela joon_twin"
-    assert payload["fields"][0]["scan_twin"]["cortical_dimensions"] == [10, 6, 6]
+    assert payload["fields"][0]["scan_twin"]["cortical_dimensions"] == [10, 6, 1]
+    assert payload["value_findings"] == []
     assert payload["missing_slots"] == []
     assert payload["missing_mappings"] == []
     roles = [row["role"] for row in payload["mappings"]]
