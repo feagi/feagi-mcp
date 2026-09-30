@@ -108,6 +108,7 @@ Add to your Cursor MCP settings (`~/.cursor/mcp.json`):
 - `create_brain_region` - Create the named circuit container. Title must name the function (Sit, Walk CPG); Autogen Circuit / Untitled are rejected.
 - `create_cortical_area` - Add OPU/IPU/CUSTOM/MEMORY areas programmatically (CUSTOM/MEMORY require a function-named `brain_region_id`; MCP enforces origin/label spacing unless skipped). **Naming:** circuit title = function; area names = role; never prefix with `Mcp` — see `docs/NEW_TOOLS.md` (Circuit naming policy).
 - `update_cortical_area` - Modify cortical area properties
+- `set_memory_mp_encoding` - Set a memory area's MP encoding (`none`, `mp_learning`, `mp_differential`, `mp_ratio`) plus its quantization in one call; validates locally and returns the effective mode (warns when FEAGI auto-disables a change mode for temporal_depth < 2)
 - `delete_cortical_area` - Remove cortical areas
 - `list_opu_areas` - List only motor output areas
 - `list_ipu_areas` - List only sensory input areas

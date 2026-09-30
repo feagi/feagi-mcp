@@ -184,6 +184,16 @@
       "name": "stimulate_area_batch",
       "category": "control",
       "description": "Stimulate many voxels in one area in one HTTP round trip"
+    },
+    {
+      "name": "get_memory_area_runtime_config",
+      "category": "inspection",
+      "description": "Memory lifecycle plus mp_encoding (configured vs effective mode, quantization, replay)"
+    },
+    {
+      "name": "set_memory_mp_encoding",
+      "category": "genome",
+      "description": "Set a memory area MP encoding (none, mp_learning, mp_differential, mp_ratio) in one call"
     }
   ]
 }

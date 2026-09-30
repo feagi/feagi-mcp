@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import math
 from pathlib import Path
 from typing import Any
 
@@ -135,6 +136,56 @@ async def get_connectivity(src_area: str, dst_area: str) -> dict[str, Any]:
     return result
 
 
+_MP_CHANGE_MODES = ("mp_differential", "mp_ratio")
+_MP_QUANTIZATION_KEY_BY_MODE = {
+    "mp_differential": "mp_delta_quantization",
+    "mp_ratio": "mp_ratio_quantization",
+}
+
+
+def _memory_mp_encoding(
+    runtime_params: dict[str, Any], effective_mode: str | None
+) -> dict[str, Any]:
+    """Summarize configured vs. effective MP encoding for a memory area.
+
+    ``configured_mode`` uses the same vocabulary as FEAGI's ``effective_mp_mode``
+    (``pattern_only``, ``mp_learning``, ``mp_differential``, ``mp_ratio``) so the two can be
+    compared directly. A change mode with temporal_depth < 2 runs as ``pattern_only``;
+    ``auto_disabled`` flags that case. Values are ``None`` when FEAGI does not report them.
+    """
+    change_mode = runtime_params.get("mp_change_mode")
+    learning = runtime_params.get("mp_learning_enabled")
+    configured: str | None
+    if change_mode in _MP_CHANGE_MODES:
+        configured = str(change_mode)
+    elif change_mode is None and learning is None:
+        configured = None
+    elif learning:
+        configured = "mp_learning"
+    else:
+        configured = "pattern_only"
+
+    quantization_key = _MP_QUANTIZATION_KEY_BY_MODE.get(configured or "")
+    quantization = (
+        {quantization_key: runtime_params.get(quantization_key)} if quantization_key else {}
+    )
+    auto_disabled = (
+        configured in _MP_CHANGE_MODES
+        and effective_mode is not None
+        and effective_mode != configured
+    )
+    return {
+        "configured_mode": configured,
+        "effective_mode": effective_mode,
+        "auto_disabled": auto_disabled,
+        "replay_enabled": (
+            None if effective_mode is None else effective_mode not in _MP_CHANGE_MODES
+        ),
+        "quantization": quantization,
+        "temporal_depth": runtime_params.get("temporal_depth"),
+    }
+
+
 @mcp.tool()
 async def get_memory_area_runtime_config(cortical_id: str, page_size: int = 1) -> dict[str, Any]:
     """Get effective runtime lifecycle config for one memory cortical area.
@@ -147,6 +198,13 @@ async def get_memory_area_runtime_config(cortical_id: str, page_size: int = 1) -
     - Effective lifecycle values (init lifespan, growth rate, LT threshold).
     - Source attribution for each lifecycle value (runtime vs cortical properties).
     - Consistency checks to flag mismatched values between endpoint surfaces.
+    - ``mp_encoding``: configured vs. effective MP mode (``pattern_only``, ``mp_learning``,
+      ``mp_differential``, ``mp_ratio``), ``auto_disabled`` when a change mode was dropped
+      because temporal_depth < 2, ``replay_enabled`` (off in change modes), and the active
+      quantization. Change the mode with ``update_cortical_area`` using ``mp_change_mode``
+      (``none``/``mp_differential``/``mp_ratio``), ``mp_learning_enabled`` (mutually exclusive
+      with a change mode), ``mp_delta_quantization`` (MP units) or ``mp_ratio_quantization``
+      (percent per compounding step).
 
     Args:
         cortical_id: Memory cortical area ID (base64 wire ID).
@@ -242,6 +300,9 @@ async def get_memory_area_runtime_config(cortical_id: str, page_size: int = 1) -
             "lifespan_growth_rate": {"value": effective_growth, "source": growth_source},
             "longterm_mem_threshold": {"value": effective_ltm, "source": ltm_source},
         },
+        "mp_encoding": _memory_mp_encoding(
+            runtime_params_dict, memory_runtime.get("effective_mp_mode")
+        ),
         "consistency": {
             "st_plus_lt_matches_total": (st_count + lt_count) == total_count,
             "lifecycle_param_mismatches": mismatches,
@@ -255,6 +316,119 @@ async def get_memory_area_runtime_config(cortical_id: str, page_size: int = 1) -
             },
         },
     }
+
+
+_MP_ENCODING_MODES = ("none", "mp_learning", "mp_differential", "mp_ratio")
+_MP_MODE_BY_QUANTIZATION_KEY = {key: mode for mode, key in _MP_QUANTIZATION_KEY_BY_MODE.items()}
+
+
+def _mp_encoding_updates(
+    mode: str,
+    delta_quantization: float | None,
+    ratio_quantization: float | None,
+) -> dict[str, Any]:
+    """Build the FEAGI update payload for one MP encoding choice, or ``{"error": ...}``.
+
+    Always sets both ``mp_learning_enabled`` and ``mp_change_mode`` so they cannot
+    conflict. A quantization is accepted only for the mode it belongs to.
+    """
+    if mode not in _MP_ENCODING_MODES:
+        return {"error": "invalid_mode", "mode": mode, "allowed": list(_MP_ENCODING_MODES)}
+    quantization_by_key = {
+        "mp_delta_quantization": delta_quantization,
+        "mp_ratio_quantization": ratio_quantization,
+    }
+    allowed_key = _MP_QUANTIZATION_KEY_BY_MODE.get(mode)
+    updates: dict[str, Any] = {
+        "mp_learning_enabled": mode == "mp_learning",
+        "mp_change_mode": mode if mode in _MP_CHANGE_MODES else "none",
+    }
+    for key, value in quantization_by_key.items():
+        if value is None:
+            continue
+        if key != allowed_key:
+            return {
+                "error": "quantization_not_for_mode",
+                "mode": mode,
+                "quantization": key,
+                "message": f"{key} applies only to mode {_MP_MODE_BY_QUANTIZATION_KEY[key]}.",
+            }
+        is_number = isinstance(value, (int, float)) and not isinstance(value, bool)
+        if not (is_number and math.isfinite(value) and value > 0):
+            return {"error": "invalid_quantization", "quantization": key, "value": value}
+        updates[key] = float(value)
+    return updates
+
+
+@mcp.tool()
+async def set_memory_mp_encoding(
+    cortical_id: str,
+    mode: str,
+    delta_quantization: float | None = None,
+    ratio_quantization: float | None = None,
+) -> dict[str, Any]:
+    """Set how a memory area uses membrane potentials, and report what FEAGI runs.
+
+    One call instead of hand-building ``update_cortical_area`` keys. Modes:
+
+    - ``none``: memories from firing patterns only.
+    - ``mp_learning``: also store MPs and replay them.
+    - ``mp_differential``: the same MP change across the temporal window forms one memory
+      (2->4 matches 7->9). Optional ``delta_quantization`` (MP units, > 0).
+    - ``mp_ratio``: the same growth ratio forms one memory (2->4 matches 7->14). Optional
+      ``ratio_quantization`` (percent per compounding step, > 0).
+
+    Change modes need temporal_depth >= 2 and disable replay. Input is validated locally
+    before any request. Makes one PUT and one memory-endpoint GET.
+
+    Args:
+        cortical_id: Memory cortical area ID (base64 wire ID).
+        mode: ``none``, ``mp_learning``, ``mp_differential``, or ``mp_ratio``.
+        delta_quantization: Only with ``mp_differential``; omit to keep the current value.
+        ratio_quantization: Only with ``mp_ratio``; omit to keep the current value.
+
+    Returns:
+        ``{"success", "applied", "mp_encoding"}``; ``warning`` when FEAGI auto-disabled the
+        change mode (temporal_depth < 2). ``{"error": ...}`` on invalid input or HTTP failure.
+    """
+    updates = _mp_encoding_updates(mode, delta_quantization, ratio_quantization)
+    if "error" in updates:
+        return {"cortical_id": cortical_id, **updates}
+
+    result = await feagi.update_cortical_area(cortical_id, updates)
+    if not isinstance(result, dict) or result.get("error"):
+        return {"error": "update_failed", "cortical_id": cortical_id, "details": result}
+
+    memory_runtime = await feagi.brain_visualizer_operation(
+        "get_cortical_area_memory",
+        query={"cortical_id": cortical_id, "page": 0, "page_size": 1},
+    )
+    if not isinstance(memory_runtime, dict) or memory_runtime.get("error"):
+        return {
+            "success": True,
+            "cortical_id": cortical_id,
+            "applied": updates,
+            "mp_encoding": None,
+            "warning": "update applied but the memory endpoint could not be read to verify",
+            "details": memory_runtime,
+        }
+    runtime_params = memory_runtime.get("memory_parameters")
+    encoding = _memory_mp_encoding(
+        runtime_params if isinstance(runtime_params, dict) else {},
+        memory_runtime.get("effective_mp_mode"),
+    )
+    response: dict[str, Any] = {
+        "success": True,
+        "cortical_id": cortical_id,
+        "applied": updates,
+        "mp_encoding": encoding,
+    }
+    if encoding["auto_disabled"]:
+        response["warning"] = (
+            f"{mode} is configured but FEAGI runs {encoding['effective_mode']}: "
+            f"temporal_depth is {encoding['temporal_depth']}; change modes need >= 2."
+        )
+    return response
 
 
 @mcp.tool()
@@ -1376,7 +1550,10 @@ async def create_cortical_area(
         name: Human-readable name (persisted in genome / BV). Use clear role- or circuit-based
             names (e.g. OrGate_Input_A); do not prefix with Mcp/MCP (see docs NEW_TOOLS naming
             policy).
-        cortical_type: "OPU", "IPU", "CUSTOM", or "MEMORY"
+        cortical_type: "OPU", "IPU", "CUSTOM", or "MEMORY". MEMORY sends
+            ``sub_group_id: MEMORY`` on the custom-area endpoint. FEAGI uses that
+            field to assign a memory id (byte 0 ``m``). A custom id is returned
+            as ``memory_area_not_created``; delete that area before retrying.
         dimensions: [width, height, depth] in voxels (for CUSTOM/MEMORY only)
         position: [x, y, z] 3D coordinates
         neurons_per_voxel: Number of neurons per voxel (default: 1)
@@ -1533,6 +1710,13 @@ async def update_cortical_area(cortical_id: str, updates: dict[str, Any]) -> dic
     example JSON);
     use ``enabled: false`` to disable. Flat genome suffix ``cx-hmlk-d`` maps to the same
     key.
+
+    Memory areas: ``mp_change_mode`` (``none``, ``mp_differential``, ``mp_ratio``) makes
+    memories match MP changes over the temporal window instead of absolute values (needs
+    ``temporal_depth`` >= 2; replay is off). Set ``mp_learning_enabled: false`` in the same
+    call when switching from MP learning; FEAGI rejects both on. Tune with
+    ``mp_delta_quantization`` (MP units, > 0) or ``mp_ratio_quantization`` (percent, > 0).
+    Verify with ``get_memory_area_runtime_config`` (``mp_encoding.effective_mode``).
 
     Args:
         cortical_id: Cortical area ID to update

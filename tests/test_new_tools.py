@@ -1,6 +1,7 @@
 """Test new MCP tools for agent introspection and genome editing."""
 
 import json
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -270,6 +271,215 @@ class TestMemoryAreaRuntimeConfigTool:
         assert lifecycle["init_lifespan"]["source"] == "cortical_properties"
         assert lifecycle["lifespan_growth_rate"]["value"] == 1.5
         assert lifecycle["longterm_mem_threshold"]["value"] == 70
+
+    @staticmethod
+    def _patch_memory_endpoints(monkeypatch, memory_parameters, effective_mp_mode):
+        from feagi_mcp import server
+
+        async def fake_props(_cortical_id: str):
+            return {"cortical_id": "mem_id", "cortical_type": "memory", "properties": {}}
+
+        async def fake_bv_operation(_operation_id: str, **_kwargs):
+            return {
+                "short_term_neuron_count": 0,
+                "long_term_neuron_count": 0,
+                "total_memory_neuron_ids": 0,
+                "memory_parameters": memory_parameters,
+                "effective_mp_mode": effective_mp_mode,
+            }
+
+        monkeypatch.setattr(server.feagi, "fetch_cortical_area_properties", fake_props)
+        monkeypatch.setattr(server.feagi, "brain_visualizer_operation", fake_bv_operation)
+        return server
+
+    @pytest.mark.asyncio
+    async def test_mp_encoding_reports_active_differential(self, monkeypatch):
+        """An active change mode reports its own quantization and disables replay."""
+        server = self._patch_memory_endpoints(
+            monkeypatch,
+            {
+                "temporal_depth": 2,
+                "mp_learning_enabled": False,
+                "mp_change_mode": "mp_differential",
+                "mp_delta_quantization": 0.5,
+                "mp_ratio_quantization": 20.0,
+            },
+            "mp_differential",
+        )
+        enc = (await server.get_memory_area_runtime_config("mem_id"))["mp_encoding"]
+        assert enc["configured_mode"] == "mp_differential"
+        assert enc["effective_mode"] == "mp_differential"
+        assert enc["auto_disabled"] is False
+        assert enc["replay_enabled"] is False
+        assert enc["quantization"] == {"mp_delta_quantization": 0.5}
+
+    @pytest.mark.asyncio
+    async def test_mp_encoding_flags_auto_disable_at_depth_one(self, monkeypatch):
+        """A change mode FEAGI dropped for temporal_depth < 2 is flagged, not hidden."""
+        server = self._patch_memory_endpoints(
+            monkeypatch,
+            {
+                "temporal_depth": 1,
+                "mp_learning_enabled": False,
+                "mp_change_mode": "mp_ratio",
+                "mp_ratio_quantization": 20.0,
+            },
+            "pattern_only",
+        )
+        enc = (await server.get_memory_area_runtime_config("mem_id"))["mp_encoding"]
+        assert enc["configured_mode"] == "mp_ratio"
+        assert enc["effective_mode"] == "pattern_only"
+        assert enc["auto_disabled"] is True
+        assert enc["replay_enabled"] is True
+        assert enc["temporal_depth"] == 1
+
+    @pytest.mark.asyncio
+    async def test_mp_encoding_maps_learning_and_none(self, monkeypatch):
+        """MP learning and plain pattern mode use FEAGI's effective vocabulary."""
+        server = self._patch_memory_endpoints(
+            monkeypatch,
+            {"mp_learning_enabled": True, "mp_change_mode": "none"},
+            "mp_learning",
+        )
+        enc = (await server.get_memory_area_runtime_config("mem_id"))["mp_encoding"]
+        assert enc["configured_mode"] == "mp_learning"
+        assert enc["quantization"] == {}
+        assert enc["replay_enabled"] is True
+
+        server = self._patch_memory_endpoints(
+            monkeypatch,
+            {"mp_learning_enabled": False, "mp_change_mode": "none"},
+            "pattern_only",
+        )
+        enc = (await server.get_memory_area_runtime_config("mem_id"))["mp_encoding"]
+        assert enc["configured_mode"] == "pattern_only"
+        assert enc["auto_disabled"] is False
+
+    @pytest.mark.asyncio
+    async def test_mp_encoding_unknown_when_feagi_omits_fields(self, monkeypatch):
+        """Older FEAGI builds without the fields yield None rather than a guessed mode."""
+        server = self._patch_memory_endpoints(monkeypatch, {}, None)
+        enc = (await server.get_memory_area_runtime_config("mem_id"))["mp_encoding"]
+        assert enc["configured_mode"] is None
+        assert enc["effective_mode"] is None
+        assert enc["replay_enabled"] is None
+        assert enc["auto_disabled"] is False
+
+
+class TestSetMemoryMpEncoding:
+    """One-call MP encoding setter: local validation, both keys sent, effective mode verified."""
+
+    @staticmethod
+    def _patch(monkeypatch, effective_mp_mode, memory_parameters, put_result=None):
+        from feagi_mcp import server
+
+        calls: dict[str, Any] = {"put": [], "get": 0}
+
+        async def fake_update(cortical_id: str, updates: dict):
+            calls["put"].append((cortical_id, updates))
+            return put_result if put_result is not None else {"success": True}
+
+        async def fake_bv_operation(_operation_id: str, **_kwargs):
+            calls["get"] += 1
+            return {
+                "memory_parameters": memory_parameters,
+                "effective_mp_mode": effective_mp_mode,
+            }
+
+        monkeypatch.setattr(server.feagi, "update_cortical_area", fake_update)
+        monkeypatch.setattr(server.feagi, "brain_visualizer_operation", fake_bv_operation)
+        return server, calls
+
+    @pytest.mark.parametrize(
+        ("mode", "learning", "change"),
+        [
+            ("none", False, "none"),
+            ("mp_learning", True, "none"),
+            ("mp_differential", False, "mp_differential"),
+            ("mp_ratio", False, "mp_ratio"),
+        ],
+    )
+    def test_payload_always_sets_both_keys(self, mode, learning, change):
+        from feagi_mcp.server import _mp_encoding_updates
+
+        assert _mp_encoding_updates(mode, None, None) == {
+            "mp_learning_enabled": learning,
+            "mp_change_mode": change,
+        }
+
+    @pytest.mark.parametrize(
+        ("mode", "delta", "ratio", "error"),
+        [
+            ("mp_diff", None, None, "invalid_mode"),
+            ("mp_ratio", 1.0, None, "quantization_not_for_mode"),
+            ("none", None, 20.0, "quantization_not_for_mode"),
+            ("mp_differential", 0.0, None, "invalid_quantization"),
+            ("mp_differential", float("nan"), None, "invalid_quantization"),
+            ("mp_ratio", None, True, "invalid_quantization"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_invalid_input_is_rejected_without_http(
+        self, monkeypatch, mode, delta, ratio, error
+    ):
+        server, calls = self._patch(monkeypatch, None, {})
+        result = await server.set_memory_mp_encoding("mem_id", mode, delta, ratio)
+        assert result["error"] == error
+        assert calls == {"put": [], "get": 0}
+
+    @pytest.mark.asyncio
+    async def test_applies_and_reports_effective_mode(self, monkeypatch):
+        server, calls = self._patch(
+            monkeypatch,
+            "mp_ratio",
+            {
+                "temporal_depth": 3,
+                "mp_learning_enabled": False,
+                "mp_change_mode": "mp_ratio",
+                "mp_ratio_quantization": 10.0,
+            },
+        )
+        result = await server.set_memory_mp_encoding("mem_id", "mp_ratio", ratio_quantization=10)
+        assert calls["put"] == [
+            (
+                "mem_id",
+                {
+                    "mp_learning_enabled": False,
+                    "mp_change_mode": "mp_ratio",
+                    "mp_ratio_quantization": 10.0,
+                },
+            )
+        ]
+        assert calls["get"] == 1
+        assert result["success"] is True
+        assert result["mp_encoding"]["effective_mode"] == "mp_ratio"
+        assert result["mp_encoding"]["quantization"] == {"mp_ratio_quantization": 10.0}
+        assert "warning" not in result
+
+    @pytest.mark.asyncio
+    async def test_warns_when_feagi_auto_disables(self, monkeypatch):
+        server, _calls = self._patch(
+            monkeypatch,
+            "pattern_only",
+            {
+                "temporal_depth": 1,
+                "mp_learning_enabled": False,
+                "mp_change_mode": "mp_differential",
+            },
+        )
+        result = await server.set_memory_mp_encoding("mem_id", "mp_differential")
+        assert result["mp_encoding"]["auto_disabled"] is True
+        assert "temporal_depth is 1" in result["warning"]
+
+    @pytest.mark.asyncio
+    async def test_update_failure_skips_verification(self, monkeypatch):
+        server, calls = self._patch(
+            monkeypatch, None, {}, put_result={"error": "HTTP 400", "message": "mutually exclusive"}
+        )
+        result = await server.set_memory_mp_encoding("mem_id", "mp_learning")
+        assert result["error"] == "update_failed"
+        assert result["details"]["message"] == "mutually exclusive"
+        assert calls["get"] == 0
 
 
 class TestAgentJointMap:
@@ -574,6 +784,60 @@ class TestGenomeEditing:
         )
 
         assert "cortical_id" in result
+        posted = mock_client._client.post.call_args.kwargs["json"]
+        assert "sub_group_id" not in posted
+
+    @pytest.mark.asyncio
+    async def test_create_memory_area_sends_sub_group_id(self, mock_client):
+        """MEMORY must post sub_group_id MEMORY; FEAGI ignores cortical_type."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "message": "Custom cortical area created successfully",
+            "cortical_id": "bVRTRkVfc2I=",
+        }
+        mock_client._client.post.return_value = mock_response
+        mock_client.get_regions_members = AsyncMock(
+            return_value={"region-1": {"title": "Time Series Feature Extractor"}}
+        )
+
+        result = await mock_client.create_cortical_area(
+            name="TSFE slope",
+            cortical_type="memory",
+            dimensions=[1, 1, 1],
+            position=[40, 104, 40],
+            brain_region_id="region-1",
+            properties={"sub_group_id": "CUSTOM"},
+            skip_placement_validation=True,
+        )
+
+        assert result["cortical_id"] == "bVRTRkVfc2I="
+        posted = mock_client._client.post.call_args.kwargs["json"]
+        assert posted["cortical_type"] == "memory"
+        assert posted["sub_group_id"] == "MEMORY"
+
+    @pytest.mark.asyncio
+    async def test_create_memory_area_rejects_custom_id(self, mock_client):
+        """A custom id means FEAGI did not create a memory area."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"cortical_id": "Y1RpbWVzZTc="}
+        mock_client._client.post.return_value = mock_response
+        mock_client.get_regions_members = AsyncMock(
+            return_value={"region-1": {"title": "Time Series Feature Extractor"}}
+        )
+
+        result = await mock_client.create_cortical_area(
+            name="TSFE slope",
+            cortical_type="MEMORY",
+            dimensions=[1, 1, 1],
+            position=[40, 104, 40],
+            brain_region_id="region-1",
+            skip_placement_validation=True,
+        )
+
+        assert result["error"] == "memory_area_not_created"
+        assert result["cortical_id"] == "Y1RpbWVzZTc="
 
     @pytest.mark.asyncio
     async def test_create_cortical_area_custom_requires_brain_region_id(self, mock_client):

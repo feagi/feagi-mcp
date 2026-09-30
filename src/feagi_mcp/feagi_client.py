@@ -1,6 +1,8 @@
 """HTTP client for FEAGI REST API."""
 
 import asyncio
+import base64
+import binascii
 import logging
 import math
 import os
@@ -770,6 +772,22 @@ def _find_actual_coordinates(result: dict[str, Any]) -> list[int] | None:
     if isinstance(coords, list) and len(coords) == 3:
         return [int(c) for c in coords]
     return None
+
+
+def _cortical_id_kind_byte(cortical_id: object) -> int | None:
+    """Return byte 0 of an 8-byte cortical id, or None when the id cannot be decoded.
+
+    FEAGI uses this byte as the type discriminator: ``m`` memory, ``c`` custom.
+    """
+    if not isinstance(cortical_id, str) or not cortical_id.strip():
+        return None
+    try:
+        raw = base64.b64decode(cortical_id.strip(), validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    if len(raw) != 8:
+        return None
+    return raw[0]
 
 
 def _annotate_requested_placement(result: dict[str, Any], requested: list[int]) -> None:
@@ -2760,7 +2778,9 @@ class FeagiClient:
         Args:
             name: Human-readable name (shown in BV; use role/circuit-based names, never
                 prefix with ``Mcp``/``MCP`` — see feagi-mcp docs ``Cortical area naming policy``)
-            cortical_type: "OPU", "IPU", "CUSTOM", or "MEMORY"
+            cortical_type: "OPU", "IPU", "CUSTOM", or "MEMORY". MEMORY is sent as
+                ``sub_group_id: MEMORY`` because FEAGI's custom-area endpoint uses that
+                field, not ``cortical_type``, to assign a memory cortical id (byte 0 ``m``).
             dimensions: [width, height, depth] in voxels (for CUSTOM/MEMORY only)
             position: [x, y, z] 3D coordinates
             neurons_per_voxel: Number of neurons per voxel (default: 1)
@@ -2827,6 +2847,10 @@ class FeagiClient:
                 if parent_error is not None:
                     return {"error": parent_error}
                 request_data["brain_region_id"] = resolved_region
+                # FEAGI ignores cortical_type on this endpoint. sub_group_id MEMORY is
+                # what selects a memory id (byte 0 'm') instead of a custom id (byte 0 'c').
+                if cortical_type.strip().upper() == "MEMORY":
+                    request_data["sub_group_id"] = "MEMORY"
 
                 if not skip_placement_validation:
                     if origin_err := check_origin_exclusion(position):
@@ -2847,6 +2871,17 @@ class FeagiClient:
             if response.status_code == 200:
                 result = _as_json_dict(response.json())
                 _annotate_requested_placement(result, position)
+                if cortical_type.strip().upper() == "MEMORY":
+                    created_id = result.get("cortical_id")
+                    if _cortical_id_kind_byte(created_id) != ord("m"):
+                        return {
+                            "error": "memory_area_not_created",
+                            "cortical_id": created_id,
+                            "message": (
+                                "FEAGI did not assign a memory cortical id "
+                                "(byte 0 must be 'm'). Delete this area before retrying."
+                            ),
+                        }
                 return result
             return {"error": f"HTTP {response.status_code}", "message": response.text}
         except Exception as e:
@@ -3183,9 +3218,7 @@ class FeagiClient:
         steps["destination"] = await self.update_cortical_area(
             dst, value_destination_updates(threshold)
         )
-        steps["mapping"] = await self.update_cortical_mapping(
-            src, dst, [identity_projector_rule()]
-        )
+        steps["mapping"] = await self.update_cortical_mapping(src, dst, [identity_projector_rule()])
         failed = {k: v for k, v in steps.items() if isinstance(v, dict) and v.get("error")}
         if failed:
             return {"error": "wiring_failed", "failed_steps": failed}

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`create_cortical_area` MEMORY**: the custom-area endpoint ignores
+  `cortical_type` and creates a custom area unless `sub_group_id` is
+  `MEMORY`. MEMORY creates now send that field and reject a returned id
+  whose first byte is not `m`.
+
+### Added
+- **`set_memory_mp_encoding`**: one-call MP encoding setter for memory areas.
+  Sends `mp_learning_enabled` and `mp_change_mode` together so they cannot
+  conflict, accepts only the quantization that matches the mode, rejects bad
+  input before any request, and reads back `effective_mp_mode` (one PUT + one
+  GET).
+- **`get_memory_area_runtime_config` `mp_encoding`**: configured vs. effective
+  MP mode (`pattern_only` / `mp_learning` / `mp_differential` / `mp_ratio`),
+  `auto_disabled` when FEAGI dropped a change mode for temporal_depth < 2,
+  `replay_enabled`, and the active quantization. Derived from the memory
+  endpoint the tool already calls; no extra requests.
+- **`update_cortical_area`** docs: memory `mp_change_mode`,
+  `mp_delta_quantization`, `mp_ratio_quantization` keys.
+
 ## [0.0.18] - 2026-09-24
 
 ### Added
