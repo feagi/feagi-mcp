@@ -2,7 +2,7 @@
 
 from typing import Any
 
-__version__ = "0.0.18"
+__version__ = "0.0.19"
 __author__ = "Neuraville Inc."
 __email__ = "feagi@neuraville.com"
 

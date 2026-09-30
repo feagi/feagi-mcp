@@ -91,8 +91,12 @@ class TestExactValueRules:
             "passes": True,
             "findings": [
                 {"severity": "warning", "code": "magnitude_scaled", "message": "x", "fix": None},
-                {"severity": "warning", "code": "destination_refractory_drops_bursts",
-                 "message": "y", "fix": None},
+                {
+                    "severity": "warning",
+                    "code": "destination_refractory_drops_bursts",
+                    "message": "y",
+                    "fix": None,
+                },
             ],
         }
         escalated = escalate_for_exact_values(report, 19)
@@ -307,8 +311,13 @@ class TestClassifierWriteTools:
     async def test_scanner_create_posts_class_count(self, client) -> None:
         client._client.request.return_value = _ok({"classifier_id": "clf-1"})
         result = await client.create_classifier(
-            "Scan", "region-1", [1, 2, 3], "scanner",
-            mask_area_id="mask", kernel_size=[8, 8, 3], class_count=19,
+            "Scan",
+            "region-1",
+            [1, 2, 3],
+            "scanner",
+            mask_area_id="mask",
+            kernel_size=[8, 8, 3],
+            class_count=19,
         )
         method, url = client._client.request.call_args.args
         body = client._client.request.call_args.kwargs["json"]
@@ -356,7 +365,10 @@ class TestServerDelegation:
         ):
             monkeypatch.setattr(server.feagi, name, fake)
         assert (await server.wire_value_passthrough(TWIN, OSEG, 19))["args"] == [
-            TWIN, OSEG, 19, None,
+            TWIN,
+            OSEG,
+            19,
+            None,
         ]
         assert (await server.decode_class_map(OSEG, 19))["args"] == [OSEG, 19, 200]
         assert (await server.attach_classifier_field("c", "f"))["args"] == ["c", "f"]
