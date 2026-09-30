@@ -77,6 +77,8 @@ def decode_class_potential(potential: Any, class_count: int) -> int | None:
 def smallest_value(class_count: int | None, value_levels: int | None) -> float:
     """Smallest non-zero potential the plane carries (``1 / count``)."""
     count = class_count if class_count is not None else value_levels
+    if count is None:
+        raise ValueError("class_count/value_levels must be an integer")
     error = class_count_error(count)
     if error:
         raise ValueError(error.replace("class_count", "class_count/value_levels"))
@@ -246,8 +248,10 @@ def _forwards_value(area: dict[str, Any]) -> bool | None:
         if isinstance(value, bool):
             return value
     props = area.get("properties")
-    if isinstance(props, dict) and isinstance(props.get("mp_driven_psp"), bool):
-        return props["mp_driven_psp"]
+    if isinstance(props, dict):
+        flag = props.get("mp_driven_psp")
+        if isinstance(flag, bool):
+            return flag
     return None
 
 
