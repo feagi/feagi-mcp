@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.20] - 2026-10-02
+
+### Changed
+- **Dependencies**: pin `feagi-core==2.2.4` (Python SDK; Brain Visualizer ≥2.6.3 via optional BV packages).
+
 ### Fixed
 - **`create_cortical_area` MEMORY**: the custom-area endpoint ignores
   `cortical_type` and creates a custom area unless `sub_group_id` is
@@ -14,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose first byte is not `m`.
 
 ### Added
+- **Memory wiring and churn diagnostics** (`inspect_classifier`,
+  `get_memory_area_runtime_config`): `episodic_upstream` / `scan_sources` per
+  memory area, derived locally from the mapping table, plus lifetime
+  `created_total` / `deleted_total` from one `health_check`. Findings
+  `memory_no_episodic_upstream` (scan-only edge; kernel memory blocks scan) and
+  `memory_neurons_expire_unmatched` (all created neurons died before LTM).
+- **`get_connectivity_summary` `edge_morphologies`**: rows on a src->dst edge
+  with more than one rule list every morphology on that edge.
 - **`set_memory_mp_encoding`**: one-call MP encoding setter for memory areas.
   Sends `mp_learning_enabled` and `mp_change_mode` together so they cannot
   conflict, accepts only the quantization that matches the mode, rejects bad

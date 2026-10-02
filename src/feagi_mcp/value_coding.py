@@ -1,7 +1,8 @@
 """Value-coded single-layer areas: class maps and depth planes.
 
-Object segmentation input/output, classifier detection twins, and the Depth Map
-are ``W x H x 1``. The payload is each firing voxel's membrane potential:
+Object segmentation input/output, scanner classifier outputs, and the Depth Map
+are ``W x H x 1``. The payload is each firing voxel's membrane potential.
+A kernel classifier output is ``1 x 1 x n`` and fires depth ``z`` for class ``z``.
 
 * class map: ``(class_id + 1) / class_count`` (0 = unlabeled / silent)
 * depth plane: ``level / depth_levels`` with ``level`` in ``1..=depth_levels``
@@ -30,6 +31,8 @@ CODE_CLASS_COUNT_INVALID = "class_count_invalid"
 CODE_MASK_NOT_SINGLE_LAYER = "mask_not_single_layer"
 CODE_TWIN_NOT_SINGLE_LAYER = "twin_not_single_layer"
 CODE_TWIN_NOT_FORWARDING = "twin_not_forwarding_value"
+CODE_KERNEL_OUTPUT_SHAPE = "kernel_output_shape"
+CODE_KERNEL_OUTPUT_FORWARDS = "kernel_output_forwards_value"
 CODE_THRESHOLD_ABOVE_SMALLEST_CLASS = "threshold_above_smallest_class"
 
 #: Passthrough warnings that are fatal once the value is a class id: any drift is another class.
@@ -230,16 +233,23 @@ def decode_fire_queue_classes(
     }
 
 
-def _depth_of(area: dict[str, Any] | None) -> int | None:
+def _dimensions(area: dict[str, Any] | None) -> list[int] | None:
     if not isinstance(area, dict):
         return None
     dims = area.get("cortical_dimensions") or area.get("dimensions")
     if isinstance(dims, (list, tuple)) and len(dims) == 3:
         try:
-            return int(dims[2])
+            return [int(dims[0]), int(dims[1]), int(dims[2])]
         except (TypeError, ValueError):
             return None
     return None
+
+
+def _depth_of(area: dict[str, Any] | None) -> int | None:
+    dims = _dimensions(area)
+    if dims is None:
+        return None
+    return dims[2]
 
 
 def _forwards_value(area: dict[str, Any]) -> bool | None:
@@ -296,29 +306,65 @@ def classifier_value_findings(
                     ),
                 }
             )
+    class_depth = None
+    if not scanner:
+        class_id = str(classifier.get("class_area_id") or "").strip()
+        class_depth = _depth_of(catalog.get(class_id)) if class_id else None
     for twin_id in twin_ids:
         twin = catalog.get(twin_id)
-        twin_depth = _depth_of(twin)
-        if twin_depth is not None and twin_depth != VALUE_PLANE_DEPTH:
+        if scanner:
+            twin_depth = _depth_of(twin)
+            if twin_depth is not None and twin_depth != VALUE_PLANE_DEPTH:
+                findings.append(
+                    {
+                        "severity": "error",
+                        "code": CODE_TWIN_NOT_SINGLE_LAYER,
+                        "message": (
+                            f"Twin {twin_id} is {twin_depth} deep; scanner class outputs "
+                            f"are W x H x 1."
+                        ),
+                    }
+                )
+            if isinstance(twin, dict) and _forwards_value(twin) is False:
+                findings.append(
+                    {
+                        "severity": "warning",
+                        "code": CODE_TWIN_NOT_FORWARDING,
+                        "message": (
+                            f"Twin {twin_id} has mp_driven_psp off; downstream areas receive a "
+                            f"flat PSP instead of the class value."
+                        ),
+                        "fix": {"cortical_id": twin_id, "updates": {"neuron_mp_driven_psp": True}},
+                    }
+                )
+            continue
+        twin_shape = _dimensions(twin)
+        if (
+            class_depth is not None
+            and twin_shape is not None
+            and twin_shape != [1, 1, class_depth]
+        ):
             findings.append(
                 {
                     "severity": "error",
-                    "code": CODE_TWIN_NOT_SINGLE_LAYER,
+                    "code": CODE_KERNEL_OUTPUT_SHAPE,
                     "message": (
-                        f"Twin {twin_id} is {twin_depth} deep; detection twins are W x H x 1."
+                        f"Class output {twin_id} is {twin_shape[0]}x{twin_shape[1]}x"
+                        f"{twin_shape[2]}; kernel mode output is 1x1x{class_depth}, "
+                        f"matching the class input."
                     ),
                 }
             )
-        if isinstance(twin, dict) and _forwards_value(twin) is False:
+        if isinstance(twin, dict) and _forwards_value(twin) is True:
             findings.append(
                 {
                     "severity": "warning",
-                    "code": CODE_TWIN_NOT_FORWARDING,
+                    "code": CODE_KERNEL_OUTPUT_FORWARDS,
                     "message": (
-                        f"Twin {twin_id} has mp_driven_psp off; downstream areas receive a flat "
-                        f"PSP instead of the class value."
+                        f"Class output {twin_id} has mp_driven_psp on; kernel mode reports "
+                        f"the class as depth z, not as potential."
                     ),
-                    "fix": {"cortical_id": twin_id, "updates": {"neuron_mp_driven_psp": True}},
+                    "fix": {"cortical_id": twin_id, "updates": {"neuron_mp_driven_psp": False}},
                 }
             )
     return findings

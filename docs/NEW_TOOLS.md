@@ -135,6 +135,17 @@ One call for assembly + scan readiness. Do not walk `list_cortical_areas` / `get
 `twin_not_forwarding_value` (twin `mp_driven_psp` off, with a fix payload). Errors are also
 added to `scan_blockers` and clear `scan_ready`.
 
+Memory slots carry `episodic_upstream` and `scan_sources`, derived locally from the mapping table.
+They also carry lifetime `created_total` / `deleted_total` from one `health_check` call.
+`memory_findings` flags `memory_no_episodic_upstream`, which is an error and a scan blocker for
+kernel memory: only `episodic_memory` creates neurons, and a scan-only edge leaves memory empty.
+It also flags `memory_neurons_expire_unmatched`, a warning raised when neurons were created but
+none survived or became long-term. `get_memory_area_runtime_config` returns the same fields for
+any memory area.
+
+`get_connectivity_summary` adds `edge_morphologies` to every row on a src->dst edge that carries
+more than one rule (for example `episodic_memory` plus `episodic_scan`).
+
 ### `create_classifier` / `update_classifier` / `attach_classifier_field`
 
 **Endpoints**: `POST /v1/cortical_area/classifier`, `PUT /v1/cortical_area/classifier/{id}`,

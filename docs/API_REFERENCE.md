@@ -241,9 +241,12 @@ slots, the four required mappings, memory ST/LT counts, and scan blockers.
     "missing_slots": list[str],
     "missing_mappings": list[str],
     "twin_visible": bool,
+    "memory_findings": [{"slot": str, "severity": str, "code": str, "message": str}, ...],
     "scan_blockers": list[str],
     "scan_ready": bool,
 }
+# slots["kernel_memory"] / slots["class_memory"] also include
+# episodic_upstream, scan_sources, created_total, deleted_total.
 ```
 
 **Example:**

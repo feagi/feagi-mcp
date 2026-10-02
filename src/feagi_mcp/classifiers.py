@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from feagi_mcp.memory_diagnostics import memory_area_diagnostics
 from feagi_mcp.value_coding import classifier_value_findings
 
 CLASSIFIER_LIST_KEYS: tuple[str, ...] = (
@@ -274,8 +275,13 @@ def build_classifier_inspect(
     areas: list[dict[str, Any]],
     mapping_items: list[dict[str, Any]],
     memory_runtime: dict[str, dict[str, Any]] | None = None,
+    memory_area_stats: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Project classifier + slots + mappings + scan blockers."""
+    """Project classifier + slots + mappings + scan blockers.
+
+    ``memory_area_stats`` is the health_check block keyed by cortical id; it adds
+    lifetime create/delete totals to each memory slot.
+    """
     catalog = _catalog_by_id(areas)
     slots: dict[str, dict[str, Any]] = {}
     slot_ids: dict[str, str | None] = {}
@@ -311,8 +317,21 @@ def build_classifier_inspect(
         if not present:
             missing_mappings.append(role)
 
+    memory_findings: list[dict[str, Any]] = []
     for memory_role in ("kernel_memory", "class_memory"):
-        _attach_memory_runtime(slots[memory_role], memory_runtime)
+        slot = slots[memory_role]
+        _attach_memory_runtime(slot, memory_runtime)
+        if not slot.get("present"):
+            continue
+        diagnostics = memory_area_diagnostics(
+            str(slot["area_id"]),
+            mapping_items,
+            memory_area_stats,
+            slot.get("long_term_neuron_count"),
+        )
+        for finding in diagnostics.pop("findings"):
+            memory_findings.append({"slot": memory_role, **finding})
+        slot.update(diagnostics)
 
     kernel_memory_id = slot_ids.get("kernel_memory")
     field_rows: list[dict[str, Any]] = []
@@ -321,6 +340,14 @@ def build_classifier_inspect(
         missing_slots,
         missing_mappings,
     )
+    kernel_memory_errors = [
+        f["code"]
+        for f in memory_findings
+        if f["slot"] == "kernel_memory" and f["severity"] == "error"
+    ]
+    for code in kernel_memory_errors:
+        if code not in blockers:
+            blockers.append(code)
     for binding in classifier_field_bindings(classifier):
         field_slot = resolve_classifier_slot("field_area", binding["field_area_id"], catalog)
         twin_slot = resolve_classifier_slot("scan_twin", binding["scan_twin_id"], catalog)
@@ -396,8 +423,10 @@ def build_classifier_inspect(
         "missing_mappings": missing_mappings,
         "twin_visible": bool(field_rows) and all(row["twin_visible"] for row in field_rows),
         "value_findings": value_findings,
+        "memory_findings": memory_findings,
         "scan_blockers": blockers,
         "scan_ready": bool(field_rows)
         and all(row["scan_ready"] for row in field_rows)
-        and not any(f["severity"] == "error" for f in value_findings),
+        and not any(f["severity"] == "error" for f in value_findings)
+        and not kernel_memory_errors,
     }

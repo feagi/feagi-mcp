@@ -11,6 +11,8 @@ from feagi_mcp.classifiers import build_classifier_inspect
 from feagi_mcp.feagi_client import FeagiClient
 from feagi_mcp.value_coding import (
     CODE_CLASS_COUNT_MISSING,
+    CODE_KERNEL_OUTPUT_FORWARDS,
+    CODE_KERNEL_OUTPUT_SHAPE,
     CODE_MASK_NOT_SINGLE_LAYER,
     CODE_THRESHOLD_ABOVE_SMALLEST_CLASS,
     CODE_TWIN_NOT_FORWARDING,
@@ -185,6 +187,22 @@ class TestClassifierValueFindings:
             CODE_TWIN_NOT_SINGLE_LAYER,
             CODE_TWIN_NOT_FORWARDING,
         }
+
+    def test_kernel_output_must_match_the_class_input(self) -> None:
+        classifier = {
+            "training_mode": "kernel",
+            "class_area_id": "class",
+            "fields": [{"field_area_id": "field", "scan_twin_id": "twin"}],
+        }
+        catalog = {
+            "class": {"cortical_dimensions": [1, 1, 10]},
+            "twin": {
+                "cortical_dimensions": [13, 13, 1],
+                "neuron_mp_driven_psp": True,
+            },
+        }
+        codes = {item["code"] for item in classifier_value_findings(classifier, catalog, ["twin"])}
+        assert codes == {CODE_KERNEL_OUTPUT_SHAPE, CODE_KERNEL_OUTPUT_FORWARDS}
 
     def test_inspect_blocks_scanning_on_value_errors(self) -> None:
         areas = [

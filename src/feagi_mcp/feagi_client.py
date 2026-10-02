@@ -62,6 +62,7 @@ from feagi_mcp.io_naming_provenance import (
     summarize_motor_groups_from_registrations,
 )
 from feagi_mcp.io_passthrough import edge_voxel, evaluate_magnitude_passthrough
+from feagi_mcp.memory_diagnostics import annotate_shared_edges
 from feagi_mcp.placement_policy import (
     check_min_separation_to_existing,
     check_origin_exclusion,
@@ -1495,7 +1496,15 @@ class FeagiClient:
                 return memory_page
             if isinstance(memory_page, dict):
                 memory_runtime[memory_id] = memory_page
-        return build_classifier_inspect(record, areas, items, memory_runtime)
+        health = await self.health_check()
+        memory_area_stats = health.get("memory_area_stats") if isinstance(health, dict) else None
+        return build_classifier_inspect(
+            record,
+            areas,
+            items,
+            memory_runtime,
+            memory_area_stats if isinstance(memory_area_stats, dict) else None,
+        )
 
     async def list_morphologies(self) -> dict[str, Any]:
         """Get all morphology definitions including connectivity rules."""
@@ -3395,7 +3404,7 @@ class FeagiClient:
     async def attach_classifier_field(
         self, classifier_id: str, field_area_id: str
     ) -> dict[str, Any]:
-        """Bind an image field to a classifier; FEAGI creates its W x H x 1 detection twin."""
+        """Bind an image field to a classifier and create its class output."""
         cleaned = (classifier_id or "").strip()
         field = (field_area_id or "").strip()
         if not cleaned or not field:
@@ -4972,6 +4981,7 @@ class FeagiClient:
                             }
                         )
             rows.sort(key=lambda r: (r["src"], r["dst"], str(r["morphology"])))
+            annotate_shared_edges(rows)
             total_filtered = len(rows)
             window = rows[offset : offset + limit]
             return {

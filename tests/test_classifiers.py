@@ -37,7 +37,7 @@ def _areas() -> list[dict]:
             "cortical_id": "kernel",
             "cortical_name": "turn_right",
             "cortical_type": "custom",
-            "cortical_dimensions": [1, 1, 1],
+            "cortical_dimensions": [4, 4, 1],
             "visible": True,
             "coordinates_3d": [0, 0, 0],
             "parent_region_id": "region-1",
@@ -47,14 +47,14 @@ def _areas() -> list[dict]:
             "cortical_id": "class",
             "name": "backward",
             "cortical_type": "custom",
-            "cortical_dimensions": [2, 3, 1],
+            "cortical_dimensions": [1, 1, 3],
             "visible": True,
         },
         {
             "cortical_id": "field",
             "cortical_name": "turn_left",
             "cortical_type": "custom",
-            "cortical_dimensions": [10, 6, 1],
+            "cortical_dimensions": [4, 4, 1],
             "visible": True,
             "neuron_burst_engine_active": True,
         },
@@ -74,9 +74,10 @@ def _areas() -> list[dict]:
         },
         {
             "cortical_id": "twin",
-            "cortical_name": "Ela joon_twin",
+            "cortical_name": "Ela joon class output",
             "cortical_type": "custom",
-            "cortical_dimensions": [10, 6, 1],
+            "cortical_dimensions": [1, 1, 3],
+            "neuron_mp_driven_psp": False,
             "visible": True,
             "coordinates_3d": [-35, 0, 5],
             "neuron_burst_engine_active": True,
@@ -132,8 +133,8 @@ def test_filter_and_select_classifier() -> None:
 def test_inspect_reports_twin_and_required_mappings() -> None:
     payload = build_classifier_inspect(_classifier(), _areas(), _mappings())
     assert payload["twin_visible"] is True
-    assert payload["fields"][0]["scan_twin"]["name"] == "Ela joon_twin"
-    assert payload["fields"][0]["scan_twin"]["cortical_dimensions"] == [10, 6, 1]
+    assert payload["fields"][0]["scan_twin"]["name"] == "Ela joon class output"
+    assert payload["fields"][0]["scan_twin"]["cortical_dimensions"] == [1, 1, 3]
     assert payload["value_findings"] == []
     assert payload["missing_slots"] == []
     assert payload["missing_mappings"] == []
@@ -188,6 +189,36 @@ def test_inspect_reports_scan_blockers_for_ltm_and_burst() -> None:
     assert "kernel_memory_no_ltm" in blockers
 
 
+def test_inspect_flags_kernel_memory_fed_only_by_scan() -> None:
+    mappings = [row for row in _mappings() if not (row["src"] == "kernel" and row["dst"] == "kmem")]
+    mappings.append({"src": "kernel", "dst": "kmem", "morphology": "episodic_scan"})
+    payload = build_classifier_inspect(_classifier(), _areas(), mappings)
+    kmem = payload["slots"]["kernel_memory"]
+    assert kmem["episodic_upstream"] == []
+    assert kmem["scan_sources"] == ["field", "kernel"]
+    assert payload["slots"]["class_memory"]["episodic_upstream"] == ["class"]
+    assert "memory_no_episodic_upstream" in payload["scan_blockers"]
+    assert payload["memory_findings"][0]["slot"] == "kernel_memory"
+    assert payload["scan_ready"] is False
+
+
+def test_inspect_attaches_lifecycle_totals_and_churn_finding() -> None:
+    payload = build_classifier_inspect(
+        _classifier(),
+        _areas(),
+        _mappings(),
+        {"kmem": {"short_term_neuron_count": 0, "long_term_neuron_count": 0}},
+        {"kmem": {"created_total": 12, "deleted_total": 12, "neuron_count": 0}},
+    )
+    kmem = payload["slots"]["kernel_memory"]
+    assert kmem["created_total"] == 12
+    assert kmem["deleted_total"] == 12
+    assert kmem["episodic_upstream"] == ["kernel"]
+    codes = [(f["slot"], f["code"]) for f in payload["memory_findings"]]
+    assert codes == [("kernel_memory", "memory_neurons_expire_unmatched")]
+    assert "memory_neurons_expire_unmatched" not in payload["scan_blockers"]
+
+
 @pytest.mark.asyncio
 async def test_client_list_classifiers_filters_locally() -> None:
     client = FeagiClient()
@@ -229,12 +260,24 @@ async def test_client_inspect_classifier_uses_one_assembly_payload() -> None:
             "memory_parameters": {"init_lifespan": 9, "longterm_mem_threshold": 100},
         }
     )
+    client.health_check = AsyncMock(
+        return_value={
+            "status": "ok",
+            "memory_area_stats": {
+                "kmem": {"created_total": 5, "deleted_total": 3, "neuron_count": 2}
+            },
+        }
+    )
     payload = await client.inspect_classifier(classifier_id="clf-1")
     assert payload["classifier"]["name"] == "Ela joon"
     assert payload["twin_visible"] is True
     assert payload["missing_mappings"] == []
     assert payload["scan_ready"] is True
+    assert payload["memory_findings"] == []
+    assert payload["slots"]["kernel_memory"]["created_total"] == 5
+    assert payload["slots"]["class_memory"]["created_total"] is None
     assert client.list_memory_neurons.await_count == 2
+    client.health_check.assert_awaited_once()
 
 
 @pytest.mark.asyncio

@@ -183,6 +183,62 @@ class TestVersionInfo:
 class TestMemoryAreaRuntimeConfigTool:
     """Runtime memory lifecycle config tool (single-source diagnostic payload)."""
 
+    @pytest.fixture(autouse=True)
+    def _wiring_and_health(self, monkeypatch):
+        """Stub the mapping table and health_check; tests override per case."""
+        from feagi_mcp import server
+
+        self.mapping_items = [{"src": "upstream", "dst": "mem_id", "morphology": "episodic_memory"}]
+        self.memory_area_stats: dict[str, Any] = {}
+
+        async def fake_summary(**kwargs):
+            assert kwargs["dst_filter"] == "mem_id"
+            return {"items": self.mapping_items}
+
+        async def fake_health():
+            return {"status": "ok", "memory_area_stats": self.memory_area_stats}
+
+        monkeypatch.setattr(server.feagi, "get_connectivity_summary", fake_summary)
+        monkeypatch.setattr(server.feagi, "health_check", fake_health)
+
+    @pytest.mark.asyncio
+    async def test_reports_upstream_totals_and_findings(self, monkeypatch):
+        """Scan-only wiring and full churn both surface as findings with totals."""
+        server = self._patch_memory_endpoints(monkeypatch, {}, None)
+        self.mapping_items = [{"src": "field", "dst": "mem_id", "morphology": "episodic_scan"}]
+        self.memory_area_stats = {
+            "mem_id": {"created_total": 9, "deleted_total": 9, "neuron_count": 0}
+        }
+        result = await server.get_memory_area_runtime_config("mem_id")
+        assert result["episodic_upstream"] == []
+        assert result["scan_sources"] == ["field"]
+        assert result["lifecycle_totals"] == {"created_total": 9, "deleted_total": 9}
+        assert [f["code"] for f in result["findings"]] == [
+            "memory_no_episodic_upstream",
+            "memory_neurons_expire_unmatched",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_healthy_wiring_has_no_findings(self, monkeypatch):
+        """An episodic_memory source and no stats yield no findings and unknown totals."""
+        server = self._patch_memory_endpoints(monkeypatch, {}, None)
+        result = await server.get_memory_area_runtime_config("mem_id")
+        assert result["episodic_upstream"] == ["upstream"]
+        assert result["lifecycle_totals"] == {"created_total": None, "deleted_total": None}
+        assert result["findings"] == []
+
+    @pytest.mark.asyncio
+    async def test_mapping_table_error_is_returned(self, monkeypatch):
+        """A failed mapping read is reported, not treated as an empty upstream list."""
+        server = self._patch_memory_endpoints(monkeypatch, {}, None)
+
+        async def failing_summary(**_kwargs):
+            return {"error": "boom"}
+
+        monkeypatch.setattr(server.feagi, "get_connectivity_summary", failing_summary)
+        result = await server.get_memory_area_runtime_config("mem_id")
+        assert result["error"] == "mapping_table_unavailable"
+
     @pytest.mark.asyncio
     async def test_prefers_runtime_memory_parameters(self, monkeypatch):
         """Runtime memory params should win when both endpoints provide values."""

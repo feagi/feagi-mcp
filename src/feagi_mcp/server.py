@@ -23,6 +23,7 @@ from feagi_mcp.genome_artifact import (
     is_genome_artifact_file_name,
 )
 from feagi_mcp.io_cortical_id_encode import encode_io_cortical_id
+from feagi_mcp.memory_diagnostics import memory_area_diagnostics
 from feagi_mcp.mujoco_scene_control import MujocoSceneControl, scene_object_payload
 from feagi_mcp.placement_policy import (
     LAYOUT_XY_PLANE,
@@ -198,6 +199,10 @@ async def get_memory_area_runtime_config(cortical_id: str, page_size: int = 1) -
     - Effective lifecycle values (init lifespan, growth rate, LT threshold).
     - Source attribution for each lifecycle value (runtime vs cortical properties).
     - Consistency checks to flag mismatched values between endpoint surfaces.
+    - ``lifecycle_totals``: lifetime created/deleted neurons from health_check.
+    - ``episodic_upstream`` / ``scan_sources``: inbound areas by morphology. Only
+      ``episodic_memory`` sources create neurons; ``findings`` flags an area with none,
+      and an area whose neurons all expired before reaching long-term.
     - ``mp_encoding``: configured vs. effective MP mode (``pattern_only``, ``mp_learning``,
       ``mp_differential``, ``mp_ratio``), ``auto_disabled`` when a change mode was dropped
       because temporal_depth < 2, ``replay_enabled`` (off in change modes), and the active
@@ -286,6 +291,22 @@ async def get_memory_area_runtime_config(cortical_id: str, page_size: int = 1) -
     lt_count = int(memory_runtime.get("long_term_neuron_count", 0))
     total_count = int(memory_runtime.get("total_memory_neuron_ids", 0))
 
+    inbound = await feagi.get_connectivity_summary(dst_filter=cortical_id, limit=2000)
+    if not isinstance(inbound, dict) or inbound.get("error"):
+        return {
+            "error": "mapping_table_unavailable",
+            "cortical_id": cortical_id,
+            "details": inbound,
+        }
+    health = await feagi.health_check()
+    memory_area_stats = health.get("memory_area_stats") if isinstance(health, dict) else None
+    diagnostics = memory_area_diagnostics(
+        cortical_id,
+        inbound.get("items", []),
+        memory_area_stats if isinstance(memory_area_stats, dict) else None,
+        lt_count,
+    )
+
     return {
         "cortical_id": cortical_id,
         "cortical_name": memory_runtime.get("cortical_name") or area.get("cortical_name"),
@@ -295,6 +316,13 @@ async def get_memory_area_runtime_config(cortical_id: str, page_size: int = 1) -
             "long_term_neuron_count": lt_count,
             "total_memory_neuron_ids": total_count,
         },
+        "lifecycle_totals": {
+            "created_total": diagnostics["created_total"],
+            "deleted_total": diagnostics["deleted_total"],
+        },
+        "episodic_upstream": diagnostics["episodic_upstream"],
+        "scan_sources": diagnostics["scan_sources"],
+        "findings": diagnostics["findings"],
         "effective_lifecycle": {
             "init_lifespan": {"value": effective_init, "source": init_source},
             "lifespan_growth_rate": {"value": effective_growth, "source": growth_source},
@@ -616,6 +644,8 @@ async def inspect_classifier(
 
     Resolves kernel/class/field inputs, owned memory internals, the class-map
     twin, required mappings, memory ST/LT counts, and ``scan_blockers``.
+    Memory slots also carry ``episodic_upstream``, ``scan_sources``, and
+    lifetime ``created_total``/``deleted_total``.
     Use this before walking areas, mappings, or memory lists one by one.
 
     Args:
@@ -624,8 +654,8 @@ async def inspect_classifier(
 
     Returns:
         ``classifier``, ``slots``, ``mappings``, ``missing_slots``,
-        ``missing_mappings``, ``twin_visible``, ``scan_blockers``,
-        and ``scan_ready``.
+        ``missing_mappings``, ``twin_visible``, ``memory_findings``,
+        ``scan_blockers``, and ``scan_ready``.
     """
     return await feagi.inspect_classifier(
         classifier_id=classifier_id,
@@ -1899,7 +1929,9 @@ async def create_classifier(
     Scanner mode: a ``W x H x 1`` ``mask_area_id`` whose pixels carry
     ``(class_id + 1) / class_count`` as potential, ``kernel_size`` ``[x, y, z]`` with ``z``
     equal to the field depth, and ``class_count`` (1..9999). Attach image fields afterwards
-    with ``attach_classifier_field``; each gets a ``W x H x 1`` detection twin.
+    with ``attach_classifier_field``. Kernel mode creates a ``1x1xn`` class output
+    (depth ``z`` fires for class ``z``) and the field must match the kernel area.
+    Scanner mode creates a ``W x H x 1`` class output that carries the class as potential.
 
     Returns:
         ``classifier_id``, ``kernel_memory_id``, ``class_memory_id``.
@@ -1932,10 +1964,13 @@ async def update_classifier(classifier_id: str, updates: dict[str, Any]) -> dict
 
 @mcp.tool()
 async def attach_classifier_field(classifier_id: str, field_area_id: str) -> dict[str, Any]:
-    """Bind an image field to a classifier; FEAGI creates its ``W x H x 1`` detection twin.
+    """Bind an image field to a classifier and create that field's class output.
 
-    The twin forwards its class value (``mp_driven_psp`` on). Route it to an OPU with
-    ``wire_value_passthrough(twin, oseg, class_count=...)``.
+    Kernel mode requires the field to match the kernel area and creates a ``1x1xn``
+    output named ``{classifier} class output``. Depth ``z`` fires for class ``z``.
+    Scanner mode creates a ``W x H x 1`` output that forwards its class potential
+    (``mp_driven_psp`` on). Route a scanner output to an OPU with
+    ``wire_value_passthrough(output, oseg, class_count=...)``.
     """
     return await feagi.attach_classifier_field(classifier_id, field_area_id)
 
@@ -3256,7 +3291,8 @@ async def get_connectivity_summary(
     Slim alternative to ``get_connectivity`` (which expands every blueprint key for
     a single src->dst pair). Returns a flat sorted list across all mapping rules so
     the LLM can scan src/dst topology in one shot. Filters match cortical IDs as
-    substrings before pagination.
+    substrings before pagination. Rows on an edge that carries more than one rule
+    include ``edge_morphologies`` (all rules on that src->dst pair).
     """
     return await feagi.get_connectivity_summary(
         src_filter=src_filter,

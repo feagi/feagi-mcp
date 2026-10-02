@@ -163,6 +163,10 @@ class TestGetConnectivitySummary:
         assert ("src_a", "dst_x", "all_to_all") in names
         required_keys = {"src", "dst", "morphology", "psc_mult", "plasticity"}
         assert all(set(r.keys()) >= required_keys for r in out["items"])
+        shared = [r for r in out["items"] if r["src"] == "src_a" and r["dst"] == "dst_x"]
+        assert all(r["edge_morphologies"] == ["all_to_all", "lateral_+x"] for r in shared)
+        single = [r for r in out["items"] if (r["src"], r["dst"]) != ("src_a", "dst_x")]
+        assert all("edge_morphologies" not in r for r in single)
 
     @pytest.mark.asyncio
     async def test_filters_and_pagination(self, mock_client):
