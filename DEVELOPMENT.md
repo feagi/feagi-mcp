@@ -159,10 +159,12 @@ asyncio.run(test())
 3. Write docstrings in Google style
 4. Add tests for new tools
 5. Update README.md when adding features
-6. Run linters before committing:
+6. Install pre-commit once (`pip install -e ".[dev]" && pre-commit install`); hooks run
+   **ruff 0.16.10** with the same commands as CI (`ruff check .`, `ruff format --check .`).
+   Or run linters manually:
    ```bash
    ruff check .
-   ruff format .
+   ruff format --check .
    mypy src/
    ```
 

@@ -1,0 +1,12 @@
+# Ruff version must stay aligned with [project.optional-dependencies].dev in pyproject.toml
+# and with .github/workflows/ci.yml (pip install -e ".[dev]" then ruff check / ruff format --check).
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-ci
+        name: ruff check + format --check (CI parity)
+        entry: bash -c 'ruff check . && ruff format --check .'
+        language: python
+        additional_dependencies: [ruff==0.16.10]
+        pass_filenames: false
+        always_run: true

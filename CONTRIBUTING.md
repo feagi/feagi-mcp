@@ -24,7 +24,18 @@ source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -e ".[dev]"
 ```
 
-### 4. Verify Setup
+### 4. Install pre-commit (recommended)
+
+Uses the same **ruff 0.16.10** as CI (`ruff check .` and `ruff format --check .`):
+
+```bash
+pip install -e ".[dev]"
+pre-commit install
+```
+
+Hooks run automatically on `git commit`. Run manually: `pre-commit run --all-files`.
+
+### 5. Verify Setup
 
 ```bash
 pytest

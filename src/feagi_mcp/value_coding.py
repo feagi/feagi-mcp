@@ -339,11 +339,7 @@ def classifier_value_findings(
                 )
             continue
         twin_shape = _dimensions(twin)
-        if (
-            class_depth is not None
-            and twin_shape is not None
-            and twin_shape != [1, 1, class_depth]
-        ):
+        if class_depth is not None and twin_shape is not None and twin_shape != [1, 1, class_depth]:
             findings.append(
                 {
                     "severity": "error",
