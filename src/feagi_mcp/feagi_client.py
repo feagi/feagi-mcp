@@ -1090,7 +1090,9 @@ class FeagiClient:
         """
         self.base_url = f"http://{host}:{port}"
         self.timeout = timeout
-        self._client = httpx.AsyncClient(timeout=timeout)
+        agent_id = os.environ.get("FEAGI_AGENT_ID", "").strip()
+        headers = {"X-FEAGI-Agent-Id": agent_id} if agent_id else {}
+        self._client = httpx.AsyncClient(timeout=timeout, headers=headers)
 
     async def close(self) -> None:
         """Close the HTTP client."""
