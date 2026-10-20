@@ -978,9 +978,7 @@ async def delete_modulator(modulator_id: str, force: bool = False) -> dict[str, 
 @mcp.tool()
 async def set_area_modulators(cortical_id: str, modulator_ids: list[str]) -> dict[str, Any]:
     """Replace the neuromodulator subscriptions on a cortical area."""
-    return await feagi.update_cortical_area(
-        cortical_id, {"modulators": modulator_ids}
-    )
+    return await feagi.update_cortical_area(cortical_id, {"modulators": modulator_ids})
 
 
 @mcp.tool()
@@ -1000,9 +998,7 @@ async def set_mapping_modulators(
 
     ``morphology_id`` limits the write to one rule when several rules share the pair.
     """
-    return await feagi.set_mapping_modulators(
-        src_area, dst_area, modulator_ids, morphology_id
-    )
+    return await feagi.set_mapping_modulators(src_area, dst_area, modulator_ids, morphology_id)
 
 
 @mcp.tool()

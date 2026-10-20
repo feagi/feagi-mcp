@@ -306,4 +306,3 @@ def classifier_value_findings(
                 }
             )
     return findings
-

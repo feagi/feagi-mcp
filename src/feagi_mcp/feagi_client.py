@@ -1742,9 +1742,7 @@ class FeagiClient:
 
     async def get_modulator(self, modulator_id: str) -> dict[str, Any]:
         """Read one modulator instance."""
-        return await self._modulator_request(
-            "GET", f"/v1/modulator/modulator/{modulator_id}"
-        )
+        return await self._modulator_request("GET", f"/v1/modulator/modulator/{modulator_id}")
 
     async def create_modulator(
         self, modulator_id: str, definition: dict[str, Any]
@@ -1778,9 +1776,7 @@ class FeagiClient:
 
     async def modulator_usage(self, modulator_id: str) -> dict[str, Any]:
         """List areas and mappings subscribed to a modulator."""
-        return await self._modulator_request(
-            "GET", f"/v1/modulator/usage/{modulator_id}"
-        )
+        return await self._modulator_request("GET", f"/v1/modulator/usage/{modulator_id}")
 
     async def delete_modulator(self, modulator_id: str, force: bool = False) -> dict[str, Any]:
         """Delete a modulator. ``force`` removes subscriptions first."""
@@ -1854,11 +1850,15 @@ class FeagiClient:
                 copied["modulators"] = list(modulator_ids)
             else:
                 current = copied.get("modulators")
-                kept = [
-                    item
-                    for item in current
-                    if isinstance(item, str) and item not in modulator_ids
-                ] if isinstance(current, list) else []
+                kept = (
+                    [
+                        item
+                        for item in current
+                        if isinstance(item, str) and item not in modulator_ids
+                    ]
+                    if isinstance(current, list)
+                    else []
+                )
                 copied["modulators"] = kept
             updated.append(copied)
             touched += 1

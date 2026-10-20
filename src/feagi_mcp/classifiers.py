@@ -54,9 +54,7 @@ def classifier_class_bindings(record: dict[str, Any]) -> list[dict[str, str]]:
         class_id = str(item.get("class_area_id", "")).strip()
         output_id = str(item.get("class_output_area_id", "")).strip()
         if class_id:
-            bindings.append(
-                {"class_area_id": class_id, "class_output_area_id": output_id}
-            )
+            bindings.append({"class_area_id": class_id, "class_output_area_id": output_id})
     return bindings
 
 
@@ -329,9 +327,7 @@ def build_classifier_inspect(
             blockers.append(code)
     for sample_id in classifier_sample_ids(classifier):
         morphologies = (
-            mapping_lookup.get((sample_id, str(sample_memory_id)), [])
-            if sample_memory_id
-            else []
+            mapping_lookup.get((sample_id, str(sample_memory_id)), []) if sample_memory_id else []
         )
         present = "classifier_sample" in morphologies
         mappings.append(

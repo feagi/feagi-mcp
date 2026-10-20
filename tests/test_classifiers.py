@@ -103,9 +103,7 @@ def _mappings() -> list[dict]:
 def test_project_classifier_row_drops_properties() -> None:
     row = project_classifier_row(_classifier())
     assert row["classifier_id"] == "clf-1"
-    assert row["class_bindings"] == [
-        {"class_area_id": "class", "class_output_area_id": "twin"}
-    ]
+    assert row["class_bindings"] == [{"class_area_id": "class", "class_output_area_id": "twin"}]
     assert "properties" not in row
     assert "training_mode" not in row
 
