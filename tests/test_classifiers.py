@@ -21,12 +21,11 @@ def _classifier() -> dict:
         "name": "Ela joon",
         "parent_region_id": "region-1",
         "coordinates_3d": [-29, 57, 10],
-        "kernel_area_id": "kernel",
-        "class_area_id": "class",
-        "field_area_id": "field",
-        "kernel_memory_id": "kmem",
+        "sample_area_ids": ["kernel"],
+        "class_bindings": [{"class_area_id": "class", "class_output_area_id": "twin"}],
+        "sample_memory_id": "kmem",
         "class_memory_id": "cmem",
-        "scan_twin_id": "twin",
+        "error_area_id": "err",
         "properties": {},
     }
 
@@ -59,8 +58,15 @@ def _areas() -> list[dict]:
             "neuron_burst_engine_active": True,
         },
         {
+            "cortical_id": "err",
+            "cortical_name": "Ela joon error",
+            "cortical_type": "custom",
+            "cortical_dimensions": [1, 1, 1],
+            "visible": True,
+        },
+        {
             "cortical_id": "kmem",
-            "cortical_name": "Ela joon_kernel_mem",
+            "cortical_name": "Ela joon_sample_mem",
             "cortical_type": "memory",
             "cortical_dimensions": [1, 1, 1],
             "visible": True,
@@ -88,32 +94,26 @@ def _areas() -> list[dict]:
 
 def _mappings() -> list[dict]:
     return [
-        {"src": "kernel", "dst": "kmem", "morphology": "episodic_memory"},
-        {"src": "class", "dst": "cmem", "morphology": "episodic_memory"},
+        {"src": "kernel", "dst": "kmem", "morphology": "classifier_sample"},
+        {"src": "class", "dst": "cmem", "morphology": "classifier_class"},
         {"src": "kmem", "dst": "cmem", "morphology": "associative_memory"},
-        {"src": "field", "dst": "kmem", "morphology": "episodic_scan"},
     ]
 
 
 def test_project_classifier_row_drops_properties() -> None:
     row = project_classifier_row(_classifier())
     assert row["classifier_id"] == "clf-1"
-    assert row["fields"] == [{"field_area_id": "field", "scan_twin_id": "twin"}]
+    assert row["class_bindings"] == [
+        {"class_area_id": "class", "class_output_area_id": "twin"}
+    ]
     assert "properties" not in row
-    assert "scan_twin_id" not in row
+    assert "training_mode" not in row
 
 
-def test_project_classifier_row_keeps_scanner_class_count() -> None:
-    scanner = {
-        **_classifier(),
-        "training_mode": "scanner",
-        "mask_area_id": "mask",
-        "kernel_size": [8, 8, 3],
-        "class_count": 19,
-    }
-    row = project_classifier_row(scanner)
-    assert row["class_count"] == 19
-    assert row["mask_area_id"] == "mask"
+def test_project_classifier_row_keeps_error_area() -> None:
+    row = project_classifier_row(_classifier())
+    assert row["error_area_id"] == "err"
+    assert row["sample_memory_id"] == "kmem"
 
 
 def test_filter_and_select_classifier() -> None:
@@ -132,31 +132,28 @@ def test_filter_and_select_classifier() -> None:
 
 def test_inspect_reports_twin_and_required_mappings() -> None:
     payload = build_classifier_inspect(_classifier(), _areas(), _mappings())
-    assert payload["twin_visible"] is True
-    assert payload["fields"][0]["scan_twin"]["name"] == "Ela joon class output"
-    assert payload["fields"][0]["scan_twin"]["cortical_dimensions"] == [1, 1, 3]
+    assert payload["outputs_visible"] is True
+    assert payload["class_bindings"][0]["class_output"]["name"] == "Ela joon class output"
+    assert payload["class_bindings"][0]["class_output"]["cortical_dimensions"] == [1, 1, 3]
     assert payload["value_findings"] == []
     assert payload["missing_slots"] == []
     assert payload["missing_mappings"] == []
     roles = [row["role"] for row in payload["mappings"]]
     assert roles == [
-        "kernel_to_kernel_mem",
+        "sample_mem_to_class_mem",
+        "sample_to_sample_mem",
         "class_to_class_mem",
-        "kernel_mem_to_class_mem",
-        "field_to_kernel_mem",
     ]
 
 
-def test_inspect_flags_missing_twin_and_scan_mapping() -> None:
+def test_inspect_flags_missing_class_output() -> None:
     classifier = _classifier()
-    classifier["field_area_id"] = ""
-    classifier["scan_twin_id"] = ""
-    mappings = [row for row in _mappings() if row["morphology"] != "episodic_scan"]
+    classifier["class_bindings"] = [{"class_area_id": "class", "class_output_area_id": ""}]
+    mappings = [row for row in _mappings() if row["morphology"] != "classifier_class"]
     payload = build_classifier_inspect(classifier, _areas(), mappings)
-    assert payload["twin_visible"] is False
-    assert payload["fields"] == []
-    assert "no_field_mappings" in payload["scan_blockers"]
-    assert payload["scan_ready"] is False
+    assert payload["outputs_visible"] is False
+    assert "class_output_missing" in payload["blockers"]
+    assert payload["ready"] is False
 
 
 def test_inspect_reports_scan_blockers_for_ltm_and_burst() -> None:
@@ -179,27 +176,24 @@ def test_inspect_reports_scan_blockers_for_ltm_and_burst() -> None:
             }
         },
     )
-    assert payload["slots"]["kernel_memory"]["long_term_neuron_count"] == 0
-    assert payload["slots"]["kernel_memory"]["init_lifespan"] == 9
-    assert "kernel_memory_no_ltm" in payload["scan_blockers"]
-    assert "field_burst_engine_off" in payload["scan_blockers"]
-    assert "twin_burst_engine_off" in payload["scan_blockers"]
-    assert payload["scan_ready"] is False
+    assert payload["slots"]["sample_memory"]["long_term_neuron_count"] == 0
+    assert payload["slots"]["sample_memory"]["init_lifespan"] == 9
+    assert "sample_memory_no_ltm" in payload["blockers"]
+    assert "class_output_burst_engine_off" in payload["blockers"]
+    assert payload["ready"] is False
     blockers = scan_blockers(payload["slots"], [], [])
-    assert "kernel_memory_no_ltm" in blockers
+    assert "sample_memory_no_ltm" in blockers
 
 
-def test_inspect_flags_kernel_memory_fed_only_by_scan() -> None:
+def test_inspect_flags_sample_memory_without_an_encode() -> None:
     mappings = [row for row in _mappings() if not (row["src"] == "kernel" and row["dst"] == "kmem")]
-    mappings.append({"src": "kernel", "dst": "kmem", "morphology": "episodic_scan"})
     payload = build_classifier_inspect(_classifier(), _areas(), mappings)
-    kmem = payload["slots"]["kernel_memory"]
-    assert kmem["episodic_upstream"] == []
-    assert kmem["scan_sources"] == ["field", "kernel"]
+    sample = payload["slots"]["sample_memory"]
+    assert sample["episodic_upstream"] == []
     assert payload["slots"]["class_memory"]["episodic_upstream"] == ["class"]
-    assert "memory_no_episodic_upstream" in payload["scan_blockers"]
-    assert payload["memory_findings"][0]["slot"] == "kernel_memory"
-    assert payload["scan_ready"] is False
+    assert "memory_no_episodic_upstream" in payload["blockers"]
+    assert payload["memory_findings"][0]["slot"] == "sample_memory"
+    assert payload["ready"] is False
 
 
 def test_inspect_attaches_lifecycle_totals_and_churn_finding() -> None:
@@ -210,13 +204,13 @@ def test_inspect_attaches_lifecycle_totals_and_churn_finding() -> None:
         {"kmem": {"short_term_neuron_count": 0, "long_term_neuron_count": 0}},
         {"kmem": {"created_total": 12, "deleted_total": 12, "neuron_count": 0}},
     )
-    kmem = payload["slots"]["kernel_memory"]
-    assert kmem["created_total"] == 12
-    assert kmem["deleted_total"] == 12
-    assert kmem["episodic_upstream"] == ["kernel"]
+    sample = payload["slots"]["sample_memory"]
+    assert sample["created_total"] == 12
+    assert sample["deleted_total"] == 12
+    assert sample["episodic_upstream"] == ["kernel"]
     codes = [(f["slot"], f["code"]) for f in payload["memory_findings"]]
-    assert codes == [("kernel_memory", "memory_neurons_expire_unmatched")]
-    assert "memory_neurons_expire_unmatched" not in payload["scan_blockers"]
+    assert codes == [("sample_memory", "memory_neurons_expire_unmatched")]
+    assert "memory_neurons_expire_unmatched" not in payload["blockers"]
 
 
 @pytest.mark.asyncio
@@ -270,11 +264,11 @@ async def test_client_inspect_classifier_uses_one_assembly_payload() -> None:
     )
     payload = await client.inspect_classifier(classifier_id="clf-1")
     assert payload["classifier"]["name"] == "Ela joon"
-    assert payload["twin_visible"] is True
+    assert payload["outputs_visible"] is True
     assert payload["missing_mappings"] == []
-    assert payload["scan_ready"] is True
+    assert payload["ready"] is True
     assert payload["memory_findings"] == []
-    assert payload["slots"]["kernel_memory"]["created_total"] == 5
+    assert payload["slots"]["sample_memory"]["created_total"] == 5
     assert payload["slots"]["class_memory"]["created_total"] is None
     assert client.list_memory_neurons.await_count == 2
     client.health_check.assert_awaited_once()

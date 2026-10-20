@@ -265,102 +265,45 @@ def _forwards_value(area: dict[str, Any]) -> bool | None:
     return None
 
 
+CODE_CLASS_OUTPUT_SHAPE = "class_output_shape"
+CODE_CLASS_OUTPUT_FORWARDS = "class_output_forwards_value"
+
+
 def classifier_value_findings(
     classifier: dict[str, Any],
     catalog: dict[str, dict[str, Any]],
-    twin_ids: list[str],
 ) -> list[dict[str, Any]]:
-    """Value-coding problems on one classifier: class count, mask, and twin shape."""
+    """Class output must match its class input and must not forward potential."""
     findings: list[dict[str, Any]] = []
-    scanner = str(classifier.get("training_mode", "kernel")).strip() == "scanner"
-    if scanner:
-        count = classifier.get("class_count")
-        if count is None:
-            findings.append(
-                {
-                    "severity": "error",
-                    "code": CODE_CLASS_COUNT_MISSING,
-                    "message": (
-                        "Scanner classifier has no class_count; masks and twins cannot be decoded."
-                    ),
-                }
-            )
-        elif class_count_error(count):
-            findings.append(
-                {
-                    "severity": "error",
-                    "code": CODE_CLASS_COUNT_INVALID,
-                    "message": str(class_count_error(count)),
-                }
-            )
-        mask_id = str(classifier.get("mask_area_id") or "").strip()
-        mask_depth = _depth_of(catalog.get(mask_id)) if mask_id else None
-        if mask_depth is not None and mask_depth != VALUE_PLANE_DEPTH:
-            findings.append(
-                {
-                    "severity": "error",
-                    "code": CODE_MASK_NOT_SINGLE_LAYER,
-                    "message": (
-                        f"Mask {mask_id} is {mask_depth} deep; scanner masks are W x H x 1 "
-                        f"with the class as potential."
-                    ),
-                }
-            )
-    class_depth = None
-    if not scanner:
-        class_id = str(classifier.get("class_area_id") or "").strip()
-        class_depth = _depth_of(catalog.get(class_id)) if class_id else None
-    for twin_id in twin_ids:
-        twin = catalog.get(twin_id)
-        if scanner:
-            twin_depth = _depth_of(twin)
-            if twin_depth is not None and twin_depth != VALUE_PLANE_DEPTH:
-                findings.append(
-                    {
-                        "severity": "error",
-                        "code": CODE_TWIN_NOT_SINGLE_LAYER,
-                        "message": (
-                            f"Twin {twin_id} is {twin_depth} deep; scanner class outputs "
-                            f"are W x H x 1."
-                        ),
-                    }
-                )
-            if isinstance(twin, dict) and _forwards_value(twin) is False:
-                findings.append(
-                    {
-                        "severity": "warning",
-                        "code": CODE_TWIN_NOT_FORWARDING,
-                        "message": (
-                            f"Twin {twin_id} has mp_driven_psp off; downstream areas receive a "
-                            f"flat PSP instead of the class value."
-                        ),
-                        "fix": {"cortical_id": twin_id, "updates": {"neuron_mp_driven_psp": True}},
-                    }
-                )
+    bindings = classifier.get("class_bindings")
+    if not isinstance(bindings, list):
+        return findings
+    for binding in bindings:
+        if not isinstance(binding, dict):
             continue
-        twin_shape = _dimensions(twin)
-        if class_depth is not None and twin_shape is not None and twin_shape != [1, 1, class_depth]:
+        class_id = str(binding.get("class_area_id") or "").strip()
+        output_id = str(binding.get("class_output_area_id") or "").strip()
+        class_dims = _dimensions(catalog.get(class_id)) if class_id else None
+        output_dims = _dimensions(catalog.get(output_id)) if output_id else None
+        if class_dims is not None and output_dims is not None and class_dims != output_dims:
             findings.append(
                 {
                     "severity": "error",
-                    "code": CODE_KERNEL_OUTPUT_SHAPE,
+                    "code": CODE_CLASS_OUTPUT_SHAPE,
                     "message": (
-                        f"Class output {twin_id} is {twin_shape[0]}x{twin_shape[1]}x"
-                        f"{twin_shape[2]}; kernel mode output is 1x1x{class_depth}, "
-                        f"matching the class input."
+                        f"Class output {output_id} is {output_dims}; "
+                        f"class input {class_id} is {class_dims}."
                     ),
                 }
             )
-        if isinstance(twin, dict) and _forwards_value(twin) is True:
+        output = catalog.get(output_id) if output_id else None
+        if isinstance(output, dict) and _forwards_value(output) is True:
             findings.append(
                 {
-                    "severity": "warning",
-                    "code": CODE_KERNEL_OUTPUT_FORWARDS,
-                    "message": (
-                        f"Class output {twin_id} has mp_driven_psp on; kernel mode reports "
-                        f"the class as depth z, not as potential."
-                    ),
-                    "fix": {"cortical_id": twin_id, "updates": {"neuron_mp_driven_psp": False}},
+                    "severity": "error",
+                    "code": CODE_CLASS_OUTPUT_FORWARDS,
+                    "message": f"Class output {output_id} forwards membrane potential.",
                 }
             )
     return findings
+

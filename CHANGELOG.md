@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.21] - 2026-10-20
+
+### Added
+- **`get_region_circuit`**: one brain region as a circuit in one call: recursive
+  members with names and roles, boundary inputs/outputs, `[src, dst]` edges split
+  into internal/incoming/outgoing, and isolated areas. Replaces fetching the full
+  `get_cortical_map_detailed` rule payload plus `get_brain_regions` and joining them
+  by hand. Three public GETs run concurrently; the view is computed locally.
+
+### Changed
+- **Dependencies**: pin `feagi-core==2.2.6` (Python SDK; pins `feagi-rust-py-libs==0.0.117` and Brain Visualizer `2.6.9`).
+
 ## [0.0.20] - 2026-10-02
 
 ### Changed

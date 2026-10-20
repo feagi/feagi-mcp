@@ -212,7 +212,7 @@ List first-class genome classifiers. Filtering is local after one
 - `classifier_id` (str, optional): Exact genome classifier id
 
 **Returns:** Compact rows with id, name, parent region, 3D pose, input area ids,
-and owned `kernel_memory_id` / `class_memory_id` / `scan_twin_id`.
+and owned `sample_memory_id` / `class_memory_id` / `error_area_id`.
 
 **Example:**
 ```python

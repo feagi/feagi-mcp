@@ -67,6 +67,7 @@ from feagi_mcp.placement_policy import (
     check_min_separation_to_existing,
     check_origin_exclusion,
 )
+from feagi_mcp.region_circuit import summarize_region_circuit
 from feagi_mcp.runtime_diagnostics import (
     KIND_RING,
     LOG_READ_MAX_BYTES,
@@ -394,6 +395,18 @@ def mapping_rules_from_area_record(area: dict[str, Any], dst_area: str) -> list[
         rules = mapping_dst.get(dst)
         if isinstance(rules, list):
             return rules
+    return []
+
+
+def _modulator_ids_on_area(area: dict[str, Any]) -> list[str]:
+    """Read an area's neuromodulator subscription list."""
+    bags: list[Any] = [area.get("modulators")]
+    props = area.get("properties")
+    if isinstance(props, dict):
+        bags.append(props.get("modulators"))
+    for bag in bags:
+        if isinstance(bag, list):
+            return [item for item in bag if isinstance(item, str)]
     return []
 
 
@@ -1489,7 +1502,7 @@ class FeagiClient:
             if isinstance(raw_items, list):
                 items = raw_items
         memory_runtime: dict[str, dict[str, Any]] = {}
-        for memory_key in ("kernel_memory_id", "class_memory_id"):
+        for memory_key in ("sample_memory_id", "class_memory_id"):
             memory_id = str(record.get(memory_key, "")).strip()
             if not memory_id:
                 continue
@@ -1718,6 +1731,169 @@ class FeagiClient:
         except Exception as e:
             logger.error(f"create_morphology failed: {e}")
             return {"error": str(e), "success": False}
+
+    async def list_modulator_types(self) -> dict[str, Any]:
+        """List the fixed modulator types from the public API."""
+        return await self._modulator_request("GET", "/v1/modulator/types")
+
+    async def list_modulators(self) -> dict[str, Any]:
+        """List modulator instances in the loaded genome."""
+        return await self._modulator_request("GET", "/v1/modulator/modulators")
+
+    async def get_modulator(self, modulator_id: str) -> dict[str, Any]:
+        """Read one modulator instance."""
+        return await self._modulator_request(
+            "GET", f"/v1/modulator/modulator/{modulator_id}"
+        )
+
+    async def create_modulator(
+        self, modulator_id: str, definition: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Create a modulator instance and its driver area."""
+        return await self._modulator_request(
+            "POST",
+            "/v1/modulator/modulator",
+            params={"modulator_id": modulator_id},
+            json_body=definition,
+        )
+
+    async def update_modulator(
+        self, modulator_id: str, definition: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Update a modulator instance and its driver locked fields."""
+        return await self._modulator_request(
+            "PUT",
+            "/v1/modulator/modulator",
+            params={"modulator_id": modulator_id},
+            json_body=definition,
+        )
+
+    async def rename_modulator(self, old_id: str, new_id: str) -> dict[str, Any]:
+        """Rename a modulator and every subscriber reference."""
+        return await self._modulator_request(
+            "PUT",
+            "/v1/modulator/rename",
+            json_body={"old_modulator_id": old_id, "new_modulator_id": new_id},
+        )
+
+    async def modulator_usage(self, modulator_id: str) -> dict[str, Any]:
+        """List areas and mappings subscribed to a modulator."""
+        return await self._modulator_request(
+            "GET", f"/v1/modulator/usage/{modulator_id}"
+        )
+
+    async def delete_modulator(self, modulator_id: str, force: bool = False) -> dict[str, Any]:
+        """Delete a modulator. ``force`` removes subscriptions first."""
+        return await self._modulator_request(
+            "DELETE",
+            "/v1/modulator/modulator",
+            params={"modulator_id": modulator_id, "force": str(force).lower()},
+        )
+
+    async def set_mapping_modulators(
+        self,
+        src_area: str,
+        dst_area: str,
+        modulator_ids: list[str],
+        morphology_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Replace synaptic modulator subscriptions on mapping rules from src to dst."""
+        return await self._rewrite_mapping_modulators(
+            src_area, dst_area, modulator_ids, morphology_id, replace=True
+        )
+
+    async def unsubscribe_mapping_modulator(
+        self,
+        src_area: str,
+        dst_area: str,
+        modulator_id: str,
+        morphology_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Remove one synaptic modulator subscription from mapping rules."""
+        return await self._rewrite_mapping_modulators(
+            src_area, dst_area, [modulator_id], morphology_id, replace=False
+        )
+
+    async def unsubscribe_area_modulator(
+        self, cortical_id: str, modulator_id: str
+    ) -> dict[str, Any]:
+        """Remove one neuromodulator subscription from a cortical area."""
+        area = await self.fetch_cortical_area_properties(cortical_id)
+        if not isinstance(area, dict) or area.get("error"):
+            return area if isinstance(area, dict) else {"error": "bad_payload"}
+        current = _modulator_ids_on_area(area)
+        remaining = [item for item in current if item != modulator_id]
+        return await self.update_cortical_area(cortical_id, {"modulators": remaining})
+
+    async def _rewrite_mapping_modulators(
+        self,
+        src_area: str,
+        dst_area: str,
+        modulator_ids: list[str],
+        morphology_id: str | None,
+        replace: bool,
+    ) -> dict[str, Any]:
+        """Write ``modulators`` on the stored rules between two areas."""
+        existing = await self.get_cortical_mapping(src_area, dst_area)
+        if not isinstance(existing, dict) or existing.get("error"):
+            return existing if isinstance(existing, dict) else {"error": "bad_payload"}
+        rules = existing.get("rules")
+        if not isinstance(rules, list) or not rules:
+            return {"error": "no mapping rules", "src_area": src_area, "dst_area": dst_area}
+        updated: list[Any] = []
+        touched = 0
+        for rule in rules:
+            if not isinstance(rule, dict):
+                updated.append(rule)
+                continue
+            if morphology_id and rule.get("morphology_id") != morphology_id:
+                updated.append(rule)
+                continue
+            copied = dict(rule)
+            if replace:
+                copied["modulators"] = list(modulator_ids)
+            else:
+                current = copied.get("modulators")
+                kept = [
+                    item
+                    for item in current
+                    if isinstance(item, str) and item not in modulator_ids
+                ] if isinstance(current, list) else []
+                copied["modulators"] = kept
+            updated.append(copied)
+            touched += 1
+        if touched == 0:
+            return {"error": "no matching mapping rule", "morphology_id": morphology_id}
+        return await self.update_cortical_mapping(src_area, dst_area, updated)
+
+    async def _modulator_request(
+        self,
+        method: str,
+        path: str,
+        params: dict[str, Any] | None = None,
+        json_body: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Call a public modulator endpoint and return JSON or an error object."""
+        try:
+            response = await self._client.request(
+                method,
+                f"{self.base_url}{path}",
+                params=params,
+                json=json_body,
+            )
+            if response.status_code == 200:
+                body = response.json()
+                if isinstance(body, dict):
+                    return body
+                return {"result": body}
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+                "success": False,
+            }
+        except Exception as exc:
+            logger.error(f"modulator request {method} {path} failed: {exc}")
+            return {"error": str(exc), "success": False}
 
     async def get_morphology(
         self,
@@ -1956,6 +2132,30 @@ class FeagiClient:
         except Exception as e:
             logger.error(f"get_regions_members failed: {e}")
             return {"error": str(e)}
+
+    async def get_region_circuit(
+        self, region_id: str, include_child_regions: bool = True
+    ) -> dict[str, Any]:
+        """Members, boundary and ``[src, dst]`` edges of one brain region.
+
+        Fetches regions, the mapping graph and area names concurrently, then computes
+        the view locally (see ``region_circuit.summarize_region_circuit``).
+        """
+        regions, cortical_map, names = await asyncio.gather(
+            self.get_regions_members(),
+            self.get_cortical_map_detailed(),
+            self.get_cortical_id_name_mapping(),
+        )
+        for label, payload in (
+            ("regions_members", regions),
+            ("cortical_map_detailed", cortical_map),
+            ("cortical_id_name_mapping", names),
+        ):
+            if "error" in payload:
+                return {"error": f"{label} failed", "detail": payload}
+        return summarize_region_circuit(
+            regions, cortical_map, names, region_id, include_child_regions
+        )
 
     async def _require_functional_parent_circuit(self, region_id: str) -> str | None:
         """Reject placeholder parents (Autogen Circuit / Untitled) using a local title check.
@@ -3344,49 +3544,22 @@ class FeagiClient:
         name: str,
         brain_region_id: str,
         coordinates_3d: list[int],
-        training_mode: str,
-        kernel_area_id: str | None = None,
-        class_area_id: str | None = None,
-        mask_area_id: str | None = None,
-        kernel_size: list[int] | None = None,
-        class_count: int | None = None,
     ) -> dict[str, Any]:
         """Create a classifier assembly (``POST /v1/cortical_area/classifier``).
 
-        Kernel mode needs ``kernel_area_id`` and a ``1x1xn`` ``class_area_id``. Scanner mode
-        needs a ``W x H x 1`` ``mask_area_id``, ``kernel_size``, and ``class_count``.
+        The body is name, parent region, and coordinates. Inputs are mappings.
         """
-        mode = (training_mode or "").strip()
-        body: dict[str, Any] = {
-            "name": name,
-            "brain_region_id": brain_region_id,
-            "training_mode": mode,
+        cleaned_name = (name or "").strip()
+        region = (brain_region_id or "").strip()
+        if not cleaned_name or not region:
+            return {"error": "invalid_input", "message": "name and brain_region_id are required"}
+        if not isinstance(coordinates_3d, list) or len(coordinates_3d) != 3:
+            return {"error": "invalid_input", "message": "coordinates_3d must be [x, y, z]"}
+        body = {
+            "name": cleaned_name,
+            "brain_region_id": region,
             "coordinates_3d": coordinates_3d,
         }
-        if mode == "scanner":
-            if not mask_area_id or not kernel_size or class_count is None:
-                return {
-                    "error": "invalid_input",
-                    "message": "scanner mode needs mask_area_id, kernel_size, and class_count",
-                }
-            if class_count_error(class_count):
-                return {"error": "invalid_input", "message": class_count_error(class_count)}
-            body.update(
-                {
-                    "mask_area_id": mask_area_id,
-                    "kernel_size": kernel_size,
-                    "class_count": class_count,
-                }
-            )
-        elif mode == "kernel":
-            if not kernel_area_id or not class_area_id:
-                return {
-                    "error": "invalid_input",
-                    "message": "kernel mode needs kernel_area_id and class_area_id",
-                }
-            body.update({"kernel_area_id": kernel_area_id, "class_area_id": class_area_id})
-        else:
-            return {"error": "invalid_input", "message": "training_mode must be kernel or scanner"}
         return await self._classifier_request("POST", "/v1/cortical_area/classifier", body)
 
     async def update_classifier(
@@ -3396,9 +3569,19 @@ class FeagiClient:
         cleaned = (classifier_id or "").strip()
         if not cleaned:
             return {"error": "invalid_input", "message": "classifier_id is required"}
-        count = updates.get("class_count") if isinstance(updates, dict) else None
-        if count is not None and class_count_error(count):
-            return {"error": "invalid_input", "message": class_count_error(count)}
+        removed = {
+            "training_mode",
+            "kernel_area_id",
+            "class_area_id",
+            "mask_area_id",
+            "kernel_size",
+            "class_count",
+        }
+        if isinstance(updates, dict) and removed.intersection(updates):
+            return {
+                "error": "invalid_input",
+                "message": "Classifier inputs are classifier_sample and classifier_class mappings",
+            }
         return await self._classifier_request(
             "PUT", f"/v1/cortical_area/classifier/{cleaned}", updates
         )
@@ -6667,7 +6850,11 @@ class FeagiClient:
         Proxies to a small HTTP endpoint exposed by the embodiment controller
         (currently implemented for the MuJoCo controller). Provides ground truth
         joint positions, velocities, applied forces, and sensor scalars without
-        going through the FEAGI encoder pipeline.
+        going through the FEAGI encoder pipeline. Scalar hinge and slide joints
+        are under ``joints``. Free joints, including the robot root, are under
+        ``free_joints`` with world-frame ``position_m``, ``quaternion_wxyz``,
+        ``linear_velocity_m_s``, and ``angular_velocity_rad_s``. Ball joints are
+        under ``ball_joints``. Positions are meters.
 
         Args:
             introspection_url: Base URL of the controller's introspection
@@ -6681,8 +6868,10 @@ class FeagiClient:
             Whatever the controller exposes; typically
             ``{"time": float, "mujoco_simulation_time_s": float,
             "mujoco_simulation_time_max_session_s": float, "joints": {...},
+            "free_joints": {...}, "ball_joints": {...},
             "actuators": {...}, "sensors": {...}}`` (see MuJoCo introspection
-            ``/v1/state`` for the full schema).
+            ``/v1/state`` for the full schema). ``POST /v1/set_state`` does not
+            accept free or ball joint names.
         """
         url, descriptor = self._resolve_introspection_url(introspection_url, controller_id)
         if url is None:

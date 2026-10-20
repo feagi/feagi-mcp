@@ -117,7 +117,7 @@ Use this instead of `list_ipu_areas_with_metadata` / `list_opu_areas_with_metada
 ### `list_classifiers`
 
 **Endpoint**: `GET /v1/cortical_area/classifiers`  
-**Returns**: compact rows (`classifier_id`, name, parent, 3D pose, input ids, owned `kernel_memory_id` / `class_memory_id` / `scan_twin_id`)
+**Returns**: compact rows (`classifier_id`, name, parent, 3D pose, input ids, owned `sample_memory_id` / `class_memory_id` / `error_area_id`)
 
 Use this instead of searching cortical-area names for `_kernel_mem`, `_class_mem`, or `_twin`. Classifiers are first-class genome objects, not cortical areas.
 
@@ -145,6 +145,19 @@ any memory area.
 
 `get_connectivity_summary` adds `edge_morphologies` to every row on a src->dst edge that carries
 more than one rule (for example `episodic_memory` plus `episodic_scan`).
+
+### `get_region_circuit`
+
+**Endpoints**: `GET /v1/region/regions_members`, `GET /v1/cortical_area/cortical_map_detailed`,
+`GET /v1/cortical_area/cortical_id_name_mapping` (concurrent, one MCP call)  
+**Returns**: `members` (`cortical_id`, `name`, `role`), `boundary` (`input_area_ids`,
+`output_area_ids`), `edges` (`internal`, `incoming`, `outgoing` as `[src, dst]` pairs),
+`designated` (the region's own inputs/outputs lists), `isolated_area_ids`, `regions_included`
+
+A member is a boundary input when it is IPU or receives a mapping from outside the region,
+and an output when it is OPU or sends a mapping outside. Child regions are included unless
+`include_child_regions=false`. Mapping rules are dropped; use `get_connectivity_summary`
+with a `src_filter` when you need morphologies for specific edges.
 
 ### `create_classifier` / `update_classifier` / `attach_classifier_field`
 

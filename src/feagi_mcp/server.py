@@ -625,9 +625,8 @@ async def list_classifiers(
         classifier_id: Exact genome classifier id.
 
     Returns:
-        Compact rows: id, name, parent region, 3D pose, input area ids,
-        owned ``kernel_memory_id`` / ``class_memory_id``, and ``fields``
-        (each field area with its detection twin).
+        Compact rows: id, name, parent region, 3D pose, sample inputs,
+        class bindings, sample memory, class memory, and the error area.
     """
     return await feagi.list_classifiers(
         name_contains=name_contains,
@@ -642,20 +641,18 @@ async def inspect_classifier(
 ) -> dict[str, Any]:
     """Inspect one classifier assembly in a single call.
 
-    Resolves kernel/class/field inputs, owned memory internals, the class-map
-    twin, required mappings, memory ST/LT counts, and ``scan_blockers``.
-    Memory slots also carry ``episodic_upstream``, ``scan_sources``, and
-    lifetime ``created_total``/``deleted_total``.
-    Use this before walking areas, mappings, or memory lists one by one.
+    Resolves sample and class inputs, the class outputs, the error area,
+    the associative edge, and memory ST/LT counts.
+    Memory slots carry ``episodic_upstream`` and lifetime create/delete totals.
 
     Args:
         classifier_id: Exact genome classifier id.
         name_contains: Unique name substring when ``classifier_id`` is omitted.
 
     Returns:
-        ``classifier``, ``slots``, ``mappings``, ``missing_slots``,
-        ``missing_mappings``, ``twin_visible``, ``memory_findings``,
-        ``scan_blockers``, and ``scan_ready``.
+        ``classifier``, ``slots``, ``class_bindings``, ``mappings``,
+        ``missing_slots``, ``missing_mappings``, ``outputs_visible``,
+        ``memory_findings``, ``blockers``, and ``ready``.
     """
     return await feagi.inspect_classifier(
         classifier_id=classifier_id,
@@ -923,6 +920,102 @@ async def create_morphology(
     """
     result = await feagi.create_morphology(morphology_name, morphology_type, morphology_parameters)
     return result
+
+
+@mcp.tool()
+async def list_modulator_types() -> dict[str, Any]:
+    """List the fixed modulator types."""
+    return await feagi.list_modulator_types()
+
+
+@mcp.tool()
+async def list_modulators() -> dict[str, Any]:
+    """List modulator instances in the loaded genome."""
+    return await feagi.list_modulators()
+
+
+@mcp.tool()
+async def get_modulator(modulator_id: str) -> dict[str, Any]:
+    """Read one modulator instance."""
+    return await feagi.get_modulator(modulator_id)
+
+
+@mcp.tool()
+async def create_modulator(modulator_id: str, definition: dict[str, Any]) -> dict[str, Any]:
+    """Create a modulator instance and its 1x1x1 driver area.
+
+    ``definition`` fields: ``type``, ``magnitude_percent`` (>= -100),
+    ``effect_duration_bursts`` (>= 1), ``rest_bursts``, ``graded``,
+    and ``full_scale_potential`` when graded.
+    """
+    return await feagi.create_modulator(modulator_id, definition)
+
+
+@mcp.tool()
+async def update_modulator(modulator_id: str, definition: dict[str, Any]) -> dict[str, Any]:
+    """Update a modulator instance. Type changes are rejected while subscribers exist."""
+    return await feagi.update_modulator(modulator_id, definition)
+
+
+@mcp.tool()
+async def rename_modulator(old_modulator_id: str, new_modulator_id: str) -> dict[str, Any]:
+    """Rename a modulator and rewrite subscriber references."""
+    return await feagi.rename_modulator(old_modulator_id, new_modulator_id)
+
+
+@mcp.tool()
+async def modulator_usage(modulator_id: str) -> dict[str, Any]:
+    """List areas and mapping rules subscribed to a modulator."""
+    return await feagi.modulator_usage(modulator_id)
+
+
+@mcp.tool()
+async def delete_modulator(modulator_id: str, force: bool = False) -> dict[str, Any]:
+    """Delete a modulator and its driver. Without force, subscribers reject the delete."""
+    return await feagi.delete_modulator(modulator_id, force)
+
+
+@mcp.tool()
+async def set_area_modulators(cortical_id: str, modulator_ids: list[str]) -> dict[str, Any]:
+    """Replace the neuromodulator subscriptions on a cortical area."""
+    return await feagi.update_cortical_area(
+        cortical_id, {"modulators": modulator_ids}
+    )
+
+
+@mcp.tool()
+async def unsubscribe_area_modulator(cortical_id: str, modulator_id: str) -> dict[str, Any]:
+    """Remove one neuromodulator subscription from a cortical area."""
+    return await feagi.unsubscribe_area_modulator(cortical_id, modulator_id)
+
+
+@mcp.tool()
+async def set_mapping_modulators(
+    src_area: str,
+    dst_area: str,
+    modulator_ids: list[str],
+    morphology_id: str | None = None,
+) -> dict[str, Any]:
+    """Replace synaptic modulator subscriptions on the mapping from src to dst.
+
+    ``morphology_id`` limits the write to one rule when several rules share the pair.
+    """
+    return await feagi.set_mapping_modulators(
+        src_area, dst_area, modulator_ids, morphology_id
+    )
+
+
+@mcp.tool()
+async def unsubscribe_mapping_modulator(
+    src_area: str,
+    dst_area: str,
+    modulator_id: str,
+    morphology_id: str | None = None,
+) -> dict[str, Any]:
+    """Remove one synaptic modulator subscription from a mapping."""
+    return await feagi.unsubscribe_mapping_modulator(
+        src_area, dst_area, modulator_id, morphology_id
+    )
 
 
 @mcp.tool()
@@ -1916,48 +2009,26 @@ async def create_classifier(
     name: str,
     brain_region_id: str,
     coordinates_3d: list[int],
-    training_mode: str,
-    kernel_area_id: str | None = None,
-    class_area_id: str | None = None,
-    mask_area_id: str | None = None,
-    kernel_size: list[int] | None = None,
-    class_count: int | None = None,
 ) -> dict[str, Any]:
-    """Create a classifier assembly (kernel memory + class memory) in a circuit.
+    """Create a classifier: sample memory, class memory, error area, and the associative edge.
 
-    Kernel mode: ``kernel_area_id`` plus a ``1x1xn`` ``class_area_id`` (depth ``z`` = class).
-    Scanner mode: a ``W x H x 1`` ``mask_area_id`` whose pixels carry
-    ``(class_id + 1) / class_count`` as potential, ``kernel_size`` ``[x, y, z]`` with ``z``
-    equal to the field depth, and ``class_count`` (1..9999). Attach image fields afterwards
-    with ``attach_classifier_field``. Kernel mode creates a ``1x1xn`` class output
-    (depth ``z`` fires for class ``z``) and the field must match the kernel area.
-    Scanner mode creates a ``W x H x 1`` class output that carries the class as potential.
+    Sample and class inputs are added later by mapping ``classifier_sample`` onto the
+    sample memory or ``classifier_class`` onto the class memory. A class mapping
+    creates a class output that matches that class input.
 
     Returns:
-        ``classifier_id``, ``kernel_memory_id``, ``class_memory_id``.
+        ``classifier_id``, ``sample_memory_id``, ``class_memory_id``, ``error_area_id``.
     """
-    return await feagi.create_classifier(
-        name,
-        brain_region_id,
-        coordinates_3d,
-        training_mode,
-        kernel_area_id,
-        class_area_id,
-        mask_area_id,
-        kernel_size,
-        class_count,
-    )
+    return await feagi.create_classifier(name, brain_region_id, coordinates_3d)
 
 
 @mcp.tool()
 async def update_classifier(classifier_id: str, updates: dict[str, Any]) -> dict[str, Any]:
     """Update a classifier record.
 
-    ``updates`` keys: ``name``, ``coordinates_3d``, ``parent_region_id``, ``training_mode``,
-    ``kernel_area_id``, ``class_area_id``, ``mask_area_id``, ``kernel_size``, ``class_count``,
+    ``updates`` keys: ``name``, ``coordinates_3d``, ``parent_region_id``,
     ``reward_training``, ``answer_feedback_area_id`` (empty string clears),
-    ``answer_latency_bursts``, ``learn_area_id``, ``confidence_area_id``. Changing mode,
-    kernel size, or class count drops learned patterns.
+    ``answer_latency_bursts``, ``learn_area_id``, ``confidence_area_id``.
     """
     return await feagi.update_classifier(classifier_id, updates)
 
@@ -2304,6 +2375,24 @@ async def get_brain_regions() -> dict[str, Any]:
     """
     result = await feagi.get_regions_members()
     return result
+
+
+@mcp.tool()
+async def get_region_circuit(region_id: str, include_child_regions: bool = True) -> dict[str, Any]:
+    """One brain region as a circuit: members, boundary inputs/outputs, and edges.
+
+    Use instead of ``get_cortical_map_detailed`` + ``get_brain_regions`` when you need a
+    region's topology. Edges are ``[src, dst]`` pairs (rules dropped) split into
+    ``internal``, ``incoming`` (from outside) and ``outgoing`` (to outside). A member is
+    a boundary input if it is IPU or fed from outside, an output if it is OPU or feeds
+    outside. ``designated`` echoes the region's own inputs/outputs lists, which cover
+    direct member areas only. ``isolated_area_ids`` have no mappings at all.
+
+    Args:
+        region_id: Brain region id (UUID from ``get_brain_regions``).
+        include_child_regions: Include areas of nested regions (default True).
+    """
+    return await feagi.get_region_circuit(region_id, include_child_regions)
 
 
 @mcp.tool()
@@ -3665,6 +3754,15 @@ async def embodiment_get_physics_state(
     When ``introspection_url`` is omitted, the URL is auto-discovered via the
     descriptor that feagi-desktop writes at controller spawn time. Pass an
     explicit URL to bypass discovery.
+
+    MuJoCo scalar hinge and slide joints are in ``joints`` (one ``qpos`` and
+    one ``qvel``). Free joints, including the floating root, are in
+    ``free_joints``: ``position_m`` is ``[x, y, z]``, ``quaternion_wxyz`` is
+    ``[w, x, y, z]``, ``linear_velocity_m_s`` and ``angular_velocity_rad_s``
+    are world-frame. Ball joints are in ``ball_joints`` with
+    ``quaternion_wxyz`` and ``angular_velocity_rad_s``. Units are meters and
+    radians, the raw MuJoCo state. ``embodiment_set_joint_state`` still
+    accepts only scalar joints.
     """
     return await feagi.embodiment_get_physics_state(
         introspection_url=introspection_url,
@@ -3687,7 +3785,8 @@ async def embodiment_set_joint_state(
     state without waiting for the dynamics to wander there organically. Works
     with any controller exposing ``POST /v1/set_state`` on its introspection
     server. When ``introspection_url`` is omitted, the URL is auto-discovered
-    via the launcher-written descriptor.
+    via the launcher-written descriptor. Free and ball joints are not writable
+    here; read them from ``embodiment_get_physics_state``.
     """
     return await feagi.embodiment_set_joint_state(
         introspection_url=introspection_url,
@@ -3756,7 +3855,16 @@ async def configure_mujoco_scene(
       ``vision_mode`` (``simple`` or ``segmented``), ``feagi_group``,
       ``resolution_px`` (``[width, height]``, default ``[128, 128]``).
     - ``apply_embodiment_attachments``: ``bodies`` of ``{body_name, motor_enabled,
-      sensory_enabled, imu_enabled, cameras}``.
+      sensory_enabled, imu_enabled, cameras, xml_mounts}``. Each camera has ``id``,
+      ``offset_mm`` (body-local ``[x, y, z]`` mm from the body/joint origin),
+      ``fovy_deg``, ``orientation_yaw_deg``, ``orientation_pitch_deg``,
+      ``orientation_roll_deg``, ``vision_mode``, ``feagi_group``. Each
+      ``xml_mounts`` entry has ``id``, ``xml``, optional ``xml_path``,
+      ``offset_mm``, orientation degrees, and ``io_mode`` (``full`` keeps
+      actuators/sensors, ``geometry`` attaches bodies only). Full I/O also
+      requires ``device_id`` (stable motor-group name) and ``feagi_group``
+      (pinned CorticalUnitIndex, must not collide with host limbs or cameras).
+      Restart after a full-I/O mount so FEAGI creates those cortical areas.
     - ``set_environment_feedback``: ``rules`` of ``{id, enabled, display_name, source}``
       where ``source`` is ``safety_boundary``, ``imu_tilt``, ``body_height``, or
       ``body_contact``. Tilt adds ``target_body``, ``tilt_limit_deg``, ``up_axis``.

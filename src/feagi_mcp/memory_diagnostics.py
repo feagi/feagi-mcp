@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Any
 
 ENCODE_MORPHOLOGY = "episodic_memory"
+ENCODE_MORPHOLOGIES = ("episodic_memory", "classifier_sample", "classifier_class")
 SCAN_MORPHOLOGY = "episodic_scan"
 
 CODE_NO_EPISODIC_UPSTREAM = "memory_no_episodic_upstream"
@@ -63,7 +64,13 @@ def memory_area_diagnostics(
     long_term_neuron_count: int | None,
 ) -> dict[str, Any]:
     """Upstream wiring, lifecycle totals, and findings for one memory area."""
-    episodic_upstream = inbound_sources(mapping_items, memory_id, ENCODE_MORPHOLOGY)
+    episodic_upstream = sorted(
+        {
+            source
+            for morphology in ENCODE_MORPHOLOGIES
+            for source in inbound_sources(mapping_items, memory_id, morphology)
+        }
+    )
     scan_sources = inbound_sources(mapping_items, memory_id, SCAN_MORPHOLOGY)
     totals = lifecycle_totals(memory_area_stats, memory_id)
     findings: list[dict[str, Any]] = []

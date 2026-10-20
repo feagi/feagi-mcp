@@ -10,13 +10,9 @@ import pytest
 from feagi_mcp.classifiers import build_classifier_inspect
 from feagi_mcp.feagi_client import FeagiClient
 from feagi_mcp.value_coding import (
-    CODE_CLASS_COUNT_MISSING,
-    CODE_KERNEL_OUTPUT_FORWARDS,
-    CODE_KERNEL_OUTPUT_SHAPE,
-    CODE_MASK_NOT_SINGLE_LAYER,
+    CODE_CLASS_OUTPUT_FORWARDS,
+    CODE_CLASS_OUTPUT_SHAPE,
     CODE_THRESHOLD_ABOVE_SMALLEST_CLASS,
-    CODE_TWIN_NOT_FORWARDING,
-    CODE_TWIN_NOT_SINGLE_LAYER,
     bins_geometry,
     class_count_error,
     classifier_value_findings,
@@ -145,74 +141,52 @@ class TestDecodeFireQueue:
         assert decoded["pixels"] == []
 
 
-def _scanner(**overrides: Any) -> dict[str, Any]:
+def _classifier(**overrides: Any) -> dict[str, Any]:
     record = {
-        "classifier_id": "clf-scan",
-        "name": "Scan",
-        "training_mode": "scanner",
-        "mask_area_id": "mask",
-        "kernel_size": [8, 8, 3],
-        "class_count": 19,
-        "kernel_memory_id": "kmem",
+        "classifier_id": "clf-1",
+        "name": "Demo",
+        "sample_memory_id": "kmem",
         "class_memory_id": "cmem",
-        "fields": [{"field_area_id": "field", "scan_twin_id": "twin"}],
+        "error_area_id": "err",
+        "class_bindings": [{"class_area_id": "class", "class_output_area_id": "twin"}],
     }
     record.update(overrides)
     return record
 
 
-def _catalog(mask_depth: int = 1, twin_depth: int = 1, **twin: Any) -> dict[str, dict[str, Any]]:
+def _catalog(**twin: Any) -> dict[str, dict[str, Any]]:
     return {
-        "mask": {"cortical_id": "mask", "cortical_dimensions": [16, 8, mask_depth]},
-        "twin": {"cortical_id": "twin", "cortical_dimensions": [16, 8, twin_depth], **twin},
+        "class": {"cortical_id": "class", "cortical_dimensions": [4, 3, 2]},
+        "twin": {"cortical_id": "twin", "cortical_dimensions": [4, 3, 2], **twin},
     }
 
 
 class TestClassifierValueFindings:
-    def test_healthy_scanner_has_no_findings(self) -> None:
-        assert classifier_value_findings(_scanner(), _catalog(), ["twin"]) == []
+    def test_matching_output_has_no_findings(self) -> None:
+        assert classifier_value_findings(_classifier(), _catalog()) == []
 
-    def test_flags_missing_count_deep_mask_deep_twin_and_flat_twin(self) -> None:
-        codes = {
-            f["code"]
-            for f in classifier_value_findings(
-                _scanner(class_count=None),
-                _catalog(mask_depth=19, twin_depth=19, neuron_mp_driven_psp=False),
-                ["twin"],
-            )
-        }
-        assert codes == {
-            CODE_CLASS_COUNT_MISSING,
-            CODE_MASK_NOT_SINGLE_LAYER,
-            CODE_TWIN_NOT_SINGLE_LAYER,
-            CODE_TWIN_NOT_FORWARDING,
-        }
+    def test_output_must_match_the_class_input_and_not_forward_potential(self) -> None:
+        catalog = _catalog(neuron_mp_driven_psp=True)
+        catalog["twin"]["cortical_dimensions"] = [1, 1, 1]
+        codes = {item["code"] for item in classifier_value_findings(_classifier(), catalog)}
+        assert codes == {CODE_CLASS_OUTPUT_SHAPE, CODE_CLASS_OUTPUT_FORWARDS}
 
-    def test_kernel_output_must_match_the_class_input(self) -> None:
-        classifier = {
-            "training_mode": "kernel",
-            "class_area_id": "class",
-            "fields": [{"field_area_id": "field", "scan_twin_id": "twin"}],
-        }
-        catalog = {
-            "class": {"cortical_dimensions": [1, 1, 10]},
-            "twin": {
-                "cortical_dimensions": [13, 13, 1],
-                "neuron_mp_driven_psp": True,
-            },
-        }
-        codes = {item["code"] for item in classifier_value_findings(classifier, catalog, ["twin"])}
-        assert codes == {CODE_KERNEL_OUTPUT_SHAPE, CODE_KERNEL_OUTPUT_FORWARDS}
-
-    def test_inspect_blocks_scanning_on_value_errors(self) -> None:
+    def test_inspect_blocks_a_mismatched_class_output(self) -> None:
         areas = [
-            {"cortical_id": "mask", "cortical_dimensions": [16, 8, 19]},
-            {"cortical_id": "twin", "cortical_dimensions": [16, 8, 1], "visible": True},
+            {"cortical_id": "kmem", "cortical_dimensions": [1, 1, 1]},
+            {"cortical_id": "cmem", "cortical_dimensions": [1, 1, 1]},
+            {"cortical_id": "err", "cortical_dimensions": [1, 1, 1]},
+            {"cortical_id": "class", "cortical_dimensions": [4, 3, 2]},
+            {
+                "cortical_id": "twin",
+                "cortical_dimensions": [1, 1, 1],
+                "visible": True,
+                "neuron_mp_driven_psp": False,
+            },
         ]
-        payload = build_classifier_inspect(_scanner(), areas, [], None)
-        assert CODE_MASK_NOT_SINGLE_LAYER in payload["scan_blockers"]
-        assert payload["scan_ready"] is False
-        assert payload["value_findings"][0]["code"] == CODE_MASK_NOT_SINGLE_LAYER
+        payload = build_classifier_inspect(_classifier(), areas, [], None)
+        assert CODE_CLASS_OUTPUT_SHAPE in payload["blockers"]
+        assert payload["ready"] is False
 
 
 @pytest.fixture
@@ -326,42 +300,35 @@ class TestDecodeClassMapClient:
 
 class TestClassifierWriteTools:
     @pytest.mark.asyncio
-    async def test_scanner_create_posts_class_count(self, client) -> None:
+    async def test_create_posts_name_region_and_coordinates(self, client) -> None:
         client._client.request.return_value = _ok({"classifier_id": "clf-1"})
-        result = await client.create_classifier(
-            "Scan",
-            "region-1",
-            [1, 2, 3],
-            "scanner",
-            mask_area_id="mask",
-            kernel_size=[8, 8, 3],
-            class_count=19,
-        )
+        result = await client.create_classifier("Scan", "region-1", [1, 2, 3])
         method, url = client._client.request.call_args.args
         body = client._client.request.call_args.kwargs["json"]
         assert (method, url.endswith("/v1/cortical_area/classifier")) == ("POST", True)
-        assert body["class_count"] == 19
-        assert "kernel_area_id" not in body
+        assert body == {
+            "name": "Scan",
+            "brain_region_id": "region-1",
+            "coordinates_3d": [1, 2, 3],
+        }
         assert result == {"classifier_id": "clf-1"}
 
     @pytest.mark.asyncio
-    async def test_scanner_create_requires_class_count(self, client) -> None:
-        result = await client.create_classifier(
-            "Scan", "region-1", [1, 2, 3], "scanner", mask_area_id="mask", kernel_size=[8, 8, 3]
-        )
+    async def test_create_requires_coordinates(self, client) -> None:
+        result = await client.create_classifier("Scan", "region-1", [1, 2])
         assert result["error"] == "invalid_input"
         client._client.request.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_update_and_attach_hit_classifier_routes(self, client) -> None:
         client._client.request.return_value = _ok({"success": True})
-        await client.update_classifier("clf-1", {"class_count": 6})
+        await client.update_classifier("clf-1", {"reward_training": True})
         assert client._client.request.call_args.args[0] == "PUT"
         assert client._client.request.call_args.args[1].endswith("/classifier/clf-1")
         await client.attach_classifier_field("clf-1", "field")
         assert client._client.request.call_args.args[1].endswith("/classifier/clf-1/field")
         assert client._client.request.call_args.kwargs["json"] == {"field_area_id": "field"}
-        bad = await client.update_classifier("clf-1", {"class_count": 0})
+        bad = await client.update_classifier("clf-1", {"training_mode": "scanner"})
         assert bad["error"] == "invalid_input"
 
 
