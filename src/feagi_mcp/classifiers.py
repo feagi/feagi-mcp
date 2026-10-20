@@ -7,6 +7,7 @@ and mapping table, then this module projects one compact inspect payload.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from feagi_mcp.memory_diagnostics import memory_area_diagnostics
@@ -204,14 +205,14 @@ def _attach_memory_runtime(
         slot["longterm_mem_threshold"] = params.get("longterm_mem_threshold")
 
 
-def _scan_slot(slots: dict[str, dict[str, Any] | bool], key: str) -> dict[str, Any]:
+def _scan_slot(slots: Mapping[str, dict[str, Any] | bool], key: str) -> dict[str, Any]:
     """Return a slot record; non-dict values (e.g. ``fields_present``) become ``{}``."""
     raw = slots.get(key, {})
     return raw if isinstance(raw, dict) else {}
 
 
 def scan_blockers(
-    slots: dict[str, dict[str, Any] | bool],
+    slots: Mapping[str, dict[str, Any] | bool],
     missing_slots: list[str],
     missing_mappings: list[str],
 ) -> list[str]:
