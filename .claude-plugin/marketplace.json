@@ -1,0 +1,21 @@
+{
+  "name": "feagi",
+  "owner": {
+    "name": "Neuraville Inc.",
+    "email": "feagi@neuraville.com"
+  },
+  "metadata": {
+    "description": "FEAGI plugins from Neuraville: drive and design artificial brains in a running FEAGI instance."
+  },
+  "plugins": [
+    {
+      "name": "feagi",
+      "source": "./",
+      "description": "Inspect, build, wire, test, and debug brains in a running FEAGI instance through the feagi MCP server.",
+      "version": "0.0.21",
+      "category": "robotics",
+      "homepage": "https://feagi.org",
+      "license": "Apache-2.0"
+    }
+  ]
+}

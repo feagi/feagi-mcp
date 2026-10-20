@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **FEAGI agent skill** (`skills/feagi/`): a host-neutral Agent Skill that teaches agents
+  FEAGI concepts and IDs, circuit naming and placement policy, reuse-first connectivity and
+  the pattern language, memory/plasticity/modulators, value planes and classifiers,
+  embodiment and MuJoCo scene tools, genome lifecycle, and debugging. Includes a generated
+  index of all MCP tools (`scripts/generate_skill_tool_index.py`).
+- **Claude Code plugin and marketplace** (`.claude-plugin/`): installs the skill and starts
+  this server via `uvx feagi-mcp@<version>`.
+- **`feagi_mcp.skill_bundle`**: skill location (`skill_dir()`) and tool categories. Wheels
+  ship the skill as `feagi_mcp/skills/feagi` so other hosts can load it from an install.
+- **`tests/test_skill_bundle.py`**: fails on a stale tool index, an uncategorized tool, a
+  skill reference to a missing tool or parameter, broken links, vendor-specific wording, or
+  plugin/package version drift.
+
 ## [0.0.21] - 2026-10-20
 
 ### Added

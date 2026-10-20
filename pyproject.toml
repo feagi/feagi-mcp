@@ -58,6 +58,11 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/feagi_mcp"]
 
+# Ship the agent skill inside the package so hosts (e.g. Hey FEAGI) can load it from an
+# install; see feagi_mcp.skill_bundle.skill_dir().
+[tool.hatch.build.targets.wheel.force-include]
+"skills/feagi" = "feagi_mcp/skills/feagi"
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"

@@ -82,6 +82,36 @@ Add to your Cursor MCP settings (`~/.cursor/mcp.json`):
 }
 ```
 
+### FEAGI agent skill (Claude Code plugin)
+
+[`skills/feagi/`](skills/feagi/SKILL.md) is an [Agent Skill](https://agentskills.io) that
+teaches an AI agent how to use these tools: FEAGI vocabulary, naming and placement policy,
+reuse-first wiring, verification, memory and plasticity, embodiment, and diagnostics. The
+repository root is also a Claude Code plugin that bundles the skill with this server.
+
+In Claude Code:
+
+```
+/plugin install feagi --marketplace feagi/feagi-mcp
+```
+
+The plugin starts the server with `uvx feagi-mcp@<version>` and passes through `FEAGI_HOST`
+and `FEAGI_PORT` (defaults `localhost` and `8000`), so `uv` must be installed.
+
+Other agents that read Agent Skills can use the `skills/feagi` folder directly; it is plain
+Markdown and names no particular model. The wheel also ships it as `feagi_mcp/skills/feagi`
+(`feagi_mcp.skill_bundle.skill_dir()` returns its path).
+
+When you add, rename, or remove a tool, give it a category in
+`feagi_mcp.skill_bundle.TOOL_CATEGORIES` and regenerate the skill's tool index:
+
+```bash
+python scripts/generate_skill_tool_index.py
+```
+
+`tests/test_skill_bundle.py` fails if the index is stale, if the skill references a tool or
+parameter that does not exist, or if the plugin version drifts from `pyproject.toml`.
+
 ## Available Tools
 
 ### Agent Introspection
