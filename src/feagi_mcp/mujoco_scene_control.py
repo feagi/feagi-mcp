@@ -110,7 +110,15 @@ class MujocoSceneControl:
                 "ok": False,
                 "error": f"Unsupported MuJoCo scene action: {action!r}",
             }
-        payload = {"action": action, **(body or {})}
+        body = dict(body or {})
+        if action == "apply_scene_objects" and isinstance(body.get("objects"), list):
+            body["objects"] = [
+                {**obj, "size_mm": normalize_size_mm(obj.get("shape"), obj["size_mm"])}
+                if isinstance(obj, dict) and isinstance(obj.get("size_mm"), list)
+                else obj
+                for obj in body["objects"]
+            ]
+        payload = {"action": action, **body}
         target = resolve_control_target(controller_id)
         if not target.get("ok"):
             return target
@@ -172,10 +180,18 @@ class MujocoSceneControl:
             return await self._poster(control_url, payload, timeout_s)
         async with httpx.AsyncClient(timeout=timeout_s) as client:
             response = await client.post(f"{control_url}/command", json=payload)
-            response.raise_for_status()
+        # The control server answers errors (400 bad request, 502 failure) with
+        # {"ok": false, "error": "..."}; keep that message instead of the status line.
+        try:
             body = response.json()
+        except ValueError:
+            response.raise_for_status()
+            raise
         if not isinstance(body, dict):
+            response.raise_for_status()
             raise ValueError("MuJoCo control response must be a JSON object.")
+        if response.is_error and body.get("ok") is not False:
+            response.raise_for_status()
         return body
 
 
@@ -194,6 +210,20 @@ def _friction_or_none(friction: list[float] | None) -> list[float] | None:
             raise ValueError("friction values must be >= 0.")
         parsed.append(number)
     return parsed
+
+
+def normalize_size_mm(shape: Any, size_mm: list[Any]) -> list[Any]:
+    """Pad a short ``size_mm`` to the three numbers the controller requires.
+
+    A sphere uses only the radius and a capsule only radius and half-length, so
+    ``[r]`` and ``[r, half_length]`` are accepted and padded. Anything else is
+    returned unchanged for the controller to validate.
+    """
+    if shape == "sphere" and len(size_mm) == 1:
+        return [size_mm[0]] * 3
+    if shape == "capsule" and len(size_mm) == 2:
+        return [size_mm[0], size_mm[1], size_mm[1]]
+    return list(size_mm)
 
 
 def scene_object_payload(
@@ -215,7 +245,7 @@ def scene_object_payload(
     payload: dict[str, Any] = {
         "id": object_id.strip(),
         "shape": shape,
-        "size_mm": size_mm,
+        "size_mm": normalize_size_mm(shape, size_mm),
         "position_mm": position_mm,
         "rgba": list(rgba) if rgba is not None else list(_DEFAULT_RGBA),
         "dynamic": dynamic,

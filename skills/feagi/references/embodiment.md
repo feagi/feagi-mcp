@@ -66,8 +66,8 @@ Settings dialog. They are not cortical areas and not asset-pack XML.
   Corners are millimeters `[x, y, z]`. If the user gives no numbers, choose a box around the
   robot and say what you chose.
 - **Add an object**: `add_mujoco_scene_object(object_id, shape, size_mm, position_mm, dynamic, mass_g, friction)`.
-  Positions and sizes are millimeters; a sphere's `size_mm[0]` is its radius (default
-  `[50, 0, 0]`). A weight means `dynamic=True` with `mass_g` in grams. `friction` is
+  Positions and sizes are millimeters; `size_mm` is `[radius]` for a sphere,
+  `[radius, half_length]` for a capsule, or three half-extents for a box. A weight means `dynamic=True` with `mass_g` in grams. `friction` is
   `[sliding, torsional, rolling]`; omit it for MuJoCo defaults. Other objects stay.
 - **Cameras, IMU/motors, environment feedback, body attachments**: read the config, then
   `configure_mujoco_scene(action, body)` with a full replacement document (`apply_*` actions

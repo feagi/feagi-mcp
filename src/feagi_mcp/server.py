@@ -3842,8 +3842,8 @@ async def configure_mujoco_scene(
       ``workspace_max_mm`` (each ``[x, y, z]`` mm), optional ``center_approach_mm_s``.
     - ``apply_scene_objects``: ``objects`` list of ``{id, shape, size_mm,
       position_mm, rgba, dynamic, mass_g, friction}``. ``shape`` is sphere, box, or capsule.
-      Sphere ``size_mm[0]`` is radius; box uses three half-extents; capsule uses
-      radius then half-length. ``mass_g`` is weight in grams for dynamic objects.
+      ``size_mm`` is ``[radius]`` for a sphere, ``[radius, half_length]`` for a
+      capsule, or three half-extents for a box (short lists are padded to three). ``mass_g`` is weight in grams for dynamic objects.
       ``friction`` is optional ``[sliding, torsional, rolling]``.
     - ``apply_scene_cameras``: ``disabled_model_camera_names``, ``added_cameras``
       with ``id``, ``position_mm``, ``fovy_deg``, ``aim_at_safety_zone``,
@@ -3885,7 +3885,8 @@ async def add_mujoco_scene_object(
     """Add one primitive to the running MuJoCo scene without removing the others.
 
     ``position_mm`` is ``[x, y, z]`` in millimeters. ``shape`` is ``sphere``,
-    ``box``, or ``capsule``. For a sphere, ``size_mm[0]`` is the radius in mm.
+    ``box``, or ``capsule``. ``size_mm`` is ``[radius]`` for a sphere,
+    ``[radius, half_length]`` for a capsule, or three half-extents for a box, in mm.
     A weight means ``dynamic=true`` and ``mass_g`` in grams. Optional ``friction``
     is ``[sliding, torsional, rolling]``; omit it to keep MuJoCo's default contact.
     Reusing ``object_id`` replaces that object.

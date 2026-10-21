@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 import pytest
 
 from feagi_mcp.introspection_discovery import IntrospectionEndpoint
 from feagi_mcp.mujoco_scene_control import (
     MujocoSceneControl,
     loopback_base_url,
+    normalize_size_mm,
     scene_object_payload,
 )
 
@@ -137,3 +139,77 @@ async def test_experiment_save_action_is_not_a_controller_command(
     )
     assert result["ok"] is False
     assert called is False
+
+
+def test_short_size_lists_are_padded_to_three() -> None:
+    assert normalize_size_mm("sphere", [20]) == [20, 20, 20]
+    assert normalize_size_mm("capsule", [10, 40]) == [10, 40, 40]
+    assert normalize_size_mm("box", [1, 2, 3]) == [1, 2, 3]
+    assert normalize_size_mm("box", [1]) == [1], "the controller rejects bad box sizes itself"
+    ball = scene_object_payload(
+        object_id="ball", shape="sphere", size_mm=[20], position_mm=[0, 0, 0], dynamic=False
+    )
+    assert ball["size_mm"] == [20, 20, 20]
+
+
+@pytest.mark.asyncio
+async def test_apply_scene_objects_pads_sizes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "feagi_mcp.mujoco_scene_control.discover_endpoint",
+        lambda _controller_id: _endpoint(),
+    )
+    posted: list[dict[str, Any]] = []
+
+    async def poster(_url: str, payload: dict[str, Any], _timeout: float) -> dict[str, Any]:
+        posted.append(payload)
+        return {"ok": True, "result": {"applied": True}}
+
+    body = {"objects": [{"id": "b", "shape": "sphere", "size_mm": [15], "position_mm": [0, 0, 0]}]}
+    result = await MujocoSceneControl(poster=poster).command("apply_scene_objects", body)
+    assert result["ok"] is True
+    assert posted[0]["objects"][0]["size_mm"] == [15, 15, 15]
+    assert body["objects"][0]["size_mm"] == [15], "the caller's body is not modified"
+
+
+@pytest.mark.asyncio
+async def test_controller_error_message_is_returned(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 400 from the control server keeps its reason instead of the HTTP status line."""
+    monkeypatch.setattr(
+        "feagi_mcp.mujoco_scene_control.discover_endpoint",
+        lambda _controller_id: _endpoint(),
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"ok": False, "error": "size_mm must be a 3-element list."})
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        "feagi_mcp.mujoco_scene_control.httpx.AsyncClient",
+        lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw),
+    )
+    result = await MujocoSceneControl().command("apply_scene_objects", {"objects": []})
+    assert result == {
+        "ok": False,
+        "action": "apply_scene_objects",
+        "error": "size_mm must be a 3-element list.",
+    }
+
+
+@pytest.mark.asyncio
+async def test_non_json_http_errors_still_raise(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "feagi_mcp.mujoco_scene_control.discover_endpoint",
+        lambda _controller_id: _endpoint(),
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="boom")
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        "feagi_mcp.mujoco_scene_control.httpx.AsyncClient",
+        lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw),
+    )
+    result = await MujocoSceneControl().command("list_scene_objects")
+    assert result["ok"] is False
+    assert "500" in result["error"]
