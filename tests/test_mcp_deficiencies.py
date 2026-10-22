@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import quote
 
 import httpx
 import pytest
@@ -473,7 +474,7 @@ class TestNeuronInspection:
         assert result["synapse_count"] == 2
         assert isinstance(result["synapses"], list)
         first_url = mock_client._client.get.call_args[0][0]
-        assert first_url.endswith("/aXN2bQEAAAM=/synapses")
+        assert first_url.endswith("/aXN2bQEAAAM%3D/synapses")
         assert "/synapses/incoming" not in first_url
 
     @pytest.mark.asyncio
@@ -776,7 +777,7 @@ class TestMonitorActivityLifetimeStats:
                         "spike_history": [],
                     }
                 )
-            if url.endswith(f"/v1/connectome/cortical_area/{area_id}/neurons"):
+            if url.endswith(f"/v1/connectome/cortical_area/{quote(area_id, safe='')}/neurons"):
                 return _ok(list(neuron_props.keys()))
             for nid, props in neuron_props.items():
                 if url.endswith(f"/v1/connectome/neuron/{nid}/properties"):

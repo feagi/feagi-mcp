@@ -7,12 +7,19 @@ import math
 from pathlib import Path
 from typing import Any
 
+import httpx
 from mcp.server.fastmcp import FastMCP
 
+from feagi_mcp.aligned_trace import record_aligned_trace_window
+from feagi_mcp.balance_measurement import measure_balance_window
 from feagi_mcp.bv_operations import list_operation_summaries
 from feagi_mcp.composer_simulator_packs import ComposerSimulatorPacksClient
 from feagi_mcp.config import load_config
 from feagi_mcp.cortical_id_decode import decode_cortical_id_interpretation
+from feagi_mcp.experiment_status import (
+    annotate_with_experiment_status,
+    read_experiment_status,
+)
 from feagi_mcp.feagi_client import (
     FeagiClient,
     analyze_genome_completeness,
@@ -23,6 +30,7 @@ from feagi_mcp.genome_artifact import (
     is_genome_artifact_file_name,
 )
 from feagi_mcp.io_cortical_id_encode import encode_io_cortical_id
+from feagi_mcp.live_state_drift import gather_live_state_drift
 from feagi_mcp.memory_diagnostics import memory_area_diagnostics
 from feagi_mcp.mujoco_scene_control import MujocoSceneControl, scene_object_payload
 from feagi_mcp.placement_policy import (
@@ -32,6 +40,12 @@ from feagi_mcp.placement_policy import (
     suggest_anchor_positions,
 )
 from feagi_mcp.snapshots import SnapshotManager, validate_label
+from feagi_mcp.weight_watch import (
+    freeze_mapping,
+    reset_mapping,
+    watch_weights,
+    weight_cap_from_area,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -323,6 +337,7 @@ async def get_memory_area_runtime_config(cortical_id: str, page_size: int = 1) -
         "lifecycle_totals": {
             "created_total": diagnostics["created_total"],
             "deleted_total": diagnostics["deleted_total"],
+            "source": "health_check.memory_area_stats[cortical_id]",
         },
         "episodic_upstream": diagnostics["episodic_upstream"],
         "scan_sources": diagnostics["scan_sources"],
@@ -3601,8 +3616,22 @@ async def list_controller_bridges() -> dict[str, Any]:
         ``agent_id`` join to the FEAGI registry when the launch descriptor
         includes that id. Also ``registered_agents`` with ``agent_name`` so
         opaque registry IDs can be identified without extra property calls.
+        ``_experiment`` says whether the Studio experiment is running; a
+        controller can stay up after its experiment stops.
     """
-    return await feagi.list_controller_bridges()
+    return annotate_with_experiment_status(await feagi.list_controller_bridges())
+
+
+@mcp.tool()
+async def get_experiment_status() -> dict[str, Any]:
+    """Whether an experiment is running in Neurorobotics Studio.
+
+    Read from the status file Studio writes on every run start and stop.
+    ``state`` is ``running``, ``stopped`` (simulator state is stale and motor
+    commands will not move the robot), or ``unknown`` (Studio not running or
+    exited without clearing it). Check this before testing behavior on a robot.
+    """
+    return read_experiment_status()
 
 
 @mcp.tool()
@@ -3704,6 +3733,8 @@ async def send_motor_command(
     4. Fires that voxel via ``stimulate_area``.
 
     **Prerequisites:**
+    - The experiment must be running in Studio (``_experiment.state`` in the
+      result, or ``get_experiment_status``).
     - The controller bridge must be running (check with ``list_controller_bridges``).
     - The agent must be registered (check with ``get_registered_agents``).
     - The burst engine must be running (check with ``get_burst_engine_status``).
@@ -3723,7 +3754,9 @@ async def send_motor_command(
         Stimulation result with resolved cortical area, voxel coordinate,
         and the value-to-voxel mapping used.
     """
-    return await feagi.send_motor_command(agent_id, joint_name, target_value)
+    return annotate_with_experiment_status(
+        await feagi.send_motor_command(agent_id, joint_name, target_value)
+    )
 
 
 @mcp.tool()
@@ -3771,11 +3804,17 @@ async def embodiment_get_physics_state(
     ``quaternion_wxyz`` and ``angular_velocity_rad_s``. Units are meters and
     radians, the raw MuJoCo state. ``embodiment_set_joint_state`` still
     accepts only scalar joints.
+
+    ``_experiment`` says whether the Studio experiment is running. When its
+    ``state`` is ``stopped``, the controller still answers with the last frame
+    before the stop: do not read a constant ``time`` as a frozen simulator.
     """
-    return await feagi.embodiment_get_physics_state(
-        introspection_url=introspection_url,
-        timeout_s=timeout_s,
-        controller_id=controller_id,
+    return annotate_with_experiment_status(
+        await feagi.embodiment_get_physics_state(
+            introspection_url=introspection_url,
+            timeout_s=timeout_s,
+            controller_id=controller_id,
+        )
     )
 
 
@@ -3796,12 +3835,14 @@ async def embodiment_set_joint_state(
     via the launcher-written descriptor. Free and ball joints are not writable
     here; read them from ``embodiment_get_physics_state``.
     """
-    return await feagi.embodiment_set_joint_state(
-        introspection_url=introspection_url,
-        joint_qpos=joint_qpos,
-        joint_qvel=joint_qvel,
-        timeout_s=timeout_s,
-        controller_id=controller_id,
+    return annotate_with_experiment_status(
+        await feagi.embodiment_set_joint_state(
+            introspection_url=introspection_url,
+            joint_qpos=joint_qpos,
+            joint_qvel=joint_qvel,
+            timeout_s=timeout_s,
+            controller_id=controller_id,
+        )
     )
 
 
@@ -3822,6 +3863,189 @@ async def embodiment_reset_simulation_time_stats(
         timeout_s=timeout_s,
         controller_id=controller_id,
     )
+
+
+@mcp.tool()
+async def measure_balance(
+    duration_s: float = 20.0,
+    controller_id: str = "mujoco",
+    upright_deg: float = 11.0,
+    fall_deg: float = 50.0,
+    free_joint: str | None = None,
+    introspection_url: str | None = None,
+) -> dict[str, Any]:
+    """Balance outcome numbers from the simulator: episodes, upright time, tilt, falls.
+
+    Samples the controller's ``GET /v1/state`` at 20 Hz for up to 25 s (the MCP
+    transport times out near 60 s; make longer windows with repeated calls and
+    keep the ``window_id`` of each). A drop of the simulator clock is a scene reset;
+    the clock just before the drop is that episode's length. Tilt is the angle
+    between the trunk's up axis and world up, from the trunk free joint's
+    quaternion (``pitch_deg`` and ``roll_deg`` are also sampled).
+
+    Returns numbers only: ``reset_count``, ``episode_length_s`` (ended episodes,
+    mean/median/max, ongoing), ``upright_fraction`` (tilt at or below
+    ``upright_deg``), a 10-degree tilt histogram, ``recoveries`` (tilt above
+    ``upright_deg`` then back below it within one episode), ``falls`` (crossings of
+    ``fall_deg``) and ``fall_confirmation_latency_s`` (first crossing of ``fall_deg``
+    to the reset). ``free_joint`` picks the trunk joint when auto-detection fails.
+    Check ``_experiment`` first: a stopped experiment serves one frozen frame.
+    """
+    url, _descriptor = feagi._resolve_introspection_url(introspection_url, controller_id)
+    if url is None:
+        return {
+            "error": "introspection_url_unavailable",
+            "message": f"No introspection descriptor found for controller_id={controller_id!r}.",
+        }
+    state_url = url.rstrip("/") + "/v1/state"
+    async with httpx.AsyncClient(timeout=2.0) as client:
+
+        async def fetch() -> dict[str, Any]:
+            response = await client.get(state_url)
+            if response.status_code != 200:
+                return {"error": f"HTTP {response.status_code}"}
+            payload = response.json()
+            return payload if isinstance(payload, dict) else {"error": "bad_payload"}
+
+        result = await measure_balance_window(
+            fetch,
+            duration_s,
+            upright_deg=upright_deg,
+            fall_deg=fall_deg,
+            free_joint=free_joint,
+        )
+    result["controller_id"] = controller_id
+    return annotate_with_experiment_status(result)
+
+
+@mcp.tool()
+async def record_aligned_trace(
+    duration_s: float,
+    areas: list[str],
+    controller_id: str = "mujoco",
+    signals: list[str] | None = None,
+    free_joint: str | None = None,
+    introspection_url: str | None = None,
+) -> dict[str, Any]:
+    """One timeline pairing each sampled burst with the simulator's physics at that moment.
+
+    Polls ``/v1/burst_engine/fire_queue/detailed`` (burst number in ``timestep``,
+    filtered to ``areas``) together with the controller's ``GET /v1/state`` for up to
+    20 s and at most 16 areas. The full trace is written to
+    ``var/traces/<trace_id>.jsonl`` (one row per burst: fired voxels per area, clock,
+    pitch, roll, tilt, trunk z, actuator ``ctrl`` targets for ``signals``, all
+    actuators when ``signals`` is omitted).
+
+    The return value is compact: per area, run-length encoded bursts on which it
+    fired with the physics and targets at the start of each run, so "tilt bin fired at
+    burst N, nudge voxel at N+2, pitch changed at N+6" is readable without the file.
+    ``bursts_missed_by_sampler`` counts engine bursts the FEAGI sampler did not
+    publish (it runs near 30 Hz).
+    """
+    url, _descriptor = feagi._resolve_introspection_url(introspection_url, controller_id)
+    if url is None:
+        return {
+            "error": "introspection_url_unavailable",
+            "message": f"No introspection descriptor found for controller_id={controller_id!r}.",
+        }
+    state_url = url.rstrip("/") + "/v1/state"
+    async with httpx.AsyncClient(timeout=2.0) as client:
+
+        async def fetch_physics() -> dict[str, Any]:
+            response = await client.get(state_url)
+            if response.status_code != 200:
+                return {"error": f"HTTP {response.status_code}"}
+            payload = response.json()
+            return payload if isinstance(payload, dict) else {"error": "bad_payload"}
+
+        result = await record_aligned_trace_window(
+            feagi.get_fire_queue_detailed,
+            fetch_physics,
+            duration_s,
+            [a.strip() for a in areas if isinstance(a, str) and a.strip()],
+            signals=signals,
+            free_joint=free_joint,
+        )
+    result["controller_id"] = controller_id
+    return annotate_with_experiment_status(result)
+
+
+@mcp.tool()
+async def check_live_state_drift(controller_id: str = "mujoco") -> dict[str, Any]:
+    """Report live brain state that no longer matches the genome or the controller.
+
+    Run it after ``health_check()`` at the start of a session and after any
+    controller restart. Compares: cortical area dimensions (live connectome vs
+    genome blueprint), burst frequency vs the genome's ``simulation_timestep``,
+    the controller descriptor's ``agent_id`` vs the registered agents, and each
+    IPU's width vs the columns present in the last sensor snapshot. Every finding
+    names the subject, both values and the ``update_cortical_area()`` /
+    ``set_burst_engine_frequency()`` call that restores the live value (or says
+    that a controller restart is needed). An empty ``findings`` list means nothing
+    drifted among the checked items.
+    """
+    return await gather_live_state_drift(feagi, controller_id=controller_id)
+
+
+@mcp.tool()
+async def watch_mapping_weights(
+    src_area: str,
+    dst_area: str,
+    duration_s: float = 20.0,
+    interval_s: float = 2.0,
+) -> dict[str, Any]:
+    """Sample one mapping's synapse weights over time (series of min/max/avg and extremes).
+
+    Every ``interval_s`` (at least 0.5 s) for up to 25 s, takes
+    ``diagnose_mapping_plasticity()`` statistics: matched synapse count, min, max,
+    avg, ``count_at_zero``, ``count_at_cap`` (cap is the destination's
+    ``neuron_post_synaptic_potential_max``) and the ids of the five largest and five
+    smallest synapses (from up to 200 matched synapses). ``avg_delta`` and
+    ``max_delta`` compare the last sample with the first. A flat series under
+    co-activity means learning is not happening; see
+    ``freeze_mapping_plasticity()`` and ``reset_mapping_weights()``.
+    """
+    dst_record = await feagi.fetch_cortical_area_properties(dst_area)
+    cap = weight_cap_from_area(dst_record if isinstance(dst_record, dict) else None)
+
+    async def diagnose() -> dict[str, Any]:
+        return await feagi.get_mapping_plasticity_diagnostics(
+            src_area, dst_area, sample_limit=200
+        )
+
+    result = await watch_weights(diagnose, duration_s, interval_s, cap=cap)
+    result["src_area"] = src_area
+    result["dst_area"] = dst_area
+    return result
+
+
+@mcp.tool()
+async def freeze_mapping_plasticity(
+    src_area: str, dst_area: str, frozen: bool = True
+) -> dict[str, Any]:
+    """Stop (or resume) learning on one mapping while keeping its synapses and weights.
+
+    FEAGI has no per-mapping freeze route (``/v1/neuroplasticity/disable`` only logs),
+    so this rewrites the stored rules with ``plasticity_flag`` off (``frozen=True``)
+    or on (``frozen=False``) through ``update_cortical_mapping()``. Reports weight
+    statistics before and after and ``weights_preserved``; if that is false the
+    rewrite regrew synapses and the learned weights are gone.
+    """
+    return await freeze_mapping(feagi, src_area.strip(), dst_area.strip(), bool(frozen))
+
+
+@mcp.tool()
+async def reset_mapping_weights(src_area: str, dst_area: str) -> dict[str, Any]:
+    """Return one mapping's synapse weights to their initial value by recreating the mapping.
+
+    FEAGI has no weight-reset route, so this deletes the mapping
+    (``delete_cortical_mapping()``) and recreates it with the same rules. FEAGI keeps
+    the weight of a neuron pair that already existed (verified), so the result
+    reports ``weights_before`` and ``weights_after`` and ``weights_reset`` says
+    whether the weights actually became one uniform value. Take ``snapshot_genome()``
+    first; if recreation fails the rules to re-apply are in the result.
+    """
+    return await reset_mapping(feagi, src_area.strip(), dst_area.strip())
 
 
 @mcp.tool()

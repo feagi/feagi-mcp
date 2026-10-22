@@ -30,7 +30,10 @@ guessing.
 1. `health_check()` to confirm FEAGI answers and see the genome name, area count, burst
    status, and any pending amalgamation. If it fails, go to
    [references/debugging.md](references/debugging.md) and call `diagnose_feagi_runtime()`.
-2. Pull only what the request needs. Prefer filtered, compact tools (see "Keep responses
+2. `check_live_state_drift()` when a robot or simulator is involved: it lists live state
+   that no longer matches the genome or the controller (area dimensions, burst rate, agent
+   id, IPU widths) with the call that restores each. Re-apply what you need before building.
+3. Pull only what the request needs. Prefer filtered, compact tools (see "Keep responses
    small" below).
 
 ## Vocabulary: map the user's words to FEAGI objects
@@ -87,10 +90,17 @@ locally with `interpret_cortical_id()`. Details: [references/concepts.md](refere
    the running genome are not saved to disk until `save_genome_to_filesystem()` runs
    (`health_check()` shows `latest_changes_saved_externally: false` until then); say so after
    a build.
+9. **Work in stages, then report gaps.** Build one verifiable stage at a time: create, wire,
+   verify with a cheap read, report numbers; stop after two failed checks instead of
+   iterating. If the host can route work to other models or subagents, run stages there and
+   keep design and review on the strongest model. End every task with the tool, skill,
+   controller or core shortcomings that cost time or forced a worse circuit, each marked
+   verified or suspected with its smallest fix. See [references/lessons.md](references/lessons.md).
 
 ## Keep responses small
 
-Many FEAGI payloads are large. Prefer the compact tool, and widen only when needed.
+Many FEAGI payloads are large. Prefer the compact tool, and widen only when needed. Issue
+independent calls together in one turn, and never poll physics or logs in a loop.
 
 | Instead of | Use |
 |---|---|
@@ -119,6 +129,7 @@ Many FEAGI payloads are large. Prefer the compact tool, and widen only when need
 | Neuromodulators | `list_modulator_types()`, `create_modulator()` | [memory-and-plasticity.md](references/memory-and-plasticity.md) |
 | Test or debug signal flow, a silent output, a dead FEAGI | `probe_area_response()`, `trace_signal_path()`, `diagnose_feagi_runtime()` | [debugging.md](references/debugging.md) |
 | Robots, joints, MuJoCo scenes, simulator assets | `get_registered_agents()`, `get_agent_joint_map()`, `get_mujoco_scene_config()` | [embodiment.md](references/embodiment.md) |
+| Measure robot behavior (balance, episodes, brain-to-body timing) | `measure_balance()`, `record_aligned_trace()` | [embodiment.md](references/embodiment.md) |
 | Save, snapshot, load, or merge genomes | `snapshot_genome()`, `save_genome_to_filesystem()`, `queue_amalgamation_by_payload()` | [genome-lifecycle.md](references/genome-lifecycle.md) |
 | Find a tool for anything else | | [tool-index.md](references/tool-index.md) |
 

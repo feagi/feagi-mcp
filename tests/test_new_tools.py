@@ -212,7 +212,8 @@ class TestMemoryAreaRuntimeConfigTool:
         result = await server.get_memory_area_runtime_config("mem_id")
         assert result["episodic_upstream"] == []
         assert result["scan_sources"] == ["field"]
-        assert result["lifecycle_totals"] == {"created_total": 9, "deleted_total": 9}
+        assert result["lifecycle_totals"]["created_total"] == 9
+        assert result["lifecycle_totals"]["deleted_total"] == 9
         assert [f["code"] for f in result["findings"]] == [
             "memory_no_episodic_upstream",
             "memory_neurons_expire_unmatched",
@@ -224,7 +225,8 @@ class TestMemoryAreaRuntimeConfigTool:
         server = self._patch_memory_endpoints(monkeypatch, {}, None)
         result = await server.get_memory_area_runtime_config("mem_id")
         assert result["episodic_upstream"] == ["upstream"]
-        assert result["lifecycle_totals"] == {"created_total": None, "deleted_total": None}
+        assert result["lifecycle_totals"]["created_total"] is None
+        assert result["lifecycle_totals"]["deleted_total"] is None
         assert result["findings"] == []
 
     @pytest.mark.asyncio
