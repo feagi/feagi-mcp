@@ -4079,7 +4079,8 @@ async def configure_mujoco_scene(
     - ``apply_scene_objects``: ``objects`` list of ``{id, shape, size_mm,
       position_mm, rgba, dynamic, mass_g, friction}``. ``shape`` is sphere, box, or capsule.
       ``size_mm`` is ``[radius]`` for a sphere, ``[radius, half_length]`` for a
-      capsule, or three half-extents for a box (short lists are padded to three). ``mass_g`` is weight in grams for dynamic objects.
+      capsule, or three half-extents for a box (short lists are padded to three).
+      ``mass_g`` is weight in grams for dynamic objects.
       ``friction`` is optional ``[sliding, torsional, rolling]``.
     - ``apply_scene_cameras``: ``disabled_model_camera_names``, ``added_cameras``
       with ``id``, ``position_mm``, ``fovy_deg``, ``aim_at_safety_zone``,
