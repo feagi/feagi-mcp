@@ -93,6 +93,12 @@ locally with `interpret_cortical_id()`. Details: [references/concepts.md](refere
    keep design and review on the strongest model. End every task with the tool, skill,
    controller or core shortcomings that cost time or forced a worse circuit, each marked
    verified or suspected with its smallest fix. See [references/lessons.md](references/lessons.md).
+10. **Stop on a blocking gap.** Before building toward a behavior, confirm the outcome can be
+    measured with the tools at hand and take a baseline. When a check cannot be run, a tool
+    contradicts its documentation, or the next step would work around a tool, controller or
+    core limitation, stop and report the gap before continuing. Cap each goal at a few
+    adjustment rounds without a passing check; past that, present options instead of trying
+    a new mechanism.
 
 ## Keep responses small
 
