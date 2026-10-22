@@ -30,6 +30,7 @@ DESTRUCTIVE_TOOLS = frozenset(
         "delete_cortical_mapping",
         "delete_modulator",
         "delete_genome_snapshot",
+        "reset_mapping_weights",
     }
 )
 
@@ -45,6 +46,7 @@ TOOL_CATEGORIES: dict[str, tuple[str, ...]] = {
         "get_controller_lifecycle_events",
         "get_experiment_status",
         "get_experiment_stop_cause",
+        "check_live_state_drift",
     ),
     "Genome, connectome, and snapshots": (
         "get_genome_info",
@@ -134,6 +136,9 @@ TOOL_CATEGORIES: dict[str, tuple[str, ...]] = {
         "inspect_memory_neuron",
         "diagnose_memory_twin_mapping",
         "diagnose_mapping_plasticity",
+        "watch_mapping_weights",
+        "freeze_mapping_plasticity",
+        "reset_mapping_weights",
         "get_fire_ledger_areas_window_config",
     ),
     "Modulators": (
@@ -203,6 +208,8 @@ TOOL_CATEGORIES: dict[str, tuple[str, ...]] = {
         "embodiment_get_physics_state",
         "embodiment_set_joint_state",
         "embodiment_reset_simulation_time_stats",
+        "measure_balance",
+        "record_aligned_trace",
     ),
     "MuJoCo scene and simulator packs": (
         "get_mujoco_scene_config",

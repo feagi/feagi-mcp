@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Final
+from urllib.parse import quote
 
 
 @dataclass(frozen=True, slots=True)
@@ -467,7 +468,7 @@ def resolve_path(path_template: str, path_params: dict[str, str] | None) -> str:
         return path_template
     out = path_template
     for key, value in path_params.items():
-        out = out.replace("{" + key + "}", value)
+        out = out.replace("{" + key + "}", quote(str(value), safe=""))
     if "{" in out:
         raise ValueError(f"unresolved placeholders in path: {out}")
     return out

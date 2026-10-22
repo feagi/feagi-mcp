@@ -7,6 +7,7 @@ report finds a generic fact; keep host- and vendor-specific advice out of it.
 ## Contents
 
 - Work in stages
+- Measure before you build
 - Signal and encoding facts
 - Embodiment facts
 - Diagnosing before designing
@@ -29,6 +30,20 @@ and report instead of iterating.
 - End every task with a gap report: which tool, skill, controller or core behavior cost
   time or forced a worse circuit, whether it is verified or suspected, and the smallest fix.
   Generic facts from that report belong in this file.
+
+## Measure before you build
+
+A behavioral goal needs an outcome metric that existing tools can read, and a baseline,
+before any circuit is built. For a balancing or walking robot that is
+`measure_balance()`: episodes between resets, upright fraction, falls and recovery counts
+as numbers, in 25 s windows that are concatenated by `window_id`. When the question is
+"did the brain react to the body in time", `record_aligned_trace()` pairs the bursts on
+which chosen areas fired with the physics at those bursts; read the burst numbers, not
+the plots. If the metric cannot be measured with existing tools, that is the first report
+of the task, not a script to write. After each stage, measure again with the same window
+length and compare numbers; and after every controller restart run
+`check_live_state_drift()` before trusting the next measurement, because re-registration
+reverts live area widths and the burst rate silently.
 
 ## Signal and encoding facts
 
@@ -84,6 +99,7 @@ and report instead of iterating.
   carry the pitch sign. Check `list_io_areas_compact()` against
   `get_sensor_snapshot_last()` column indices, widen with `update_cortical_area()`, and
   expect to redo it after every controller restart until the registration is fixed.
+  `check_live_state_drift()` lists such reverts with the restoring call.
 - **Gyro auto-scaling hides small rates.** Without a declared cutoff, a controller may scale
   the gyro to the largest rate seen; one fall makes balance-sized rates read as zero.
   Declare a cutoff in the controller's mapping file. That is embodiment configuration, not a

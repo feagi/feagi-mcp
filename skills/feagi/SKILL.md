@@ -30,7 +30,10 @@ guessing.
 1. `health_check()` to confirm FEAGI answers and see the genome name, area count, burst
    status, and any pending amalgamation. If it fails, go to
    [references/debugging.md](references/debugging.md) and call `diagnose_feagi_runtime()`.
-2. Pull only what the request needs. Prefer filtered, compact tools (see "Keep responses
+2. `check_live_state_drift()` when a robot or simulator is involved: it lists live state
+   that no longer matches the genome or the controller (area dimensions, burst rate, agent
+   id, IPU widths) with the call that restores each. Re-apply what you need before building.
+3. Pull only what the request needs. Prefer filtered, compact tools (see "Keep responses
    small" below).
 
 ## Vocabulary: map the user's words to FEAGI objects
@@ -126,6 +129,7 @@ independent calls together in one turn, and never poll physics or logs in a loop
 | Neuromodulators | `list_modulator_types()`, `create_modulator()` | [memory-and-plasticity.md](references/memory-and-plasticity.md) |
 | Test or debug signal flow, a silent output, a dead FEAGI | `probe_area_response()`, `trace_signal_path()`, `diagnose_feagi_runtime()` | [debugging.md](references/debugging.md) |
 | Robots, joints, MuJoCo scenes, simulator assets | `get_registered_agents()`, `get_agent_joint_map()`, `get_mujoco_scene_config()` | [embodiment.md](references/embodiment.md) |
+| Measure robot behavior (balance, episodes, brain-to-body timing) | `measure_balance()`, `record_aligned_trace()` | [embodiment.md](references/embodiment.md) |
 | Save, snapshot, load, or merge genomes | `snapshot_genome()`, `save_genome_to_filesystem()`, `queue_amalgamation_by_payload()` | [genome-lifecycle.md](references/genome-lifecycle.md) |
 | Find a tool for anything else | | [tool-index.md](references/tool-index.md) |
 

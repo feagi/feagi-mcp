@@ -7,6 +7,8 @@
 - Look inside areas and neurons
 - Find a broken path
 - Common causes of silence
+- Live state drift
+- Watch learning
 - FEAGI itself is failing
 - Known gotchas
 
@@ -85,6 +87,37 @@ robot, so say so before you do it.
 | Memory area stays empty | No `episodic_memory` upstream, or area is CUSTOM (`c` ID) | `get_memory_area_runtime_config()` |
 | Learning does nothing | Plasticity off, window too short, or no co-activation | `diagnose_mapping_plasticity()` |
 | Classifier does not stamp output | Scan blockers | `inspect_classifier()` |
+
+## Live state drift
+
+Live state reverts without any error: an agent re-registration re-applies the controller's
+IPU/OPU dimensions, a genome reload resets the burst rate, a controller restart registers
+a new agent id. `check_live_state_drift()` compares the live brain with the genome
+blueprint and the controller descriptor and lists every mismatch with both values and the
+restoring call (`update_cortical_area(cortical_id=..., updates=...)` or
+`set_burst_engine_frequency(frequency_hz=...)`; an unregistered agent needs a controller
+restart). Run it after `health_check()` at the start of a session, after every controller
+restart, and before blaming a circuit for going silent. Checks: cortical area dimensions,
+burst frequency vs `simulation_timestep`, descriptor `agent_id` vs registered agents, and
+IPU width vs the columns present in the last sensor snapshot.
+
+## Watch learning
+
+- `watch_mapping_weights(src_area, dst_area, duration_s, interval_s)` samples one
+  mapping's weight statistics over time (min, max, avg, count at 0, count at the
+  destination's PSP cap, the five largest and five smallest synapses) and reports
+  `avg_delta` and `max_delta`. A flat series while the pair co-fires means no learning:
+  check reward modulators and `plasticity_flag` with `diagnose_mapping_plasticity()`.
+- `freeze_mapping_plasticity(src_area, dst_area, frozen=True)` stops learning on one
+  mapping by rewriting its rules with `plasticity_flag` off (FEAGI has no per-mapping
+  freeze route). It reports weights before and after; `weights_preserved` false means the
+  rewrite regrew the synapses.
+- `reset_mapping_weights(src_area, dst_area)` deletes and recreates the mapping with the
+  same rules. FEAGI keeps the weight of a neuron pair that already existed, so read
+  `weights_reset` in the result instead of assuming; take `snapshot_genome()` first.
+- `inspect_cortical_areas_minimal()` now falls back to the incoming synapse listing when
+  the properties record reports `incoming_synapse_count` 0 (`incoming_synapse_count_source`
+  says so); the counter in the properties record stays 0 after a restart.
 
 ## FEAGI itself is failing
 

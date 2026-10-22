@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import quote
 
 import httpx
 
@@ -376,6 +377,15 @@ def _summarize_cortical_activity(payload: dict[str, Any]) -> dict[str, Any]:
         slim_stats.pop("active_neurons", None)
         summarized["firing_statistics"] = slim_stats
     return summarized
+
+
+def _path_id(value: str) -> str:
+    """Percent-encode an id embedded in a URL path.
+
+    Base64 cortical ids contain ``/`` and ``=``; sent raw in a path they split
+    the route and FEAGI answers 404. Query parameters are encoded by httpx.
+    """
+    return quote(str(value), safe="")
 
 
 def mapping_rules_from_area_record(area: dict[str, Any], dst_area: str) -> list[Any]:
@@ -1254,7 +1264,7 @@ class FeagiClient:
         """
         try:
             response = await self._client.get(
-                f"{self.base_url}/v1/connectome/cortical_area/{area_id}/neurons"
+                f"{self.base_url}/v1/connectome/cortical_area/{_path_id(area_id)}/neurons"
             )
             if response.status_code != 200:
                 return {
@@ -1324,6 +1334,22 @@ class FeagiClient:
         except Exception as e:
             logger.warning("_compute_area_lifetime_stats failed for %s: %s", area_id, e)
             return {"error": "lifetime_stats_failed", "message": str(e)}
+
+    async def list_cortical_areas_detailed(self) -> dict[str, Any]:
+        """GET /v1/connectome/cortical_areas/list/detailed - ``{cortical_id: record}`` unfiltered.
+
+        Each record carries the live ``cortical_dimensions``, ``cortical_group``,
+        ``dev_count`` and synapse counters. Used by drift checks; prefer
+        :meth:`list_cortical_areas` with filters for user-facing listings.
+        """
+        endpoint = "/v1/connectome/cortical_areas/list/detailed"
+        try:
+            response = await self._client.get(f"{self.base_url}{endpoint}")
+        except Exception as e:  # noqa: BLE001 - normalized into a diagnostic payload
+            return self._request_exception_payload(endpoint=endpoint, exception=e)
+        if response.status_code != 200:
+            return self._http_failure_payload(endpoint=endpoint, response=response)
+        return _as_json_dict(response.json())
 
     async def list_cortical_areas(
         self,
@@ -1441,7 +1467,7 @@ class FeagiClient:
             }
         try:
             response = await self._client.get(
-                f"{self.base_url}/v1/cortical_area/classifier/{cleaned}"
+                f"{self.base_url}/v1/cortical_area/classifier/{_path_id(cleaned)}"
             )
             if response.status_code != 200:
                 return {
@@ -1742,7 +1768,9 @@ class FeagiClient:
 
     async def get_modulator(self, modulator_id: str) -> dict[str, Any]:
         """Read one modulator instance."""
-        return await self._modulator_request("GET", f"/v1/modulator/modulator/{modulator_id}")
+        return await self._modulator_request(
+            "GET", f"/v1/modulator/modulator/{_path_id(modulator_id)}"
+        )
 
     async def create_modulator(
         self, modulator_id: str, definition: dict[str, Any]
@@ -1776,7 +1804,7 @@ class FeagiClient:
 
     async def modulator_usage(self, modulator_id: str) -> dict[str, Any]:
         """List areas and mappings subscribed to a modulator."""
-        return await self._modulator_request("GET", f"/v1/modulator/usage/{modulator_id}")
+        return await self._modulator_request("GET", f"/v1/modulator/usage/{_path_id(modulator_id)}")
 
     async def delete_modulator(self, modulator_id: str, force: bool = False) -> dict[str, Any]:
         """Delete a modulator. ``force`` removes subscriptions first."""
@@ -3583,7 +3611,7 @@ class FeagiClient:
                 "message": "Classifier inputs are classifier_sample and classifier_class mappings",
             }
         return await self._classifier_request(
-            "PUT", f"/v1/cortical_area/classifier/{cleaned}", updates
+            "PUT", f"/v1/cortical_area/classifier/{_path_id(cleaned)}", updates
         )
 
     async def attach_classifier_field(
@@ -3599,7 +3627,7 @@ class FeagiClient:
             }
         return await self._classifier_request(
             "POST",
-            f"/v1/cortical_area/classifier/{cleaned}/field",
+            f"/v1/cortical_area/classifier/{_path_id(cleaned)}/field",
             {"field_area_id": field},
         )
 
@@ -3824,7 +3852,7 @@ class FeagiClient:
                     page += 1
             else:
                 dst_neuron_resp = await self._client.get(
-                    f"{self.base_url}/v1/connectome/cortical_area/{dst}/neurons"
+                    f"{self.base_url}/v1/connectome/cortical_area/{_path_id(dst)}/neurons"
                 )
                 if dst_neuron_resp.status_code == 200:
                     raw_ids = dst_neuron_resp.json()
@@ -4722,9 +4750,11 @@ class FeagiClient:
             return {"error": "offset must be a non-negative integer"}
         try:
             if dir_n == "both":
-                r_out = await self._client.get(f"{self.base_url}/v1/connectome/{area}/synapses")
+                r_out = await self._client.get(
+                    f"{self.base_url}/v1/connectome/{_path_id(area)}/synapses"
+                )
                 r_in = await self._client.get(
-                    f"{self.base_url}/v1/connectome/{area}/synapses/incoming"
+                    f"{self.base_url}/v1/connectome/{_path_id(area)}/synapses/incoming"
                 )
                 if r_out.status_code != 200 and r_in.status_code != 200:
                     return {
@@ -4761,9 +4791,9 @@ class FeagiClient:
                 return result
 
             if dir_n == "outgoing":
-                path = f"{self.base_url}/v1/connectome/{area}/synapses"
+                path = f"{self.base_url}/v1/connectome/{_path_id(area)}/synapses"
             else:
-                path = f"{self.base_url}/v1/connectome/{area}/synapses/incoming"
+                path = f"{self.base_url}/v1/connectome/{_path_id(area)}/synapses/incoming"
 
             response = await self._client.get(path)
             if response.status_code == 200:
@@ -4809,7 +4839,7 @@ class FeagiClient:
             return {"error": "neuron_cap must be a positive integer"}
         try:
             response = await self._client.get(
-                f"{self.base_url}/v1/connectome/cortical_area/{cid}/neurons"
+                f"{self.base_url}/v1/connectome/cortical_area/{_path_id(cid)}/neurons"
             )
             if response.status_code != 200:
                 return {
@@ -5246,10 +5276,42 @@ class FeagiClient:
                         if isinstance(bag, dict) and field in bag:
                             projected[field] = bag[field]
                 slim[cid] = projected
+            await self._fill_incoming_synapse_counts(slim)
             return slim
         except Exception as e:
             logger.error("inspect_cortical_areas_minimal failed: %s", e)
             return {"error": str(e)}
+
+    async def _fill_incoming_synapse_counts(self, slim: dict[str, Any]) -> None:
+        """Replace a 0 or missing ``incoming_synapse_count`` with the synapse listing count.
+
+        ``cortical_area_properties`` reads the connectome manager's running counter,
+        which stays 0 for synapses grown after a restart even when
+        ``GET /v1/connectome/{id}/synapses/incoming`` lists them (verified live).
+        """
+        suspect = [
+            cid
+            for cid, record in slim.items()
+            if isinstance(record, dict)
+            and "error" not in record
+            and not record.get("incoming_synapse_count")
+        ]
+        if not suspect:
+            return
+        listings = await asyncio.gather(
+            *(
+                self.list_area_synapses(cid, direction="incoming", view="summary")
+                for cid in suspect
+            )
+        )
+        for cid, listing in zip(suspect, listings, strict=True):
+            if not isinstance(listing, dict) or listing.get("error"):
+                continue
+            count = listing.get("synapse_count")
+            if isinstance(count, int) and not isinstance(count, bool):
+                record = slim[cid]
+                record["incoming_synapse_count"] = count
+                record["incoming_synapse_count_source"] = "synapse_listing"
 
     @staticmethod
     def _extract_cortical_dimensions(area_payload: dict[str, Any]) -> list[int] | None:

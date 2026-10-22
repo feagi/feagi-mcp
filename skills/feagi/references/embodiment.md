@@ -6,6 +6,7 @@
 - Driving joints
 - Matching the genome to the robot
 - Simulator ground truth
+- Measuring behavior
 - MuJoCo scene settings
 - Simulator asset packs
 
@@ -59,6 +60,34 @@ When a robot does not respond, check that the genome's OPUs are the ones the age
 - `embodiment_set_joint_state(joint_qpos=..., joint_qvel=...)` places joints directly (for
   example to tilt a pendulum before a test).
 - `embodiment_reset_simulation_time_stats()` resets the simulation-speed benchmark.
+
+## Measuring behavior
+
+Take a baseline with these before building toward a behavioral goal, and re-run them after
+each stage. Both read the controller's physics endpoint directly, so they need a running
+experiment (`_experiment.state` is `running`).
+
+- `measure_balance(duration_s, controller_id, upright_deg, fall_deg)`: samples the
+  simulator at 20 Hz for up to 25 s and returns numbers only: `reset_count` (clock drops),
+  `episode_length_s` (ended episodes with mean, median, max, plus the ongoing one),
+  `upright_fraction`, a 10-degree tilt histogram, `recoveries`, `falls`, and
+  `fall_confirmation_latency_s` (fall threshold to reset). Each call carries a
+  `window_id`; for a longer measurement make repeated calls and keep the ids. Tilt comes
+  from the trunk free joint's quaternion; pass `free_joint` if the robot's root is not
+  auto-detected. Compare windows by their numbers, not by impression.
+- `record_aligned_trace(duration_s, areas, signals)`: one timeline pairing each sampled
+  burst with the physics at that moment, for up to 20 s and 16 areas. The full trace is in
+  `var/traces/<trace_id>.jsonl`; the result is per area a run-length list of the bursts on
+  which it fired with pitch, roll, tilt, trunk height and the chosen actuator targets at
+  the start of each run. Use it to answer "did the tilt bin fire before the nudge voxel,
+  and did pitch change after?" with burst numbers. `bursts_missed_by_sampler` says how
+  many engine bursts FEAGI's sampler skipped.
+- `check_live_state_drift()` after any controller restart: re-registration re-applies the
+  controller's IPU/OPU dimensions and can revert hand-widened areas. The result names each
+  drifted value and the `update_cortical_area()` or `set_burst_engine_frequency()` call
+  that restores it.
+- For joint trajectories over time without brain alignment, the Studio tools
+  `record_embodiment_trace` and `run_embodiment_trial` remain the right choice.
 
 ## MuJoCo scene settings
 
