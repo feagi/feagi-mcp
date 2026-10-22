@@ -22,6 +22,15 @@ FEAGI separates two kinds of memory:
   from a non-memory area into memory. Bidirectional association is two one-directional
   mappings (A to B and B to A).
 
+An `associative_memory` mapping from a memory area to a non-memory area (for example a motor
+drive) starts with **zero synapses** and that is normal. A synapse from a memory neuron to a
+destination neuron is created only when both fire inside the rule's `plasticity_window`; if
+the rule subscribes to a `synaptic.reward` modulator, the reward must also be positive in
+that window. Memory neurons firing on their own never produce synapses, so the destination
+must be driven (babble, reflex, or a teacher signal) while the memory recalls. Check progress
+with `diagnose_mapping_plasticity(src, dst)` and `inspect_memory_neuron()` (realized
+synapses); `get_connectivity()` showing 0 right after wiring is not a failure.
+
 Create memory areas with `create_cortical_area(cortical_type="MEMORY", dimensions=[1, 1, 1],
 brain_region_id=...)`. The ID must start with `m`; a `c` ID will never form memory neurons.
 
@@ -71,11 +80,26 @@ Plasticity is configured per mapping rule (`apply_connectivity_rule()`,
 | `plasticity_window` | Co-activation window, in bursts |
 | `max_weight` | Cap on positive weight growth (`stdp` / `rstdp` only) |
 | `plasticity_eta` | Learning rate in the weight commit `w += eta * R * e`; default 1.0, use (0, 1] for fine learning |
-| `eligibility_decay_bursts` | R-STDP eligibility trace decay (required, at least 1) |
-| `reward_source_area`, `punishment_source_area` | R-STDP detector areas (at least one) |
+| `eligibility_decay_bursts` | R-STDP eligibility trace decay in bursts; 0 means reward must coincide with the co-firing burst, 10 to 50 lets a later reward credit earlier co-firing |
+| `modulators` | Ids of `synaptic.reward` (and `synaptic.learning_rate` / `synaptic.transmission_gain`) instances the rule subscribes to |
 
-R-STDP detector areas must be driven only by hard-wired, non-plastic input. FEAGI's
-wireheading check rejects genomes where learning can feed its own reward.
+**Reward comes only from `synaptic.reward` modulators.** R(t) is the sum of the subscribed
+reward instances' signals (positive magnitude for reward, negative for punishment), read from
+their driver areas each burst. The pre-v4 rule fields `reward_source_area` and
+`punishment_source_area` are rejected by `update_cortical_mapping`; wire the detector area
+into the modulator's driver area instead. A `plasticity_mode: rstdp` rule with no
+`synaptic.reward` subscription is rejected too, because R(t) would stay 0 and no weight would
+ever change. The usual order is: `create_modulator()` for reward and punishment, wire the
+detector areas to the two driver areas, write the plastic rule, then
+`set_mapping_modulators(src, dst, [reward_id, punish_id])`, which also switches the rule to
+`rstdp` and reports what it changed in `notes`.
+
+Any rule that subscribes to `synaptic.reward` is reward-gated, in `stdp` mode as well: no
+potentiation while the reward driver is silent. Confirm learning with
+`health_check().synaptic_plasticity_generation` moving and `list_area_synapses()` weights.
+
+Reward and punishment detector areas must be driven only by hard-wired, non-plastic input.
+FEAGI's wireheading check rejects genomes where learning can feed its own reward.
 
 FEAGI keeps **fire ledgers** so STDP can see which sources and destinations co-fired. Check
 whether a mapping is actually learning with `diagnose_mapping_plasticity(src_area, dst_area)`,
