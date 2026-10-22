@@ -93,6 +93,10 @@ async def monitor_activity(
     "0 spikes now but lifetime_active_count > 0" result clearly distinguishes
     "currently quiet" from "never wired/never fired".
 
+    Rates are sampled over the window, not counted per burst: a rate near half the
+    burst frequency does not show that a neuron fires every other burst. For per-burst
+    cadence read ``get_fire_queue_detailed`` on consecutive bursts.
+
     Args:
         area_id: Cortical area identifier (e.g., "cCPGa_", "opose0").
         duration_ms: Sample window in milliseconds (default: 1000).
@@ -997,6 +1001,11 @@ async def set_mapping_modulators(
     """Replace synaptic modulator subscriptions on the mapping from src to dst.
 
     ``morphology_id`` limits the write to one rule when several rules share the pair.
+    When the list contains a ``synaptic.reward`` modulator, the rule is switched to
+    ``plasticity_mode: rstdp`` (reward gates every weight change) and any legacy
+    ``reward_source_area`` / ``punishment_source_area`` fields are dropped; the result's
+    ``notes`` lists what changed. Set ``eligibility_decay_bursts`` on the rule for reward
+    that arrives after the co-firing.
     """
     return await feagi.set_mapping_modulators(src_area, dst_area, modulator_ids, morphology_id)
 
@@ -1836,6 +1845,9 @@ async def update_cortical_area(cortical_id: str, updates: dict[str, Any]) -> dic
     call when switching from MP learning; FEAGI rejects both on. Tune with
     ``mp_delta_quantization`` (MP units, > 0) or ``mp_ratio_quantization`` (percent, > 0).
     Verify with ``get_memory_area_runtime_config`` (``mp_encoding.effective_mode``).
+
+    ``neuron_excitability`` is a fraction in 0..=1 (the share of bursts a neuron above
+    threshold fires; 1 = always). Percent values such as 25 are rejected; pass 0.25.
 
     Args:
         cortical_id: Cortical area ID to update

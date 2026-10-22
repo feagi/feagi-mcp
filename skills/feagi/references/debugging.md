@@ -38,6 +38,11 @@ The burst engine must be running for anything to propagate: check
 | Burst rate, counter, run state | `get_burst_engine_config()`, `get_burst_counter()`, `get_burst_engine_status()` |
 | System-wide counters | `get_runtime_metrics()`, `health_check()` |
 
+`monitor_activity()` rates are sampled over the window, not counted per burst. A rate near
+half the burst frequency on a one-neuron loop does not mean the neuron fires every other
+burst; a `block_to_block` self-mapping with delay 1 fires every burst. For per-burst cadence,
+read `get_fire_queue_detailed()` on consecutive bursts or use `probe_area_response()`.
+
 Burst control: `control_burst_engine(action)` with `start`, `resume`, `pause`, or `stop`;
 `pause_burst_engine()` and `resume_burst_engine()` hold and release;
 `set_burst_engine_frequency(frequency_hz)` changes the rate. Pausing affects every connected

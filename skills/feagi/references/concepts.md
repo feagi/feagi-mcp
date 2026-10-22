@@ -100,7 +100,7 @@ for several. Change them with `update_cortical_area(cortical_id, updates)`.
 | `neuron_post_synaptic_potential` | Charge a spike delivers (`neuron_post_synaptic_potential_max` caps it). |
 | `neuron_mp_driven_psp` | A spike delivers the sender's own potential instead of a fixed PSP. |
 | `neuron_psp_uniform_distribution` | Keeps the PSP undivided when it fans out. |
-| `neuron_excitability` | Probability-like scaling of firing above threshold; lower values make firing random. |
+| `neuron_excitability` | Fraction in 0..=1 of bursts a neuron above threshold actually fires (1 = always, 0.25 = one in four). Percent values such as 25 are rejected. |
 | `neuron_refractory_period`, `neuron_snooze_period` | Bursts a neuron stays silent after firing. |
 | `neuron_consecutive_fire_count` | Limit on back-to-back firing (0 = no limit). |
 | `neuron_mp_charge_accumulation` | Whether potential carries over between bursts. |

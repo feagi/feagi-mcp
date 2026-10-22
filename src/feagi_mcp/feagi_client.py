@@ -1836,6 +1836,18 @@ class FeagiClient:
         rules = existing.get("rules")
         if not isinstance(rules, list) or not rules:
             return {"error": "no mapping rules", "src_area": src_area, "dst_area": dst_area}
+        reward_ids: set[str] = set()
+        if replace and modulator_ids:
+            catalog = await self.list_modulators()
+            if isinstance(catalog, dict) and not catalog.get("error"):
+                reward_ids = {
+                    instance_id
+                    for instance_id, definition in catalog.items()
+                    if isinstance(definition, dict)
+                    and definition.get("type") == "synaptic.reward"
+                    and instance_id in modulator_ids
+                }
+        notes: list[str] = []
         updated: list[Any] = []
         touched = 0
         for rule in rules:
@@ -1848,6 +1860,32 @@ class FeagiClient:
             copied = dict(rule)
             if replace:
                 copied["modulators"] = list(modulator_ids)
+                # FEAGI computes R(t) only from `synaptic.reward` modulators. The pre-v4
+                # `reward_source_area` / `punishment_source_area` fields are rejected by the
+                # core, and a reward subscription only gates learning when the rule runs
+                # reward-modulated plasticity, so make the rule consistent in one write.
+                for legacy_key in ("reward_source_area", "punishment_source_area"):
+                    if legacy_key in copied:
+                        copied.pop(legacy_key)
+                        notes.append(
+                            f"dropped {legacy_key}: FEAGI reads reward only from "
+                            "synaptic.reward modulators"
+                        )
+                if reward_ids:
+                    mode = str(copied.get("plasticity_mode") or "").lower()
+                    if mode not in ("rstdp", "r-stdp"):
+                        copied["plasticity_mode"] = "rstdp"
+                        copied["plasticity_flag"] = True
+                        notes.append(
+                            "set plasticity_mode to rstdp so the synaptic.reward "
+                            "subscription gates weight changes"
+                        )
+                    if not copied.get("eligibility_decay_bursts"):
+                        notes.append(
+                            "eligibility_decay_bursts is unset (0): reward must arrive in "
+                            "the same burst as the co-firing; set it (for example 20) for "
+                            "delayed reward"
+                        )
             else:
                 current = copied.get("modulators")
                 kept = (
@@ -1864,7 +1902,11 @@ class FeagiClient:
             touched += 1
         if touched == 0:
             return {"error": "no matching mapping rule", "morphology_id": morphology_id}
-        return await self.update_cortical_mapping(src_area, dst_area, updated)
+        result = await self.update_cortical_mapping(src_area, dst_area, updated)
+        if notes and isinstance(result, dict):
+            result = dict(result)
+            result["notes"] = sorted(set(notes))
+        return result
 
     async def _modulator_request(
         self,
@@ -3275,6 +3317,18 @@ class FeagiClient:
         firing-rate homeostasis for dense custom areas (same key as the REST/Brain
         Visualizer PUT body). Omitted fields keep prior behavior.
         """
+        for key in ("neuron_excitability", "excitability"):
+            value = updates.get(key)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            if not 0.0 <= float(value) <= 1.0:
+                return {
+                    "error": "invalid_excitability",
+                    "message": (
+                        f"{key} is the fraction of bursts a neuron above threshold fires, "
+                        f"0..=1 (1 = always); got {value}. Use 0.25 for 25%, not 25."
+                    ),
+                }
         try:
             request_data = {"cortical_id": cortical_id}
             request_data.update(updates)
