@@ -87,10 +87,17 @@ locally with `interpret_cortical_id()`. Details: [references/concepts.md](refere
    the running genome are not saved to disk until `save_genome_to_filesystem()` runs
    (`health_check()` shows `latest_changes_saved_externally: false` until then); say so after
    a build.
+9. **Work in stages, then report gaps.** Build one verifiable stage at a time: create, wire,
+   verify with a cheap read, report numbers; stop after two failed checks instead of
+   iterating. If the host can route work to other models or subagents, run stages there and
+   keep design and review on the strongest model. End every task with the tool, skill,
+   controller or core shortcomings that cost time or forced a worse circuit, each marked
+   verified or suspected with its smallest fix. See [references/lessons.md](references/lessons.md).
 
 ## Keep responses small
 
-Many FEAGI payloads are large. Prefer the compact tool, and widen only when needed.
+Many FEAGI payloads are large. Prefer the compact tool, and widen only when needed. Issue
+independent calls together in one turn, and never poll physics or logs in a loop.
 
 | Instead of | Use |
 |---|---|

@@ -18,6 +18,10 @@ from feagi_mcp.feagi_client import (
     analyze_genome_completeness,
     project_cortical_area_catalog_row,
 )
+from feagi_mcp.experiment_status import (
+    annotate_with_experiment_status,
+    read_experiment_status,
+)
 from feagi_mcp.genome_artifact import (
     decode_genome_artifact,
     is_genome_artifact_file_name,
@@ -3589,8 +3593,22 @@ async def list_controller_bridges() -> dict[str, Any]:
         ``agent_id`` join to the FEAGI registry when the launch descriptor
         includes that id. Also ``registered_agents`` with ``agent_name`` so
         opaque registry IDs can be identified without extra property calls.
+        ``_experiment`` says whether the Studio experiment is running; a
+        controller can stay up after its experiment stops.
     """
-    return await feagi.list_controller_bridges()
+    return annotate_with_experiment_status(await feagi.list_controller_bridges())
+
+
+@mcp.tool()
+async def get_experiment_status() -> dict[str, Any]:
+    """Whether an experiment is running in Neurorobotics Studio.
+
+    Read from the status file Studio writes on every run start and stop.
+    ``state`` is ``running``, ``stopped`` (simulator state is stale and motor
+    commands will not move the robot), or ``unknown`` (Studio not running or
+    exited without clearing it). Check this before testing behavior on a robot.
+    """
+    return read_experiment_status()
 
 
 @mcp.tool()
@@ -3692,6 +3710,8 @@ async def send_motor_command(
     4. Fires that voxel via ``stimulate_area``.
 
     **Prerequisites:**
+    - The experiment must be running in Studio (``_experiment.state`` in the
+      result, or ``get_experiment_status``).
     - The controller bridge must be running (check with ``list_controller_bridges``).
     - The agent must be registered (check with ``get_registered_agents``).
     - The burst engine must be running (check with ``get_burst_engine_status``).
@@ -3711,7 +3731,9 @@ async def send_motor_command(
         Stimulation result with resolved cortical area, voxel coordinate,
         and the value-to-voxel mapping used.
     """
-    return await feagi.send_motor_command(agent_id, joint_name, target_value)
+    return annotate_with_experiment_status(
+        await feagi.send_motor_command(agent_id, joint_name, target_value)
+    )
 
 
 @mcp.tool()
@@ -3759,11 +3781,17 @@ async def embodiment_get_physics_state(
     ``quaternion_wxyz`` and ``angular_velocity_rad_s``. Units are meters and
     radians, the raw MuJoCo state. ``embodiment_set_joint_state`` still
     accepts only scalar joints.
+
+    ``_experiment`` says whether the Studio experiment is running. When its
+    ``state`` is ``stopped``, the controller still answers with the last frame
+    before the stop: do not read a constant ``time`` as a frozen simulator.
     """
-    return await feagi.embodiment_get_physics_state(
-        introspection_url=introspection_url,
-        timeout_s=timeout_s,
-        controller_id=controller_id,
+    return annotate_with_experiment_status(
+        await feagi.embodiment_get_physics_state(
+            introspection_url=introspection_url,
+            timeout_s=timeout_s,
+            controller_id=controller_id,
+        )
     )
 
 
@@ -3784,12 +3812,14 @@ async def embodiment_set_joint_state(
     via the launcher-written descriptor. Free and ball joints are not writable
     here; read them from ``embodiment_get_physics_state``.
     """
-    return await feagi.embodiment_set_joint_state(
-        introspection_url=introspection_url,
-        joint_qpos=joint_qpos,
-        joint_qvel=joint_qvel,
-        timeout_s=timeout_s,
-        controller_id=controller_id,
+    return annotate_with_experiment_status(
+        await feagi.embodiment_set_joint_state(
+            introspection_url=introspection_url,
+            joint_qpos=joint_qpos,
+            joint_qvel=joint_qvel,
+            timeout_s=timeout_s,
+            controller_id=controller_id,
+        )
     )
 
 

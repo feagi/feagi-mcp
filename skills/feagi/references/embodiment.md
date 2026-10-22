@@ -49,6 +49,10 @@ When a robot does not respond, check that the genome's OPUs are the ones the age
 
 ## Simulator ground truth
 
+- Check the experiment first: `get_experiment_status()`, or `_experiment` on the physics,
+  motor and bridge tools. When `state` is `stopped`, the controller keeps serving the last
+  frame, so a constant `time` means the experiment is stopped, not that the simulator froze.
+  Ask the user to run the experiment before testing behavior on the robot.
 - `embodiment_discover_introspection_endpoint()` finds a controller's introspection URL.
 - `embodiment_get_physics_state()` reads actuator controls and joint positions from the
   simulator.

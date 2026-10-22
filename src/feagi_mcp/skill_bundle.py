@@ -43,6 +43,7 @@ TOOL_CATEGORIES: dict[str, tuple[str, ...]] = {
         "get_last_failed_mutation",
         "get_log_tail",
         "get_controller_lifecycle_events",
+        "get_experiment_status",
         "get_experiment_stop_cause",
     ),
     "Genome, connectome, and snapshots": (
