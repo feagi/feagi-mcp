@@ -4009,9 +4009,7 @@ async def watch_mapping_weights(
     cap = weight_cap_from_area(dst_record if isinstance(dst_record, dict) else None)
 
     async def diagnose() -> dict[str, Any]:
-        return await feagi.get_mapping_plasticity_diagnostics(
-            src_area, dst_area, sample_limit=200
-        )
+        return await feagi.get_mapping_plasticity_diagnostics(src_area, dst_area, sample_limit=200)
 
     result = await watch_weights(diagnose, duration_s, interval_s, cap=cap)
     result["src_area"] = src_area

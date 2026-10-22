@@ -5353,10 +5353,7 @@ class FeagiClient:
         if not suspect:
             return
         listings = await asyncio.gather(
-            *(
-                self.list_area_synapses(cid, direction="incoming", view="summary")
-                for cid in suspect
-            )
+            *(self.list_area_synapses(cid, direction="incoming", view="summary") for cid in suspect)
         )
         for cid, listing in zip(suspect, listings, strict=True):
             if not isinstance(listing, dict) or listing.get("error"):
