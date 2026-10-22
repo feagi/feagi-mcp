@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-22
+
+### Changed
+- **Dependencies**: pin `feagi-core==2.6.8` (Python SDK; pins `feagi-rust-py-libs==0.0.118` and Brain Visualizer `2.7.0`).
+
 ### Added
 - **FEAGI agent skill** (`skills/feagi/`): a host-neutral Agent Skill that teaches agents
   FEAGI concepts and IDs, circuit naming and placement policy, reuse-first connectivity and
@@ -351,7 +356,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `/v1/cortical_area/list` sometimes returns malformed JSON (fallback implemented)
 - `/v1/embodiment/status` not yet available (fallback to genome analysis)
 
-## [0.1.0] - 2026-03-29
+## Draft notes - 2026-03-29
+
+Superseded by the published 0.0.1 release. This heading was 0.1.0 before that number was used.
 
 ### Added
 - Initial release
