@@ -330,6 +330,76 @@ class TestMemoryAreaRuntimeConfigTool:
         assert lifecycle["lifespan_growth_rate"]["value"] == 1.5
         assert lifecycle["longterm_mem_threshold"]["value"] == 70
 
+    @pytest.mark.asyncio
+    async def test_reports_cap_eviction_pool_and_findings(self, monkeypatch):
+        """New cap/eviction fields, counters and pool block surface with sources and findings."""
+        from feagi_mcp import server
+
+        async def fake_props(_cortical_id: str):
+            return {"cortical_id": "mem_id", "cortical_type": "memory", "properties": {}}
+
+        async def fake_bv_operation(_operation_id: str, **_kwargs):
+            return {
+                "short_term_neuron_count": 0,
+                "long_term_neuron_count": 0,
+                "total_memory_neuron_ids": 0,
+                "memory_parameters": {"memory_neuron_cap": 0, "ltm_eviction": "LRU"},
+                "memory_pool": {"pool_capacity": 100, "pool_in_use": 95, "pool_ltm": 60},
+            }
+
+        monkeypatch.setattr(server.feagi, "fetch_cortical_area_properties", fake_props)
+        monkeypatch.setattr(server.feagi, "brain_visualizer_operation", fake_bv_operation)
+
+        async def fake_summary(**_kwargs):
+            return {"items": [{"src": "u", "dst": "mem_id", "morphology": "episodic_memory"}]}
+
+        async def fake_health():
+            return {
+                "memory_area_stats": {
+                    "mem_id": {
+                        "created_total": 3,
+                        "deleted_total": 1,
+                        "neuron_count": 2,
+                        "evicted_total": 2,
+                        "creation_failed_total": 4,
+                    }
+                }
+            }
+
+        monkeypatch.setattr(server.feagi, "get_connectivity_summary", fake_summary)
+        monkeypatch.setattr(server.feagi, "health_check", fake_health)
+
+        result = await server.get_memory_area_runtime_config("mem_id")
+        lifecycle = result["effective_lifecycle"]
+        assert lifecycle["memory_neuron_cap"] == {
+            "value": 0,
+            "source": "runtime_memory_parameters",
+        }
+        assert lifecycle["ltm_eviction"] == {
+            "value": "lru",
+            "source": "runtime_memory_parameters",
+        }
+        assert result["lifecycle_totals"]["evicted_total"] == 2
+        assert result["lifecycle_totals"]["creation_failed_total"] == 4
+        assert result["memory_pool"]["pool_in_use"] == 95
+        assert [f["code"] for f in result["findings"]] == [
+            "memory_pool_nearly_full",
+            "memory_creation_failed",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_older_feagi_without_new_fields_reports_null(self, monkeypatch):
+        """No cap/eviction/pool/counters: nulls and no error."""
+        server = self._patch_memory_endpoints(monkeypatch, {}, None)
+        result = await server.get_memory_area_runtime_config("mem_id")
+        lifecycle = result["effective_lifecycle"]
+        assert lifecycle["memory_neuron_cap"] == {"value": None, "source": "missing"}
+        assert lifecycle["ltm_eviction"] == {"value": None, "source": "missing"}
+        assert result["lifecycle_totals"]["evicted_total"] is None
+        assert result["lifecycle_totals"]["creation_failed_total"] is None
+        assert result["memory_pool"]["pool_capacity"] is None
+        assert result["findings"] == []
+
     @staticmethod
     def _patch_memory_endpoints(monkeypatch, memory_parameters, effective_mp_mode):
         from feagi_mcp import server

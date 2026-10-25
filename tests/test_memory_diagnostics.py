@@ -1,8 +1,10 @@
 """Tests for local memory-area wiring and lifecycle diagnostics."""
 
 from feagi_mcp.memory_diagnostics import (
+    CODE_CREATION_FAILED,
     CODE_EXPIRES_UNMATCHED,
     CODE_NO_EPISODIC_UPSTREAM,
+    CODE_POOL_NEARLY_FULL,
     annotate_shared_edges,
     inbound_sources,
     lifecycle_totals,
@@ -30,13 +32,21 @@ def test_lifecycle_totals_absent_area_is_unknown_not_zero() -> None:
         "created_total": None,
         "deleted_total": None,
         "neuron_count": None,
+        "evicted_total": None,
+        "creation_failed_total": None,
     }
     stats = {"kmem": {"created_total": 7, "deleted_total": 5, "neuron_count": 2}}
     assert lifecycle_totals(stats, "kmem") == {
         "created_total": 7,
         "deleted_total": 5,
         "neuron_count": 2,
+        "evicted_total": None,
+        "creation_failed_total": None,
     }
+    stats = {"kmem": {"evicted_total": 4, "creation_failed_total": 1}}
+    out = lifecycle_totals(stats, "kmem")
+    assert out["evicted_total"] == 4
+    assert out["creation_failed_total"] == 1
 
 
 def test_scan_only_memory_reports_no_episodic_upstream() -> None:
@@ -74,3 +84,27 @@ def test_annotate_shared_edges_only_marks_multi_rule_edges() -> None:
     assert rows[1]["edge_morphologies"] == shared
     assert "edge_morphologies" not in rows[2]
     assert "edge_morphologies" not in rows[3]
+
+
+def test_pool_over_ninety_percent_and_failed_creations_are_flagged() -> None:
+    pool = {"pool_capacity": 1000, "pool_in_use": 901, "pool_ltm": 800}
+    stats = {"kmem": {"created_total": 5, "deleted_total": 0, "neuron_count": 5,
+                      "creation_failed_total": 3}}
+    out = memory_area_diagnostics("kmem", _items(), stats, 0, pool)
+    codes = [f["code"] for f in out["findings"]]
+    assert codes == [CODE_POOL_NEARLY_FULL, CODE_CREATION_FAILED]
+    assert out["memory_pool"]["pool_use_fraction"] == 0.901
+    assert out["creation_failed_total"] == 3
+
+
+def test_pool_at_or_below_ninety_percent_and_missing_fields_are_quiet() -> None:
+    pool = {"pool_capacity": 1000, "pool_in_use": 900, "pool_ltm": 10}
+    assert memory_area_diagnostics("kmem", _items(), None, 0, pool)["findings"] == []
+    out = memory_area_diagnostics("kmem", _items(), None, 0, None)
+    assert out["findings"] == []
+    assert out["memory_pool"] == {
+        "pool_capacity": None,
+        "pool_in_use": None,
+        "pool_ltm": None,
+        "pool_use_fraction": None,
+    }

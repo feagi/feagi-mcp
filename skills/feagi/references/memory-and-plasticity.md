@@ -39,7 +39,12 @@ Memory neurons have a lifecycle: an initial lifespan, growth per re-match, and a
 threshold after which they become permanent. A working ECG cascade used init lifespan 9,
 lifespan growth 1, and long-term threshold 100. Tune these with `update_cortical_area()`
 (keys `neuron_init_lifespan`, `neuron_lifespan_growth_rate`, `neuron_longterm_mem_threshold`;
-the window length is `temporal_depth`).
+the window length is `temporal_depth`). Two more keys bound growth: `memory_neuron_cap` (int,
+most memory neurons this area may hold; 0 = no per-area cap) and `ltm_eviction` (`lru` or
+`none`). The neuron pool is shared by all memory areas; when an area is at its cap or the pool
+is full, `lru` evicts that area's least recently reactivated neuron, `none` fails the creation.
+`get_memory_area_runtime_config()` shows both, `evicted_total`, `creation_failed_total` and the
+`memory_pool`.
 
 ## Membrane-potential encoding modes
 

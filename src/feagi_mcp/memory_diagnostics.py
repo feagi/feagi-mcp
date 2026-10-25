@@ -20,6 +20,11 @@ SCAN_MORPHOLOGY = "episodic_scan"
 
 CODE_NO_EPISODIC_UPSTREAM = "memory_no_episodic_upstream"
 CODE_EXPIRES_UNMATCHED = "memory_neurons_expire_unmatched"
+CODE_POOL_NEARLY_FULL = "memory_pool_nearly_full"
+CODE_CREATION_FAILED = "memory_creation_failed"
+
+#: Pool use above this fraction of ``pool_capacity`` raises a finding.
+POOL_USE_WARN_FRACTION = 0.9
 
 
 def inbound_sources(
@@ -46,14 +51,35 @@ def lifecycle_totals(
     memory_area_stats: dict[str, Any] | None,
     memory_id: str,
 ) -> dict[str, int | None]:
-    """Lifetime create/delete counters and live count for one memory area."""
+    """Lifetime create/delete/evict/failed counters and live count for one memory area.
+
+    Missing fields (older FEAGI, absent area) are ``None``, never an error.
+    """
     stats = (memory_area_stats or {}).get(memory_id)
     if not isinstance(stats, dict):
-        return {"created_total": None, "deleted_total": None, "neuron_count": None}
+        stats = {}
     return {
         "created_total": _int_or_none(stats.get("created_total")),
         "deleted_total": _int_or_none(stats.get("deleted_total")),
         "neuron_count": _int_or_none(stats.get("neuron_count")),
+        "evicted_total": _int_or_none(stats.get("evicted_total")),
+        "creation_failed_total": _int_or_none(stats.get("creation_failed_total")),
+    }
+
+
+def memory_pool_summary(memory_pool: Any) -> dict[str, Any]:
+    """Shared-pool numbers from the ``memory_pool`` object; missing fields are ``None``."""
+    pool = memory_pool if isinstance(memory_pool, dict) else {}
+    capacity = _int_or_none(pool.get("pool_capacity"))
+    in_use = _int_or_none(pool.get("pool_in_use"))
+    use_fraction = None
+    if capacity and in_use is not None:
+        use_fraction = round(in_use / capacity, 4)
+    return {
+        "pool_capacity": capacity,
+        "pool_in_use": in_use,
+        "pool_ltm": _int_or_none(pool.get("pool_ltm")),
+        "pool_use_fraction": use_fraction,
     }
 
 
@@ -62,6 +88,7 @@ def memory_area_diagnostics(
     mapping_items: list[dict[str, Any]],
     memory_area_stats: dict[str, Any] | None,
     long_term_neuron_count: int | None,
+    memory_pool: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Upstream wiring, lifecycle totals, and findings for one memory area."""
     episodic_upstream = sorted(
@@ -98,10 +125,39 @@ def memory_area_diagnostics(
                 ),
             }
         )
+    pool = memory_pool_summary(memory_pool)
+    fraction = pool["pool_use_fraction"]
+    if fraction is not None and fraction > POOL_USE_WARN_FRACTION:
+        findings.append(
+            {
+                "severity": "warning",
+                "code": CODE_POOL_NEARLY_FULL,
+                "message": (
+                    f"Shared memory pool is {fraction:.0%} used ({pool['pool_in_use']} of "
+                    f"{pool['pool_capacity']}, {pool['pool_ltm']} long-term). All memory areas "
+                    f"share it: set memory_neuron_cap on busy areas and keep ltm_eviction "
+                    f"'lru' so full areas free their least recently used neuron."
+                ),
+            }
+        )
+    failed = totals["creation_failed_total"]
+    if failed:
+        findings.append(
+            {
+                "severity": "error",
+                "code": CODE_CREATION_FAILED,
+                "message": (
+                    f"{failed} memory neuron creations failed in this area (area cap or "
+                    f"shared pool full). Check memory_neuron_cap, ltm_eviction (not 'none') "
+                    f"and pool use."
+                ),
+            }
+        )
     return {
         "episodic_upstream": episodic_upstream,
         "scan_sources": scan_sources,
         **totals,
+        "memory_pool": pool,
         "findings": findings,
     }
 

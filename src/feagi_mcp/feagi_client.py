@@ -3544,6 +3544,24 @@ class FeagiClient:
                         f"0..=1 (1 = always); got {value}. Use 0.25 for 25%, not 25."
                     ),
                 }
+        if "memory_neuron_cap" in updates:
+            cap = updates["memory_neuron_cap"]
+            if isinstance(cap, bool) or not isinstance(cap, int) or cap < 0:
+                return {
+                    "error": "invalid_memory_neuron_cap",
+                    "message": (
+                        "memory_neuron_cap is the most memory neurons this area may hold, "
+                        f"an integer >= 0 (0 = no per-area cap); got {cap!r}."
+                    ),
+                }
+        if "ltm_eviction" in updates:
+            policy = updates["ltm_eviction"]
+            if not isinstance(policy, str) or policy.strip().lower() not in ("lru", "none"):
+                return {
+                    "error": "invalid_ltm_eviction",
+                    "message": f"ltm_eviction must be 'lru' or 'none'; got {policy!r}.",
+                }
+            updates = {**updates, "ltm_eviction": policy.strip().lower()}
         try:
             request_data = {"cortical_id": cortical_id}
             request_data.update(updates)

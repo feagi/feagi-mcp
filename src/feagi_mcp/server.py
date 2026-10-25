@@ -32,7 +32,7 @@ from feagi_mcp.genome_artifact import (
 )
 from feagi_mcp.io_cortical_id_encode import encode_io_cortical_id
 from feagi_mcp.live_state_drift import gather_live_state_drift
-from feagi_mcp.memory_diagnostics import memory_area_diagnostics
+from feagi_mcp.memory_diagnostics import CODE_CREATION_FAILED, memory_area_diagnostics
 from feagi_mcp.mujoco_scene_control import MujocoSceneControl, scene_object_payload
 from feagi_mcp.placement_policy import (
     LAYOUT_XY_PLANE,
@@ -231,7 +231,12 @@ async def get_memory_area_runtime_config(cortical_id: str, page_size: int = 1) -
     - Effective lifecycle values (init lifespan, growth rate, LT threshold).
     - Source attribution for each lifecycle value (runtime vs cortical properties).
     - Consistency checks to flag mismatched values between endpoint surfaces.
-    - ``lifecycle_totals``: lifetime created/deleted neurons from health_check.
+    - ``lifecycle_totals``: lifetime created/deleted/evicted neurons and failed creations
+      from health_check (``null`` on older FEAGI).
+    - ``memory_pool``: the shared pool all memory areas draw from (``pool_capacity``,
+      ``pool_in_use``, ``pool_ltm``). ``findings`` flags use above 90% and any failed creation.
+    - ``effective_lifecycle.memory_neuron_cap`` (0 = no per-area cap) and ``ltm_eviction``
+      (``lru`` or ``none``), each with source attribution.
     - ``episodic_upstream`` / ``scan_sources``: inbound areas by morphology. Only
       ``episodic_memory`` sources create neurons; ``findings`` flags an area with none,
       and an area whose neurons all expired before reaching long-term.
@@ -337,7 +342,40 @@ async def get_memory_area_runtime_config(cortical_id: str, page_size: int = 1) -
         inbound.get("items", []),
         memory_area_stats if isinstance(memory_area_stats, dict) else None,
         lt_count,
+        _pool_with_fallback(memory_runtime, health),
     )
+    # Per-area counters can also arrive on the memory endpoint itself.
+    for counter in ("evicted_total", "creation_failed_total"):
+        if diagnostics[counter] is None:
+            diagnostics[counter] = _positive_or_zero_int(memory_runtime.get(counter))
+    if diagnostics["creation_failed_total"] and not any(
+        f.get("code") == CODE_CREATION_FAILED for f in diagnostics["findings"]
+    ):
+        diagnostics["findings"].append(
+            {
+                "severity": "error",
+                "code": CODE_CREATION_FAILED,
+                "message": (
+                    f"{diagnostics['creation_failed_total']} memory neuron creations failed "
+                    f"in this area (area cap or shared pool full). Check memory_neuron_cap, "
+                    f"ltm_eviction (not 'none') and pool use."
+                ),
+            }
+        )
+
+    # Missing on older FEAGI: report null, never error. A cap of 0 is a real value.
+    runtime_cap = _positive_or_zero_int(runtime_params_dict.get("memory_neuron_cap"))
+    props_cap = _positive_or_zero_int(
+        area.get("memory_neuron_cap", props_dict.get("memory_neuron_cap"))
+    )
+    effective_cap, cap_source = _first_present(runtime_cap, props_cap)
+    runtime_evict = _eviction_or_none(runtime_params_dict.get("ltm_eviction"))
+    props_evict = _eviction_or_none(area.get("ltm_eviction", props_dict.get("ltm_eviction")))
+    effective_evict, evict_source = _first_present(runtime_evict, props_evict)
+    if runtime_cap is not None and props_cap is not None and runtime_cap != props_cap:
+        mismatches.append("memory_neuron_cap")
+    if runtime_evict is not None and props_evict is not None and runtime_evict != props_evict:
+        mismatches.append("ltm_eviction")
 
     return {
         "cortical_id": cortical_id,
@@ -351,8 +389,11 @@ async def get_memory_area_runtime_config(cortical_id: str, page_size: int = 1) -
         "lifecycle_totals": {
             "created_total": diagnostics["created_total"],
             "deleted_total": diagnostics["deleted_total"],
+            "evicted_total": diagnostics["evicted_total"],
+            "creation_failed_total": diagnostics["creation_failed_total"],
             "source": "health_check.memory_area_stats[cortical_id]",
         },
+        "memory_pool": diagnostics["memory_pool"],
         "episodic_upstream": diagnostics["episodic_upstream"],
         "scan_sources": diagnostics["scan_sources"],
         "findings": diagnostics["findings"],
@@ -360,6 +401,8 @@ async def get_memory_area_runtime_config(cortical_id: str, page_size: int = 1) -
             "init_lifespan": {"value": effective_init, "source": init_source},
             "lifespan_growth_rate": {"value": effective_growth, "source": growth_source},
             "longterm_mem_threshold": {"value": effective_ltm, "source": ltm_source},
+            "memory_neuron_cap": {"value": effective_cap, "source": cap_source},
+            "ltm_eviction": {"value": effective_evict, "source": evict_source},
         },
         "mp_encoding": _memory_mp_encoding(
             runtime_params_dict, memory_runtime.get("effective_mp_mode")
@@ -374,9 +417,44 @@ async def get_memory_area_runtime_config(cortical_id: str, page_size: int = 1) -
                 "neuron_init_lifespan": area.get("neuron_init_lifespan"),
                 "neuron_lifespan_growth_rate": area.get("neuron_lifespan_growth_rate"),
                 "neuron_longterm_mem_threshold": area.get("neuron_longterm_mem_threshold"),
+                "memory_neuron_cap": area.get("memory_neuron_cap", props_dict.get("memory_neuron_cap")),
+                "ltm_eviction": area.get("ltm_eviction", props_dict.get("ltm_eviction")),
             },
         },
     }
+
+
+def _positive_or_zero_int(value: Any) -> int | None:
+    """Non-negative int, or None when absent or not a non-negative integer."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    if isinstance(value, int) and value >= 0:
+        return value
+    return None
+
+
+def _eviction_or_none(value: Any) -> str | None:
+    text = str(value).strip().lower() if isinstance(value, str) else ""
+    return text if text in ("lru", "none") else None
+
+
+def _first_present(runtime_value: Any, props_value: Any) -> tuple[Any, str]:
+    if runtime_value is not None:
+        return runtime_value, "runtime_memory_parameters"
+    if props_value is not None:
+        return props_value, "cortical_properties"
+    return None, "missing"
+
+
+def _pool_with_fallback(memory_runtime: dict[str, Any], health: Any) -> dict[str, Any] | None:
+    """``memory_pool`` from the memory endpoint, else from health_check."""
+    pool = memory_runtime.get("memory_pool")
+    if isinstance(pool, dict):
+        return pool
+    health_pool = health.get("memory_pool") if isinstance(health, dict) else None
+    return health_pool if isinstance(health_pool, dict) else None
 
 
 _MP_ENCODING_MODES = ("none", "mp_learning", "mp_differential", "mp_ratio")
@@ -1887,7 +1965,10 @@ async def update_cortical_area(cortical_id: str, updates: dict[str, Any]) -> dic
     use ``enabled: false`` to disable. Flat genome suffix ``cx-hmlk-d`` maps to the same
     key.
 
-    Memory areas: ``mp_change_mode`` (``none``, ``mp_differential``, ``mp_ratio``) makes
+    Memory areas: ``memory_neuron_cap`` (int >= 0; most memory neurons this area may hold,
+    0 = no per-area cap, only the shared pool limits it) and ``ltm_eviction`` (``lru`` or
+    ``none``; when the cap or the shared pool is full, ``lru`` evicts the least recently
+    reactivated neuron instead of failing creation). ``mp_change_mode`` (``none``, ``mp_differential``, ``mp_ratio``) makes
     memories match MP changes over the temporal window instead of absolute values (needs
     ``temporal_depth`` >= 2; replay is off). Set ``mp_learning_enabled: false`` in the same
     call when switching from MP learning; FEAGI rejects both on. Tune with

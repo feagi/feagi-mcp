@@ -83,3 +83,27 @@ async def test_update_cortical_area_rejects_percent_excitability(client):
     assert result["error"] == "invalid_excitability"
     assert "0.25" in result["message"]
     client._client.put.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_cortical_area_validates_memory_cap_and_eviction(client):
+    bad_cap = await client.update_cortical_area("mMem", {"memory_neuron_cap": -1})
+    assert bad_cap["error"] == "invalid_memory_neuron_cap"
+    bad_cap = await client.update_cortical_area("mMem", {"memory_neuron_cap": 1.5})
+    assert bad_cap["error"] == "invalid_memory_neuron_cap"
+    bad_policy = await client.update_cortical_area("mMem", {"ltm_eviction": "fifo"})
+    assert bad_policy["error"] == "invalid_ltm_eviction"
+
+
+@pytest.mark.asyncio
+async def test_update_cortical_area_passes_memory_cap_and_eviction_through(client):
+    response = AsyncMock()
+    response.status_code = 200
+    response.json = lambda: {"success": True}
+    client._client.put = AsyncMock(return_value=response)
+
+    await client.update_cortical_area("mMem", {"memory_neuron_cap": 0, "ltm_eviction": "LRU"})
+
+    sent = client._client.put.await_args.kwargs["json"]
+    assert sent["memory_neuron_cap"] == 0
+    assert sent["ltm_eviction"] == "lru"
