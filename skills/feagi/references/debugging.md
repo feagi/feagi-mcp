@@ -47,8 +47,10 @@ read `get_fire_queue_detailed()` on consecutive bursts or use `probe_area_respon
 
 Burst control: `control_burst_engine(action)` with `start`, `resume`, `pause`, or `stop`;
 `pause_burst_engine()` and `resume_burst_engine()` hold and release;
-`set_burst_engine_frequency(frequency_hz)` changes the rate. Pausing affects every connected
-robot, so say so before you do it.
+`set_burst_engine_frequency(frequency_hz)` is the whole rate change. The return confirms
+the setpoint. Do not open the source tree or sample the burst counter unless the user asks
+whether the engine is keeping that period. Pausing affects every connected robot, so say
+so before you do it.
 
 ## Look inside areas and neurons
 
@@ -117,9 +119,11 @@ IPU width vs the columns present in the last sensor snapshot.
   mapping by rewriting its rules with `plasticity_flag` off (FEAGI has no per-mapping
   freeze route). It reports weights before and after; `weights_preserved` false means the
   rewrite regrew the synapses.
-- `reset_mapping_weights(src_area, dst_area)` deletes and recreates the mapping with the
-  same rules. FEAGI keeps the weight of a neuron pair that already existed, so read
-  `weights_reset` in the result instead of assuming; take `snapshot_genome()` first.
+- `reset_mapping_weights(src_area, dst_area)` resets weights in place via FEAGI's native route
+  (`method: native`, `synapses_reset`, `weight`). On older FEAGI it deletes and recreates the
+  mapping (`method: recreate_fallback`); FEAGI keeps the weight of a neuron pair that already
+  existed there, so read `weights_reset`; take `snapshot_genome()` first. For every incoming
+  mapping of an area use `reset_area_incoming_weights(cortical_ids)`.
 - `inspect_cortical_areas_minimal()` now falls back to the incoming synapse listing when
   the properties record reports `incoming_synapse_count` 0 (`incoming_synapse_count_source`
   says so); the counter in the properties record stays 0 after a restart.

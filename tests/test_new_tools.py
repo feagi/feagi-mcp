@@ -846,6 +846,36 @@ class TestGenomeEditing:
         assert "sub_group_id" not in posted
 
     @pytest.mark.asyncio
+    async def test_create_custom_applies_neuron_properties_via_update(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"cortical_id": "Y0hpcEZM"}
+        mock_client._client.post.return_value = mock_response
+        mock_client.get_cortical_area_geometry = AsyncMock(return_value={})
+        mock_client.get_regions_members = AsyncMock(
+            return_value={"00000000-0000-0000-0000-000000000001": {"title": "Sit"}}
+        )
+        mock_client.update_cortical_area = AsyncMock(return_value={"message": "ok"})
+
+        result = await mock_client.create_cortical_area(
+            name="TestArea",
+            cortical_type="CUSTOM",
+            dimensions=[5, 5, 5],
+            position=[50, 50, 0],
+            brain_region_id="00000000-0000-0000-0000-000000000001",
+            properties={"neuron_fire_threshold": 3.0, "neuron_excitability": 0.5},
+        )
+
+        mock_client.update_cortical_area.assert_awaited_once_with(
+            "Y0hpcEZM", {"neuron_fire_threshold": 3.0, "neuron_excitability": 0.5}
+        )
+        assert result["applied_properties"] == {
+            "neuron_fire_threshold": 3.0,
+            "neuron_excitability": 0.5,
+        }
+        assert result["rejected_properties"] == {}
+
+    @pytest.mark.asyncio
     async def test_create_memory_area_sends_sub_group_id(self, mock_client):
         """MEMORY must post sub_group_id MEMORY; FEAGI ignores cortical_type."""
         mock_response = MagicMock()
@@ -2389,8 +2419,14 @@ class TestProbeAreaResponse:
     async def test_detects_response_from_fire_count_increase(self, mock_client):
         mock_client.monitor_activity = AsyncMock(
             side_effect=[
-                {"lifetime_stats": {"max_consecutive_fire_count": 0}},
-                {"lifetime_stats": {"max_consecutive_fire_count": 4}},
+                {
+                    "lifetime_stats": {"max_consecutive_fire_count": 0},
+                    "firing_statistics": {"total_spikes": 0},
+                },
+                {
+                    "lifetime_stats": {"max_consecutive_fire_count": 4},
+                    "firing_statistics": {"total_spikes": 3},
+                },
             ]
         )
         mock_client.stimulate_area_batch = AsyncMock(return_value={"success": True})
@@ -2403,14 +2439,43 @@ class TestProbeAreaResponse:
         )
 
         assert result["responded"] is True
+        assert result["spikes_before"] == 0
+        assert result["spikes_after"] == 3
         assert result["delta_max_consecutive_fire_count"] == 4
+
+    @pytest.mark.asyncio
+    async def test_busy_area_with_flat_counter_still_responds_on_spikes(self, mock_client):
+        mock_client.monitor_activity = AsyncMock(
+            side_effect=[
+                {
+                    "lifetime_stats": {"max_consecutive_fire_count": 900},
+                    "firing_statistics": {"total_spikes": 5},
+                },
+                {
+                    "lifetime_stats": {"max_consecutive_fire_count": 900},
+                    "firing_statistics": {"total_spikes": 9},
+                },
+            ]
+        )
+        mock_client.stimulate_area_batch = AsyncMock(return_value={"success": True})
+        result = await mock_client.probe_area_response(
+            stimulus_area="a", stimulus_voxels=[[0, 0, 0]], observe_area="b", settle_ms=1
+        )
+        assert result["responded"] is True
+        assert result["delta_max_consecutive_fire_count"] == 0
 
     @pytest.mark.asyncio
     async def test_no_response_when_counter_unchanged(self, mock_client):
         mock_client.monitor_activity = AsyncMock(
             side_effect=[
-                {"lifetime_stats": {"max_consecutive_fire_count": 2}},
-                {"lifetime_stats": {"max_consecutive_fire_count": 2}},
+                {
+                    "lifetime_stats": {"max_consecutive_fire_count": 2},
+                    "firing_statistics": {"total_spikes": 4},
+                },
+                {
+                    "lifetime_stats": {"max_consecutive_fire_count": 2},
+                    "firing_statistics": {"total_spikes": 4},
+                },
             ]
         )
         mock_client.stimulate_area_batch = AsyncMock(return_value={"success": True})
@@ -2442,3 +2507,59 @@ class TestProbeAreaResponse:
         )
 
         assert result["error"] == "stimulation_failed"
+
+
+def _put_response(status: int, body: Any = None, text: str = "") -> MagicMock:
+    response = MagicMock()
+    response.status_code = status
+    response.text = text
+    response.json.return_value = body
+    return response
+
+
+class TestResetWeightsRoutes:
+    """Native weight-reset routes (cortical_mapping and cortical_area reset_weights)."""
+
+    @pytest.mark.asyncio
+    async def test_mapping_native_success(self, mock_client):
+        body = {
+            "src_cortical_area": "A",
+            "dst_cortical_area": "B",
+            "synapses_reset": 12,
+            "weight": 1.0,
+        }
+        mock_client._client.put.return_value = _put_response(200, body)
+        result = await mock_client.reset_mapping_weights_native("A", "B")
+        assert result["synapses_reset"] == 12
+        call = mock_client._client.put.await_args
+        assert call.args[0].endswith("/v1/cortical_mapping/reset_weights")
+        assert call.kwargs["json"] == {"src_cortical_area": "A", "dst_cortical_area": "B"}
+
+    @pytest.mark.asyncio
+    async def test_mapping_route_missing_vs_missing_mapping(self, mock_client):
+        mock_client._client.put.return_value = _put_response(405, text="")
+        assert (await mock_client.reset_mapping_weights_native("A", "B"))["route_missing"] is True
+        mock_client._client.put.return_value = _put_response(404, text="")
+        assert (await mock_client.reset_mapping_weights_native("A", "B"))["route_missing"] is True
+        mock_client._client.put.return_value = _put_response(
+            404, text='{"message":"mapping A->B not found"}'
+        )
+        result = await mock_client.reset_mapping_weights_native("A", "B")
+        assert "route_missing" not in result
+        assert "HTTP 404" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_area_incoming_weights(self, mock_client):
+        body = {"results": [{"cortical_id": "A", "mappings_reset": 2, "synapses_reset": 40}]}
+        mock_client._client.put.return_value = _put_response(200, body)
+        result = await mock_client.reset_area_incoming_weights(["A"])
+        assert result["results"][0]["synapses_reset"] == 40
+        call = mock_client._client.put.await_args
+        assert call.args[0].endswith("/v1/cortical_area/reset_weights")
+        assert call.kwargs["json"] == {"area_list": ["A"]}
+
+    @pytest.mark.asyncio
+    async def test_area_incoming_weights_http_error(self, mock_client):
+        mock_client._client.put.return_value = _put_response(404, text="no route")
+        result = await mock_client.reset_area_incoming_weights(["A"])
+        assert "HTTP 404" in result["error"]

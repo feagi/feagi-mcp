@@ -23,13 +23,14 @@ FEAGI separates two kinds of memory:
   mappings (A to B and B to A).
 
 An `associative_memory` mapping from a memory area to a non-memory area (for example a motor
-drive) starts with **zero synapses** and that is normal. A synapse from a memory neuron to a
-destination neuron is created only when both fire inside the rule's `plasticity_window`; if
-the rule subscribes to a `synaptic.reward` modulator, the reward must also be positive in
-that window. Memory neurons firing on their own never produce synapses, so the destination
-must be driven (babble, reflex, or a teacher signal) while the memory recalls. Check progress
-with `diagnose_mapping_plasticity(src, dst)` and `inspect_memory_neuron()` (realized
-synapses); `get_connectivity()` showing 0 right after wiring is not a failure.
+drive) starts with **zero synapses** and that is normal. A synapse is created only when a
+neuron in the memory area and a neuron in the destination area both fire inside the rule's
+`plasticity_window`. If the rule subscribes to a `synaptic.reward` modulator, the reward
+must also be positive in that window. A memory neuron firing on its own never produces a
+synapse, so something else (babble, a reflex, or a teacher) must drive the destination
+neuron during the window. Check progress with `diagnose_mapping_plasticity(src, dst)` and
+`inspect_memory_neuron()` (realized synapses). `get_connectivity()` showing 0 before that
+co-firing has happened is not a failure.
 
 Create memory areas with `create_cortical_area(cortical_type="MEMORY", dimensions=[1, 1, 1],
 brain_region_id=...)`. The ID must start with `m`; a `c` ID will never form memory neurons.

@@ -6,7 +6,9 @@ about 30 Hz, so most bursts of a 40 Hz engine are seen). Fetching it together
 with the controller's ``GET /v1/state`` gives, per burst, which voxels of the
 watched areas fired and what the body was doing at that moment.
 
-The full trace goes to ``var/traces/<trace_id>.jsonl`` (one row per burst). The
+The full trace goes to ``<feagi-mcp>/var/traces/<trace_id>.jsonl`` (one row per burst; the
+base is the package project root, not the process cwd, and ``FEAGI_MCP_TRACES_DIR``
+overrides it). ``trace_path`` in the result is absolute. The
 returned summary run-length encodes, per area, the bursts on which it fired, with
 the physics values at the start of each run, so "tilt bin fired at burst N, nudge
 voxel at N+2, pitch changed at N+6" can be read from one small payload.
@@ -16,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -28,7 +31,23 @@ MAX_TRACE_S = 20.0
 MAX_AREAS = 16
 DEFAULT_POLL_HZ = 40.0
 MAX_VOXELS_PER_EVENT = 32
-TRACE_DIR = Path("var") / "traces"
+
+
+def resolve_trace_dir() -> Path:
+    """Resolve the trace directory, independent of the process working directory.
+
+    Priority:
+      1. ``FEAGI_MCP_TRACES_DIR`` env var (absolute or relative to cwd).
+      2. ``<feagi-mcp project root>/var/traces`` (same base as the snapshot tools).
+    """
+    override = os.environ.get("FEAGI_MCP_TRACES_DIR")
+    if override:
+        return Path(override).expanduser().resolve()
+    project_root = Path(__file__).resolve().parent.parent.parent
+    return (project_root / "var" / "traces").resolve()
+
+
+TRACE_DIR = resolve_trace_dir()
 
 
 def fired_voxels(fire_queue: dict[str, Any], area_ids: list[str]) -> dict[str, dict[str, Any]]:
@@ -174,7 +193,7 @@ async def record_aligned_trace_window(
     *,
     signals: list[str] | None = None,
     free_joint: str | None = None,
-    trace_dir: Path = TRACE_DIR,
+    trace_dir: Path | None = None,
     trace_id: str | None = None,
     poll_hz: float = DEFAULT_POLL_HZ,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
@@ -198,7 +217,7 @@ async def record_aligned_trace_window(
         clock=clock,
     )
     identifier = trace_id or uuid.uuid4().hex[:12]
-    path = write_trace(rows, trace_dir, identifier)
+    path = write_trace(rows, trace_dir or resolve_trace_dir(), identifier).resolve()
     bursts = [row["burst"] for row in rows]
     missed = (bursts[-1] - bursts[0] + 1 - len(bursts)) if len(bursts) > 1 else 0
     clocks = [row["physics"]["clock"] for row in rows if row.get("physics")]

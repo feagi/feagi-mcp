@@ -6,6 +6,7 @@
 - Driving joints
 - Matching the genome to the robot
 - Simulator ground truth
+- Choosing the burst rate
 - Measuring behavior
 - MuJoCo scene settings
 - Simulator asset packs
@@ -61,6 +62,39 @@ When a robot does not respond, check that the genome's OPUs are the ones the age
   example to tilt a pendulum before a test).
 - `embodiment_reset_simulation_time_stats()` resets the simulation-speed benchmark.
 
+## Choosing the burst rate
+
+The burst rate is a design choice tied to the body, never a default. Studio defaults to
+10 Hz (`burst_engine_timestep` 0.1) and the genome's value overrides it; neither knows the
+robot.
+
+- **Find the fastest dynamic the brain must react to.** Unstable tasks (standing,
+  balancing): the pendulum time constant `tau = sqrt(h/g)`, h = centre-of-mass height (a
+  0.11 m biped: tau about 0.1 s). Confirm it from a trace with the motors quiet as the
+  median 5-to-15 degree fall time. Tracking or reaching: the joint or target settling time.
+  Slow tasks (classification, wheeled driving at low speed, slow reaching) tolerate 10 Hz.
+- **Count loop latency in bursts.** Synaptic hops from sensor IPU to motor OPU
+  (`trace_signal_path()`), plus about one burst each way for transport. Latency in seconds
+  is bursts / burst_hz, or bursts x sim time per burst in lock-step.
+- **Rule of thumb: loop latency at most tau/4 for stabilizing feedback.** So
+  `burst_hz >= 4*(hops + 2)/tau`, or sim time per burst `<= tau/(4*(hops + 2))`. Example
+  (Howard, microduck): 3 hops + 2 transport, tau about 0.1 s needs at least 200 Hz in real
+  time, or at most 5 ms of sim time per burst in lock-step. Howard ran at 10 Hz: latency
+  0.30 s equaled the median fall time, so no circuit could balance it.
+- **Ceilings.** The burst must finish inside its period (`get_runtime_metrics()`); the
+  controller and sensors must keep up (no gain above the sensor sample rate); servo slew
+  limits. When the required rate exceeds the ceiling, shorten the sensor-to-motor path (a
+  direct reflex path) or run the simulator in lock-step (sim time advances a fixed step per
+  burst). Never slow the robot's physics as a stand-in.
+- **Burst-counted settings change meaning in seconds when the rate changes:** R-STDP
+  windows, modulator holds, memory `temporal_depth`, refractory and leak timing, Trainer
+  `holdBursts`, `attemptBurstCap`, `settleBursts`. Rescale them only when the user asks.
+- **Change the rate with one call:** `set_burst_engine_frequency(frequency_hz)`. The
+  returned `burst_frequency_hz` is the confirmation. Do not search the source tree, call
+  physiology or `simulation_timestep`, or sample `get_burst_counter` unless the user asks
+  whether the engine is keeping the period. A later genome reload can restore the stored
+  physiology timestep; say so in one sentence. It is not a second call.
+
 ## Measuring behavior
 
 Take a baseline with these before building toward a behavioral goal, and re-run them after
@@ -77,7 +111,7 @@ experiment (`_experiment.state` is `running`).
   auto-detected. Compare windows by their numbers, not by impression.
 - `record_aligned_trace(duration_s, areas, signals)`: one timeline pairing each sampled
   burst with the physics at that moment, for up to 20 s and 16 areas. The full trace is in
-  `var/traces/<trace_id>.jsonl`; the result is per area a run-length list of the bursts on
+  `<feagi-mcp>/var/traces/<trace_id>.jsonl` (absolute `trace_path` in the result; `FEAGI_MCP_TRACES_DIR` overrides); the result is per area a run-length list of the bursts on
   which it fired with pitch, roll, tilt, trunk height and the chosen actuator targets at
   the start of each run. Use it to answer "did the tilt bin fire before the nudge voxel,
   and did pitch change after?" with burst numbers. `bursts_missed_by_sampler` says how

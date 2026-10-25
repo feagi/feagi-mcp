@@ -11,8 +11,11 @@ import pytest
 from feagi_mcp.skill_bundle import (
     DESTRUCTIVE_TOOLS,
     SKILL_NAME,
+    STUDIO_ONLY_SECTION,
+    STUDIO_ONLY_TOOLS,
     TOOL_INDEX_RELATIVE_PATH,
     category_problems,
+    is_known_tool,
     render_tool_index,
     repository_root,
     skill_dir,
@@ -89,9 +92,11 @@ def test_tool_references_match_server(path: Path) -> None:
     params = tool_parameters(SERVER_SOURCE)
     problems = []
     for name, kwargs in _tool_calls(path.read_text("utf-8")):
-        if name not in params:
+        if not is_known_tool(name, set(params)):
             problems.append(f"unknown tool {name}()")
             continue
+        if name not in params:
+            continue  # Studio-only tool: parameters are not defined in server.py
         problems.extend(
             f"{name}() has no parameter {kw}" for kw in kwargs if kw not in params[name]
         )
@@ -171,3 +176,20 @@ def test_tool_call_extraction() -> None:
         '```json\n{"not_a_call": `fake_tool(x=1)`}\n```\n'
     )
     assert _tool_calls(text) == [("apply_connectivity_rule", ["src_area", "intent"])]
+
+
+def test_studio_only_tools_listed_in_own_index_section() -> None:
+    index = render_tool_index(tool_summaries(SERVER_SOURCE))
+    assert f"## {STUDIO_ONLY_SECTION}" in index
+    section = index.split(f"## {STUDIO_ONLY_SECTION}", 1)[1]
+    for name in ("read_design_notebook", "append_design_note"):
+        assert name in STUDIO_ONLY_TOOLS
+        assert f"- `{name}(" in section
+
+
+def test_reference_check_accepts_studio_only_but_not_unknown_tools() -> None:
+    server_tools = set(tool_parameters(SERVER_SOURCE))
+    assert is_known_tool("read_design_notebook", server_tools)
+    assert is_known_tool("append_design_note", server_tools)
+    assert is_known_tool("health_check", server_tools)
+    assert not is_known_tool("made_up_tool", server_tools)

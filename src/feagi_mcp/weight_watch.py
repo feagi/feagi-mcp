@@ -257,3 +257,26 @@ async def reset_mapping(client: Any, src: str, dst: str) -> dict[str, Any]:
         "same rules. FEAGI keeps the weight of an existing neuron pair (verified), so "
         "weights_reset may be false.",
     }
+
+
+async def reset_mapping_native_first(client: Any, src: str, dst: str) -> dict[str, Any]:
+    """Reset one mapping's weights natively; recreate the mapping on older FEAGI."""
+    native = await client.reset_mapping_weights_native(src, dst)
+    if isinstance(native, dict) and native.get("route_missing"):
+        result = await reset_mapping(client, src, dst)
+        result["method"] = "recreate_fallback"
+        return result
+    if not isinstance(native, dict) or native.get("error"):
+        return {
+            "error": "native_reset_failed",
+            "src_area": src,
+            "dst_area": dst,
+            "details": native,
+        }
+    return {
+        "src_area": src,
+        "dst_area": dst,
+        "method": "native",
+        "synapses_reset": native.get("synapses_reset"),
+        "weight": native.get("weight"),
+    }

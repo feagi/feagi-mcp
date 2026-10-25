@@ -38,6 +38,9 @@ Environment variables (or a `.env` file in the server's working directory):
 | `FEAGI_LOG_FILE` | unset | FEAGI log file for runtime diagnosis |
 | `FEAGI_COMPOSER_BASE_URL` | unset | Composer catalog root for simulator asset pack tools |
 | `FEAGI_MCP_SNAPSHOTS_DIR` | server `var/snapshots` | Where genome snapshots are stored |
+| `FEAGI_MCP_TRACES_DIR` | server `var/traces` | Where aligned traces (`record_aligned_trace`) are written |
+| `FEAGI_MCP_ALLOW_DIRECT` | unset | `1` lets the standalone server run tools even while Studio is running (normally it hands off to `neurorobotics-studio`) |
+| `FEAGI_STUDIO_DIR` | `~/.feagi/studio` | Where Studio's `mcp.json` discovery file is looked up |
 
 ## Client configuration
 

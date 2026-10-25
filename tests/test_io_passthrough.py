@@ -340,6 +340,40 @@ class TestClientSynapseCounts:
         client._client.get.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_zero_counter_falls_back_to_incoming_listing(self, client):
+        client._client.post.return_value = _ok(
+            {"cortical_name": "Balance_Boost", "incoming_synapse_count": 0,
+             "outgoing_synapse_count": 0, "neuron_count": 4}
+        )
+        edges = [{"source_neuron_id": i, "target_neuron_id": 9, "weight": 1, "psp": 1}
+                 for i in range(14)]
+        client._client.get.return_value = _ok(edges)
+        result = await client.get_cortical_synapse_counts(DST)
+        assert client._client.get.call_args.args[0].endswith("/synapses/incoming")
+        assert result["incoming_synapses"] == 14
+        assert result["incoming_source"] == "synapse_listing"
+
+    @pytest.mark.asyncio
+    async def test_total_synapse_count_sums_non_ipu_areas(self, client, monkeypatch):
+        async def mapping():
+            return {"A": "Alpha", "B": "Beta", "I": "Ipu"}
+
+        async def ipu():
+            return ["I"]
+
+        async def listing(cid, direction="outgoing", view="edges", **_):
+            assert direction == "incoming"
+            return {"synapse_count": {"A": 14, "B": 6}[cid]}
+
+        monkeypatch.setattr(client, "get_cortical_id_name_mapping", mapping)
+        monkeypatch.setattr(client, "list_ipu_areas", ipu)
+        monkeypatch.setattr(client, "list_area_synapses", listing)
+        result = await client.get_total_synapse_count()
+        assert result["total_incoming_synapses"] == 20
+        assert result["per_area"] == {"Alpha": 14, "Beta": 6}
+        assert result["skipped_ipu_areas"] == 1
+
+    @pytest.mark.asyncio
     async def test_propagates_http_failure(self, client):
         client._client.post.return_value = MagicMock(status_code=404, text="missing")
         result = await client.get_cortical_synapse_counts(DST)

@@ -27,9 +27,10 @@ and report instead of iterating.
 - When the host can route work to other models or subagents, run build-and-verify stages
   there and keep design and review on the strongest model. The stage brief names the exact
   areas, states the acceptance check as a number, and says "report, don't redesign".
-- End every task with a gap report: which tool, skill, controller or core behavior cost
-  time or forced a worse circuit, whether it is verified or suspected, and the smallest fix.
-  Generic facts from that report belong in this file.
+- End every task with two lists. **Bugs:** the software did the wrong thing. **Gaps:** a
+  missing tool, parameter, or path whose absence cost time or forced a worse circuit. One
+  line each, with where and the smallest fix. Do not put a bug on the gap list. Generic
+  facts from either list belong in this file.
 
 ## Measure before you build
 
@@ -70,15 +71,33 @@ reverts live area widths and the burst rate silently.
 
 ## Learning facts
 
+- **Plastic synapses start at the rule's multiplier, not random.** A synapse created from a
+  mapping rule (plastic or not) gets weight `abs(postSynapticCurrent_multiplier)` as f32 (default
+  1.0 when absent; a negative multiplier makes it inhibitory), in `resolve_synapse_params_for_rule`
+  (`feagi-core/crates/feagi-brain-development/src/connectome_manager.rs`). The effective PSP is
+  that weight times the source area's `postsynaptic_current`. `max_weight` does not clamp the
+  initial value: it is only applied to positive plasticity commits,
+  `(old + delta_w).min(max_weight)` (`feagi-core/crates/feagi-npu/burst-engine/src/npu.rs`), so a
+  start weight above `max_weight` stays until the first potentiating commit snaps it down.
+  `diagnose_mapping_plasticity` reports this as `expected_initial_weight`.
 - **Exact-pattern memory needs a tiny source.** A memory area fed by multi-column bins minted
   1,475 state patterns in 60 s and never levelled. Feed memory from a source with at most a
   few dozen possible patterns (for example pitch direction x magnitude), `temporal_depth` 1,
   and confirm with two reads of `get_memory_area_runtime_config()` 45 s apart that
   `neuron_count` has stopped growing.
-- **Memory cannot drive a normal area directly.** A memory-to-non-memory mapping is accepted
-  only with `associative_memory`, and that mapping realized no synapses in a live build.
-  Put learned behavior on synapses between ordinary areas (a one-hot state area to a
-  pre-motor area) and keep memory areas as the experience record.
+- **An associative link starts with no synapses.** A mapping from a memory area onto an
+  ordinary area is accepted only as `associative_memory`. A live build recorded zero
+  synapses on that link and treated it as a dead mechanism. The observation did not check
+  whether a neuron in each area fired inside the rule's `plasticity_window`, so it is not
+  evidence that the link cannot drive an action. Zero synapses right after wiring is the
+  starting state. A synapse is created only when a neuron in the memory area and a neuron
+  in the destination area both fire inside that window. If the rule subscribes to a
+  `synaptic.reward` modulator, the reward must also be positive in the window. The memory
+  neuron firing alone does not create the synapse; the destination neuron has to fire in
+  the same window, driven by babble, a reflex, or a teacher. Confirm that co-firing, then
+  read `diagnose_mapping_plasticity()` and `inspect_memory_neuron()`. An empty synapse
+  list before the co-firing is not a reason to replace the link with a hand-wired ordinary
+  mapping. Detail: [memory-and-plasticity.md](memory-and-plasticity.md).
 - **Reward-modulated plasticity commits through modulators.** An `rstdp` rule with
   `reward_source_area` / `punishment_source_area` was accepted but never changed a weight,
   while the same mapping subscribed to `synaptic.reward` modulators (one at +100 driven by
@@ -108,6 +127,16 @@ reverts live area widths and the burst rate silently.
   position sub-channel and slew at a fixed rate; firing the speed or incremental areas has
   no effect. Confirm with `get_motor_snapshot_last()` and the controller log before relying
   on them.
+- **Changing the burst rate is one call.** `set_burst_engine_frequency(frequency_hz)` sets
+  the running engine, and the returned `burst_frequency_hz` is the confirmation. Searching
+  for a physiology or `simulation_timestep` write, or sampling `get_burst_counter`, is how
+  that change turns into a source hunt. A later genome reload can restore the stored
+  timestep; that is one sentence in the report, not another call. Sample the counter only
+  when the user asks whether the loop is keeping the period.
+- **The default burst rate can make balance impossible.** Howard ran at 10 Hz: a 3-hop path
+  plus transport was 0.30 s of loop latency, equal to the median fall time (tau about
+  0.1 s). Derive the rate from tau and hops (`embodiment.md`, "Choosing the burst rate")
+  before wiring anything.
 - **Brain death resets the scene.** Wiring a fall detector into the `Death` core area makes
   the simulator reset on every fall, which turns time-between-resets into a survival metric.
 

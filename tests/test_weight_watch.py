@@ -10,6 +10,7 @@ from feagi_mcp.weight_watch import (
     freeze_mapping,
     frozen_rules,
     reset_mapping,
+    reset_mapping_native_first,
     watch_weights,
     weight_cap_from_area,
     weight_sample,
@@ -176,3 +177,34 @@ async def test_reset_mapping_keeps_rules_on_recreate_failure() -> None:
     result = await reset_mapping(client, SRC, DST)
     assert result["error"] == "recreate_failed"
     assert result["rules_to_reapply"] == [rule]
+
+
+async def test_reset_native_first_uses_native_route() -> None:
+    client = AsyncMock()
+    client.reset_mapping_weights_native.return_value = {"synapses_reset": 9, "weight": 1.0}
+    result = await reset_mapping_native_first(client, SRC, DST)
+    assert result["method"] == "native"
+    assert result["synapses_reset"] == 9
+    assert result["weight"] == 1.0
+    client.delete_cortical_mapping.assert_not_awaited()
+
+
+async def test_reset_native_first_falls_back_when_route_missing() -> None:
+    client = AsyncMock()
+    client.reset_mapping_weights_native.return_value = {"route_missing": True, "status": 404}
+    client.get_cortical_mapping.return_value = {"rules": [{"morphology_id": "projector"}]}
+    client.delete_cortical_mapping.return_value = {"success": True}
+    client.update_cortical_mapping.return_value = {"success": True}
+    client.get_mapping_plasticity_diagnostics.side_effect = [_diag([1.0, 9.0]), _diag([1.0, 1.0])]
+    result = await reset_mapping_native_first(client, SRC, DST)
+    assert result["method"] == "recreate_fallback"
+    assert result["weights_reset"] is True
+    client.delete_cortical_mapping.assert_awaited_once_with(SRC, DST)
+
+
+async def test_reset_native_first_reports_real_mapping_error() -> None:
+    client = AsyncMock()
+    client.reset_mapping_weights_native.return_value = {"error": "HTTP 404", "message": "mapping"}
+    result = await reset_mapping_native_first(client, SRC, DST)
+    assert result["error"] == "native_reset_failed"
+    client.delete_cortical_mapping.assert_not_awaited()

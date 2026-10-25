@@ -212,3 +212,19 @@ async def test_record_window_caps_duration(tmp_path: Path) -> None:
     )
     assert result["capped"] is True
     assert result["window_s"] == MAX_TRACE_S
+
+
+def test_resolve_trace_dir_is_cwd_independent(monkeypatch, tmp_path):
+    from feagi_mcp.aligned_trace import resolve_trace_dir
+
+    monkeypatch.delenv("FEAGI_MCP_TRACES_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    default = resolve_trace_dir()
+    assert default.is_absolute()
+    assert default.parts[-3:] == ("feagi-mcp", "var", "traces") or default.parts[-2:] == (
+        "var",
+        "traces",
+    )
+    assert tmp_path not in default.parents
+    monkeypatch.setenv("FEAGI_MCP_TRACES_DIR", str(tmp_path / "x"))
+    assert resolve_trace_dir() == (tmp_path / "x").resolve()

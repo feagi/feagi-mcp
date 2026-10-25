@@ -22,12 +22,14 @@
    - `coordinates_3d`: near the areas the circuit will connect to (their `coordinates_3d`
      from `list_cortical_areas()`; negative values are normal), at least 32 voxels from other
      anchors.
-3. **Place areas.** Once the region exists,
+3. **Place areas.** (With Studio, before this step append a `hypothesis` note holding the
+   acceptance check as a number.) Once the region exists,
    `suggest_cortical_anchor_positions(count, parent_region_id, layout)`. Without
    `parent_region_id` it returns a default far from the rest of the brain.
 4. **Create areas** with `create_cortical_area()`, passing `brain_region_id`.
 5. **Wire** each edge (see [connectivity.md](connectivity.md)).
-6. **Verify** with `probe_area_response()` (see [debugging.md](debugging.md)).
+6. **Verify** with `probe_area_response()` (see [debugging.md](debugging.md)). With Studio,
+   append a `measurement` with `metrics`, then a `verdict` that amends the hypothesis.
 7. **Report** what you created, by name, and offer `save_genome_to_filesystem()`.
 
 Choose defaults instead of asking: role-based names, the smallest dimensions that work
@@ -97,7 +99,9 @@ IPU/OPU templates. Before adding I/O for a robot, check what the agent registere
   parent_region_id, clone_cortical_mapping)` duplicates a CUSTOM or MEMORY area, optionally
   with its mappings.
 - `reset_cortical_neural_state(cortical_ids)` clears membrane potentials without touching the
-  genome.
+  genome. It keeps learned weights; to reset weights use `reset_area_incoming_weights(cortical_ids)`
+  (all incoming mappings of each area; synapse weights back to the rule's initial value, plasticity
+  traces cleared, neuron state untouched; snapshot first).
 - `delete_cortical_area(cortical_id)` removes the area with all its neurons and synapses.
   Snapshot and confirm first.
 - To move areas between regions, use `brain_visualizer_api(operation_id="put_region_relocate_members", ...)`.

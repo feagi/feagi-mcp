@@ -363,6 +363,24 @@ def _as_json_dict(data: Any) -> dict[str, Any]:
     return {}
 
 
+_NEURON_PARAMETER_KEYS = frozenset(
+    {
+        "neuron_fire_threshold",
+        "neuron_post_synaptic_potential",
+        "neuron_refractory_period",
+        "neuron_excitability",
+        "neuron_leak_coefficient",
+        "neuron_mp_charge_accumulation",
+        "neuron_psp_uniform_distribution",
+    }
+)
+
+
+def _is_neuron_parameter_key(key: str) -> bool:
+    """True for neuron parameters the create endpoints ignore (applied via update after)."""
+    return key in _NEURON_PARAMETER_KEYS or key.startswith("neuron_")
+
+
 def _summarize_cortical_activity(payload: dict[str, Any]) -> dict[str, Any]:
     """Drop spike lists that explode MCP token use.
 
@@ -2390,6 +2408,55 @@ class FeagiClient:
             logger.error(f"reset_cortical_neural_state failed: {e}")
             return {"error": str(e)}
 
+    @staticmethod
+    def _route_missing(status: int, text: str) -> bool:
+        """True when 404/405 is about the route itself (older FEAGI), not a missing area/mapping."""
+        if status == 405:
+            return True
+        if status != 404:
+            return False
+        body = (text or "").lower()
+        return not any(w in body for w in ("mapping", "cortical", "area"))
+
+    async def reset_mapping_weights_native(self, src_area: str, dst_area: str) -> dict[str, Any]:
+        """PUT /v1/cortical_mapping/reset_weights — reset one mapping's weights in place.
+
+        Returns ``{"route_missing": True}`` when this FEAGI lacks the route.
+        """
+        try:
+            response = await self._client.put(
+                f"{self.base_url}/v1/cortical_mapping/reset_weights",
+                json={"src_cortical_area": src_area, "dst_cortical_area": dst_area},
+            )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            if self._route_missing(response.status_code, response.text):
+                return {"route_missing": True, "status": response.status_code}
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error(f"reset_mapping_weights_native failed: {e}")
+            return {"error": str(e)}
+
+    async def reset_area_incoming_weights(self, area_ids: list[str]) -> dict[str, Any]:
+        """PUT /v1/cortical_area/reset_weights — reset all incoming mapping weights per area."""
+        try:
+            response = await self._client.put(
+                f"{self.base_url}/v1/cortical_area/reset_weights",
+                json={"area_list": area_ids},
+            )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return {
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error(f"reset_area_incoming_weights failed: {e}")
+            return {"error": str(e)}
+
     async def clone_cortical_area_via_api(
         self,
         source_area_id: str,
@@ -2775,7 +2842,7 @@ class FeagiClient:
             area = await self.fetch_cortical_area_properties(cid)
             if not isinstance(area, dict) or area.get("error"):
                 return area if isinstance(area, dict) else {"error": "bad_payload"}
-            return {
+            result: dict[str, Any] = {
                 "area_id": cid,
                 "cortical_name": area.get("cortical_name"),
                 "incoming_synapses": area.get("incoming_synapse_count"),
@@ -2783,9 +2850,63 @@ class FeagiClient:
                 "neuron_count": area.get("neuron_count"),
                 "source": "cortical_area_properties",
             }
+            if not result["incoming_synapses"]:
+                # The running counter stays 0 for synapses grown after a restart
+                # (verified live: 0 vs 14 listed); the incoming listing is authoritative.
+                listing = await self.list_area_synapses(cid, direction="incoming", view="summary")
+                count = listing.get("synapse_count") if isinstance(listing, dict) else None
+                if isinstance(count, int) and not isinstance(count, bool):
+                    result["incoming_synapses"] = count
+                    result["incoming_source"] = "synapse_listing"
+            return result
         except Exception as e:
             logger.error(f"get_cortical_synapse_counts failed: {e}")
             return {"error": str(e), "area_id": area_id}
+
+    async def get_total_synapse_count(self, include_ipu: bool = False) -> dict[str, Any]:
+        """Total incoming synapses summed over areas, from the incoming listings.
+
+        Every synapse has exactly one target area, so the incoming sum is the brain
+        total. IPU areas are excluded by default (they receive no wired input).
+        """
+        try:
+            mapping = await self.get_cortical_id_name_mapping()
+            if not isinstance(mapping, dict) or mapping.get("error"):
+                return mapping if isinstance(mapping, dict) else {"error": "bad_payload"}
+            ids = list(mapping)
+            skipped: list[str] = []
+            if not include_ipu:
+                ipu = set(await self.list_ipu_areas())
+                skipped = [cid for cid in ids if cid in ipu]
+                ids = [cid for cid in ids if cid not in ipu]
+            listings = await asyncio.gather(
+                *(self.list_area_synapses(cid, direction="incoming", view="summary") for cid in ids)
+            )
+            per_area: dict[str, int] = {}
+            errors: dict[str, Any] = {}
+            for cid, listing in zip(ids, listings, strict=True):
+                count = listing.get("synapse_count") if isinstance(listing, dict) else None
+                if isinstance(count, int) and not isinstance(count, bool):
+                    per_area[mapping.get(cid) or cid] = count
+                else:
+                    errors[cid] = (
+                        listing.get("error", "no synapse_count")
+                        if isinstance(listing, dict)
+                        else "bad_payload"
+                    )
+            result: dict[str, Any] = {
+                "total_incoming_synapses": sum(per_area.values()),
+                "area_count": len(per_area),
+                "skipped_ipu_areas": len(skipped),
+                "per_area": per_area,
+                "source": "synapse_listing",
+            }
+            if errors:
+                result["errors"] = errors
+            return result
+        except Exception as e:
+            logger.error(f"get_total_synapse_count failed: {e}")
+            return {"error": str(e)}
 
     async def get_registered_agents(self) -> dict[str, Any]:
         """Get registered agents with names from the capability registry.
@@ -3152,6 +3273,11 @@ class FeagiClient:
             if response.status_code == 200:
                 result = _as_json_dict(response.json())
                 _annotate_requested_placement(result, position)
+                neuron_props = {
+                    k: v for k, v in (properties or {}).items() if _is_neuron_parameter_key(k)
+                }
+                if neuron_props:
+                    await self._apply_neuron_properties_after_create(result, neuron_props)
                 if cortical_type.strip().upper() == "MEMORY":
                     created_id = result.get("cortical_id")
                     if _cortical_id_kind_byte(created_id) != ord("m"):
@@ -3168,6 +3294,32 @@ class FeagiClient:
         except Exception as e:
             logger.error(f"create_cortical_area failed: {e}")
             return {"error": str(e)}
+
+    async def _apply_neuron_properties_after_create(
+        self, result: dict[str, Any], neuron_props: dict[str, Any]
+    ) -> None:
+        """Apply neuron parameters to a just-created area via the update_cortical_area path.
+
+        The create endpoints ignore these fields, so they are sent in a follow-up PUT. The
+        result is annotated in place with ``applied_properties`` and ``rejected_properties``.
+        """
+        created_id = result.get("cortical_id")
+        if not isinstance(created_id, str) or not created_id:
+            result["applied_properties"] = {}
+            result["rejected_properties"] = dict.fromkeys(
+                neuron_props, "no cortical_id in create result"
+            )
+            return
+        applied: dict[str, Any] = {}
+        rejected: dict[str, Any] = {}
+        update_res = await self.update_cortical_area(created_id, dict(neuron_props))
+        if isinstance(update_res, dict) and "error" in update_res:
+            reason = update_res.get("message") or update_res["error"]
+            rejected = dict.fromkeys(neuron_props, reason)
+        else:
+            applied = dict(neuron_props)
+        result["applied_properties"] = applied
+        result["rejected_properties"] = rejected
 
     async def create_io_area_for_unit(
         self,
@@ -3260,25 +3412,39 @@ class FeagiClient:
         settle_ms: int = 400,
         observe_window_ms: int = 500,
         lifetime_neuron_cap: int = 64,
+        expected_voxels: list[list[int]] | None = None,
     ) -> dict[str, Any]:
         """Force-fire one area and measure whether a downstream area responds.
 
-        Closes the "I wired it, but does it actually fire?" gap for MCP-only workflows:
-        samples the observed area's lifetime fire counters, force-fires the stimulus voxels,
-        waits ``settle_ms`` for propagation, then re-samples. ``responded`` is True when the
-        observed area's max consecutive-fire counter increased — i.e. the stimulus drove new
-        firing through the connection under test.
+        Counts the observed area's spikes (``firing_statistics.total_spikes`` from the
+        activity endpoint) in a before window and an after window of ``observe_window_ms``
+        around the stimulus: the before window ends right before the stimulus, the after
+        window starts ``settle_ms`` after it. ``responded`` is
+        ``spikes_after - spikes_before >= 1``, so an already-firing or latched area is judged by
+        the change in its spike count, not by a saturated counter. When ``expected_voxels`` is
+        given and the activity payload carries per-voxel counts
+        (``firing_statistics.voxel_spike_counts`` keyed ``"x,y,z"``), only those voxels are
+        counted; otherwise the area total is used (``counted_over`` says which).
+
+        Caveats: the spike counts are a sampled fire-queue view (about 30 Hz), the two windows are
+        not simultaneous, and unrelated activity that raises the area's rate between the windows
+        still reads as a response. For a busy area compare ``spikes_before`` and ``spikes_after``
+        yourself, or repeat with and without the stimulus. The old signal (increase of the area's
+        max consecutive-fire counter) is kept as ``delta_max_consecutive_fire_count`` and does
+        not move when the area is already firing.
 
         Args:
             stimulus_area: Cortical id to force-fire (e.g. the source IPU).
             stimulus_voxels: Non-empty list of ``[x, y, z]`` voxels to fire in ``stimulus_area``.
             observe_area: Cortical id to watch for a response (e.g. the destination OPU).
-            settle_ms: Wall-clock wait between stimulus and the after-sample (propagation time).
+            settle_ms: Wall-clock wait between stimulus and the after-window (propagation time).
             observe_window_ms: Sample window for each activity read.
             lifetime_neuron_cap: Max neurons inspected for lifetime stats per sample.
+            expected_voxels: Optional ``[x, y, z]`` voxels of the observed area expected to fire.
 
         Returns:
-            ``{"responded": bool|None, "before", "after", "delta", "stimulation", ...}``; on a
+            ``{"responded": bool|None, "spikes_before", "spikes_after", "counted_over",
+            "delta_max_consecutive_fire_count", "before", "after", "stimulation", ...}``; on a
             stimulation failure, ``{"error": "stimulation_failed", "stimulation": ...}``.
         """
         if not isinstance(stimulus_voxels, list) or not stimulus_voxels:
@@ -3291,6 +3457,22 @@ class FeagiClient:
                 if isinstance(value, (int, float)):
                     return int(value)
             return None
+
+        wanted: set[str] | None = None
+        if expected_voxels:
+            wanted = {",".join(str(int(c)) for c in v) for v in expected_voxels}
+
+        def _spikes(activity: dict[str, Any]) -> tuple[int | None, str]:
+            stats = activity.get("firing_statistics")
+            if not isinstance(stats, dict):
+                return None, "total"
+            per_voxel = stats.get("voxel_spike_counts")
+            if wanted is not None and isinstance(per_voxel, dict):
+                return sum(int(per_voxel.get(k, 0) or 0) for k in wanted), "expected_voxels"
+            total = stats.get("total_spikes")
+            if isinstance(total, (int, float)) and not isinstance(total, bool):
+                return int(total), "total"
+            return None, "total"
 
         before = await self.monitor_activity(
             observe_area,
@@ -3310,29 +3492,34 @@ class FeagiClient:
             lifetime_neuron_cap=lifetime_neuron_cap,
         )
 
+        spikes_before, basis_before = _spikes(before)
+        spikes_after, basis_after = _spikes(after)
+        responded: bool | None = None
+        if spikes_before is not None and spikes_after is not None:
+            responded = spikes_after - spikes_before >= 1
+        counted_over = basis_after if basis_before == basis_after else "total"
+
         before_max = _max_fire(before)
         after_max = _max_fire(after)
-        responded: bool | None
-        delta: int | None
-        if before_max is None or after_max is None:
-            responded = None
-            delta = None
-        else:
-            delta = after_max - before_max
-            responded = delta > 0
+        delta = None if before_max is None or after_max is None else after_max - before_max
 
         return {
             "stimulus_area": stimulus_area,
             "observe_area": observe_area,
             "stimulus_voxels": stimulus_voxels,
             "responded": responded,
+            "spikes_before": spikes_before,
+            "spikes_after": spikes_after,
+            "counted_over": counted_over,
             "delta_max_consecutive_fire_count": delta,
             "stimulation": stimulation,
             "before": before,
             "after": after,
             "note": (
-                "responded is derived from the increase in the observed area's max "
-                "consecutive-fire counter; None means lifetime stats were unavailable."
+                "responded = spikes_after - spikes_before >= 1 over two windows of the "
+                "observed area; unrelated activity between windows also counts. None means "
+                "spike counts were unavailable. delta_max_consecutive_fire_count is the old, "
+                "secondary signal and does not move when the area is already firing."
             ),
         }
 
@@ -4049,9 +4236,49 @@ class FeagiClient:
         zero_weight_count = sum(1 for w in weights if w == 0.0)
         nonzero_weight_count = sum(1 for w in weights if w > 0.0)
 
+        expected_initial_weight: dict[str, Any] | None = None
+        if plastic_rules:
+            src_psp: float | None = None
+            src_props = await self.fetch_cortical_area_properties(src)
+            if isinstance(src_props, dict):
+                nested = src_props.get("properties")
+                for bag in (src_props, nested if isinstance(nested, dict) else {}):
+                    for key in ("postsynaptic_current", "neuron_post_synaptic_potential"):
+                        val = _as_float(bag.get(key))
+                        if val is not None:
+                            src_psp = val
+                            break
+                    if src_psp is not None:
+                        break
+            per_rule = []
+            for r in plastic_rules:
+                mult = _as_float(r.get("postSynapticCurrent_multiplier"))
+                if mult is None:
+                    mult = _as_float(r.get("psc_multiplier"))
+                if mult is None:
+                    mult = 1.0
+                per_rule.append(
+                    {
+                        "morphology_id": r.get("morphology_id"),
+                        "initial_weight": abs(mult),
+                        "synapse_type": "inhibitory" if mult < 0 else "excitatory",
+                        "max_weight": r.get("max_weight"),
+                    }
+                )
+            expected_initial_weight = {
+                "rules": per_rule,
+                "source_area_postsynaptic_current": src_psp,
+                "basis": (
+                    "initial weight = abs(rule postSynapticCurrent_multiplier), default 1.0; "
+                    "not random; max_weight does not clamp it at creation (feagi-core "
+                    "connectome_manager.rs resolve_synapse_params_for_rule)"
+                ),
+            }
+
         result: dict[str, Any] = {
             "src_area": src,
             "dst_area": dst,
+            "expected_initial_weight": expected_initial_weight,
             "mapping_exists": bool(rules),
             "mapping_rules_count": len(rules),
             "plastic_rules_count": len(plastic_rules),
@@ -4511,11 +4738,7 @@ class FeagiClient:
             return {"error": str(e)}
 
     async def set_burst_engine_frequency(self, frequency_hz: float) -> dict[str, Any]:
-        """PUT /v1/burst_engine/config - set burst frequency in Hz.
-
-        Slowing the engine (e.g. 1-5 Hz) makes circuit debugging deterministic by
-        giving the LLM time to inspect state between bursts.
-        """
+        """PUT /v1/burst_engine/config. One call sets the running burst frequency."""
         try:
             if not isinstance(frequency_hz, (int, float)) or frequency_hz <= 0:
                 return {"error": "frequency_hz must be positive"}

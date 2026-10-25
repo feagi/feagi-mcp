@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
 
 from feagi_mcp.aligned_trace import record_aligned_trace_window
 from feagi_mcp.balance_measurement import measure_balance_window
@@ -40,9 +41,10 @@ from feagi_mcp.placement_policy import (
     suggest_anchor_positions,
 )
 from feagi_mcp.snapshots import SnapshotManager, validate_label
+from feagi_mcp.studio_handoff import handoff_message, studio_manages_feagi
 from feagi_mcp.weight_watch import (
     freeze_mapping,
-    reset_mapping,
+    reset_mapping_native_first,
     watch_weights,
     weight_cap_from_area,
 )
@@ -64,7 +66,19 @@ composer_sim_packs = ComposerSimulatorPacksClient(
     timeout=config.timeout_seconds,
 )
 
-mcp = FastMCP(
+class _StudioAwareFastMCP(FastMCP):
+    """FastMCP that refuses tool calls while Neurorobotics Studio manages this FEAGI.
+
+    Studio's in-process upstream sets ``FEAGI_MCP_VIA_STUDIO=1`` so it is unaffected.
+    """
+
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+        if studio_manages_feagi(config.host, config.port):
+            raise ToolError(handoff_message(name))
+        return await super().call_tool(name, arguments)
+
+
+mcp = _StudioAwareFastMCP(
     name="feagi",
 )
 
@@ -1382,8 +1396,9 @@ async def get_cortical_synapse_counts(area_id: str) -> dict[str, Any]:
 
     Use this to verify connections exist and diagnose signal propagation issues.
     Values are the connectome's running counters from ``cortical_area_properties``
-    and can drift after a resize; confirm realized wiring with
-    ``get_voxel_neurons`` or ``validate_magnitude_passthrough``.
+    and can drift after a resize. When that counter reads 0, incoming falls back to
+    the realized incoming synapse listing (``incoming_source: synapse_listing``).
+    Confirm wiring with ``get_voxel_neurons`` or ``validate_magnitude_passthrough``.
 
     Args:
         area_id: Cortical area identifier (e.g., "Y0NQR2FfX18=")
@@ -1393,6 +1408,19 @@ async def get_cortical_synapse_counts(area_id: str) -> dict[str, Any]:
     """
     result = await feagi.get_cortical_synapse_counts(area_id)
     return result
+
+
+@mcp.tool()
+async def get_total_synapse_count(include_ipu: bool = False) -> dict[str, Any]:
+    """Get the brain's total synapse count (sum of incoming synapses over all areas).
+
+    Counts come from each area's realized incoming synapse listing, not the drifting
+    properties counter. IPU areas are skipped unless ``include_ipu`` is true.
+
+    Returns:
+        ``total_incoming_synapses``, ``area_count``, ``per_area`` (name -> count)
+    """
+    return await feagi.get_total_synapse_count(include_ipu)
 
 
 @mcp.tool()
@@ -1701,7 +1729,12 @@ async def create_cortical_area(
         position: [x, y, z] 3D coordinates
         neurons_per_voxel: Number of neurons per voxel (default: 1)
         device_count: Number of devices for IPU/OPU (default: 1)
-        properties: Optional additional properties (grp_id, etc.)
+        properties: Optional additional properties (grp_id, etc.). Neuron parameters
+            (neuron_fire_threshold, neuron_post_synaptic_potential, neuron_refractory_period,
+            neuron_excitability, neuron_leak_coefficient, neuron_mp_charge_accumulation,
+            neuron_psp_uniform_distribution) are applied right after creation through the
+            update_cortical_area path; the result reports ``applied_properties`` and
+            ``rejected_properties``.
         brain_region_id: Parent brain region UUID for CUSTOM/MEMORY. Required. The parent
             region's title must name the circuit function. Autogen Circuit / Untitled are
             rejected — call create_brain_region first (e.g. title Sit, Walk CPG, OR Gate).
@@ -2130,6 +2163,8 @@ async def diagnose_mapping_plasticity(
     - mapping rule presence and plasticity flags/modes
     - realized synapse count from src filtered to dst
     - weight statistics (min/max/avg/sum, zero/nonzero counts)
+    - ``expected_initial_weight`` for plastic rules (abs of the rule's
+      ``postSynapticCurrent_multiplier``, default 1.0), to compare against the live stats
     - sample of matched synapses for direct inspection
 
     Args:
@@ -2350,6 +2385,10 @@ async def resolve_cortical_area_by_name(
     match_mode: str = "exact",
 ) -> dict[str, Any]:
     """Resolve a display name to base64 cortical_id (BV uses names; APIs use IDs).
+
+    Matches on the area's display name (``cortical_name``), never on the id. Default
+    ``exact`` is case-sensitive and whole-string; ``icase`` is case-insensitive exact;
+    ``substring`` is a case-insensitive partial match.
 
     Natural language: call when the user names an area (e.g. \"Object Segmentation-0-0\")
     before update_cortical_area, reset_cortical_neural_state, or clone_cortical_area.
@@ -3064,17 +3103,36 @@ async def get_fire_ledger_areas_window_config() -> dict[str, Any]:
     return await feagi.get_fire_ledger_areas_window_config()
 
 
+_FREQUENCY_CONFIRMATION = (
+    "Setpoint updated. This return is the confirmation. "
+    "Do not call again unless the user asks whether the engine "
+    "is keeping this period."
+)
+
+
+def confirm_frequency_change(result: dict[str, Any]) -> dict[str, Any]:
+    """Attach the one-call confirmation. Errors pass through unchanged."""
+    if "error" in result:
+        return result
+    confirmed = dict(result)
+    confirmed["note"] = _FREQUENCY_CONFIRMATION
+    return confirmed
+
+
 @mcp.tool()
 async def set_burst_engine_frequency(frequency_hz: float) -> dict[str, Any]:
-    """Set the burst engine frequency in Hz (`PUT /v1/burst_engine/config`).
+    """Set the running brain's burst frequency. This call is the whole change.
 
-    Slow the engine (e.g. 1-5 Hz) to make circuit debugging deterministic;
-    speed it back up (e.g. 40 Hz) when the circuit is settled.
+    ``PUT /v1/burst_engine/config``. The returned ``burst_frequency_hz`` is the
+    confirmation. Do not search the source tree, call physiology or
+    simulation_timestep, or sample ``get_burst_counter`` unless the user asks
+    whether the engine is keeping the period. A later genome reload can restore
+    the stored physiology timestep; that is not a second call now.
 
     Args:
         frequency_hz: Target frequency in Hz (must be > 0).
     """
-    return await feagi.set_burst_engine_frequency(frequency_hz)
+    return confirm_frequency_change(await feagi.set_burst_engine_frequency(frequency_hz))
 
 
 @mcp.tool()
@@ -3565,13 +3623,19 @@ async def probe_area_response(
     settle_ms: int = 400,
     observe_window_ms: int = 500,
     lifetime_neuron_cap: int = 64,
+    expected_voxels: list[list[int]] | None = None,
 ) -> dict[str, Any]:
     """Force-fire one cortical area and measure whether a downstream area responds.
 
     Validates a connection end-to-end without an embodiment agent: it samples the observed
     area's lifetime fire counters, force-fires ``stimulus_voxels`` in ``stimulus_area``, waits
     ``settle_ms`` for propagation, then re-samples. ``responded`` is True when the observed
-    area's max consecutive-fire counter increased. Use this after wiring a mapping (e.g. with
+    area's spike count in the after window exceeds the before window by at least 1
+    (``spikes_after - spikes_before >= 1``; per-voxel counts for ``expected_voxels`` when the
+    activity payload has them, else the area total). Caveat: unrelated activity between the
+    two windows also counts, and the counts are a sampled fire-queue view. The old max
+    consecutive-fire delta is kept as ``delta_max_consecutive_fire_count`` (secondary; does
+    not move when the area is already firing). Use this after wiring a mapping (e.g. with
     ``build_reflex_mapping`` / ``update_cortical_mapping``) to confirm the circuit actually
     drives the destination before relying on it.
 
@@ -3582,10 +3646,12 @@ async def probe_area_response(
         settle_ms: Wall-clock wait between stimulus and the after-sample.
         observe_window_ms: Sample window (ms) for each activity read.
         lifetime_neuron_cap: Max neurons inspected for lifetime stats per sample.
+        expected_voxels: Optional ``[x, y, z]`` voxels of the observed area expected to fire.
 
     Returns:
-        ``{"responded": bool|None, "delta_max_consecutive_fire_count", "before", "after",
-        "stimulation"}`` or ``{"error": ...}`` on a stimulation failure.
+        ``{"responded": bool|None, "spikes_before", "spikes_after", "counted_over",
+        "delta_max_consecutive_fire_count", "before", "after", "stimulation"}``
+        or ``{"error": ...}`` on a stimulation failure.
     """
     return await feagi.probe_area_response(
         stimulus_area=stimulus_area,
@@ -3594,6 +3660,7 @@ async def probe_area_response(
         settle_ms=settle_ms,
         observe_window_ms=observe_window_ms,
         lifetime_neuron_cap=lifetime_neuron_cap,
+        expected_voxels=expected_voxels,
     )
 
 
@@ -3932,7 +3999,8 @@ async def record_aligned_trace(
     Polls ``/v1/burst_engine/fire_queue/detailed`` (burst number in ``timestep``,
     filtered to ``areas``) together with the controller's ``GET /v1/state`` for up to
     20 s and at most 16 areas. The full trace is written to
-    ``var/traces/<trace_id>.jsonl`` (one row per burst: fired voxels per area, clock,
+    ``<feagi-mcp>/var/traces/<trace_id>.jsonl`` (absolute ``trace_path`` in the result; override
+    the directory with ``FEAGI_MCP_TRACES_DIR``) (one row per burst: fired voxels per area, clock,
     pitch, roll, tilt, trunk z, actuator ``ctrl`` targets for ``signals``, all
     actuators when ``signals`` is omitted).
 
@@ -4034,16 +4102,29 @@ async def freeze_mapping_plasticity(
 
 @mcp.tool()
 async def reset_mapping_weights(src_area: str, dst_area: str) -> dict[str, Any]:
-    """Return one mapping's synapse weights to their initial value by recreating the mapping.
+    """Reset one mapping's synapse weights to the rule's initial weight; clear plasticity traces.
 
-    FEAGI has no weight-reset route, so this deletes the mapping
-    (``delete_cortical_mapping()``) and recreates it with the same rules. FEAGI keeps
-    the weight of a neuron pair that already existed (verified), so the result
-    reports ``weights_before`` and ``weights_after`` and ``weights_reset`` says
-    whether the weights actually became one uniform value. Take ``snapshot_genome()``
-    first; if recreation fails the rules to re-apply are in the result.
+    Distinct from ``reset_cortical_neural_state()``, which clears membrane potentials and
+    keeps weights. Calls ``PUT /v1/cortical_mapping/reset_weights`` (result ``method``
+    ``native`` with ``synapses_reset`` and ``weight``). On an older FEAGI without that
+    route it deletes and recreates the mapping instead (``method`` ``recreate_fallback``);
+    FEAGI keeps the weight of a neuron pair that already existed there, so read
+    ``weights_reset`` and take ``snapshot_genome()`` first for the fallback.
     """
-    return await reset_mapping(feagi, src_area.strip(), dst_area.strip())
+    return await reset_mapping_native_first(feagi, src_area.strip(), dst_area.strip())
+
+
+@mcp.tool()
+async def reset_area_incoming_weights(cortical_ids: list[str]) -> dict[str, Any]:
+    """Reset learned weights of ALL incoming mappings of each area (cortical_area/reset_weights).
+
+    Weights return to each mapping rule's initial weight and plasticity traces clear;
+    neuron state and genome are untouched. Distinct from ``reset_cortical_neural_state()``,
+    which clears membrane potentials and keeps weights. Result: ``results`` with
+    ``cortical_id``, ``mappings_reset``, ``synapses_reset`` per area. Resolve names with
+    resolve_cortical_area_by_name first. Needs a FEAGI with the route (404/405 otherwise).
+    """
+    return await feagi.reset_area_incoming_weights(cortical_ids)
 
 
 @mcp.tool()

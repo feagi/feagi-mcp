@@ -27,13 +27,16 @@ guessing.
 
 ## Start of every session
 
-1. `health_check()` to confirm FEAGI answers and see the genome name, area count, burst
+1. When Studio is connected (`read_design_notebook` exists), call `read_design_notebook` (no arguments).
+   Never propose a hypothesis that matches a `dead_end`. If there is no `goal`, write one
+   before building.
+2. `health_check()` to confirm FEAGI answers and see the genome name, area count, burst
    status, and any pending amalgamation. If it fails, go to
    [references/debugging.md](references/debugging.md) and call `diagnose_feagi_runtime()`.
-2. `check_live_state_drift()` when a robot or simulator is involved: it lists live state
+3. `check_live_state_drift()` when a robot or simulator is involved: it lists live state
    that no longer matches the genome or the controller (area dimensions, burst rate, agent
    id, IPU widths) with the call that restores each. Re-apply what you need before building.
-3. Pull only what the request needs. Prefer filtered, compact tools (see "Keep responses
+4. Pull only what the request needs. Prefer filtered, compact tools (see "Keep responses
    small" below).
 
 ## Vocabulary: map the user's words to FEAGI objects
@@ -93,15 +96,39 @@ locally with `interpret_cortical_id()`. Details: [references/concepts.md](refere
 9. **Work in stages, then report gaps.** Build one verifiable stage at a time: create, wire,
    verify with a cheap read, report numbers; stop after two failed checks instead of
    iterating. If the host can route work to other models or subagents, run stages there and
-   keep design and review on the strongest model. End every task with the tool, skill,
-   controller or core shortcomings that cost time or forced a worse circuit, each marked
-   verified or suspected with its smallest fix. See [references/lessons.md](references/lessons.md).
+   keep design and review on the strongest model. End every task with two lists, not one.
+   **Bugs:** the software did the wrong thing (a check or warning failed on a case its own
+   contract allows, or a behavior contradicted its rule). **Gaps:** a tool, parameter, or
+   path that does not exist, whose absence cost time or forced a worse circuit. One line
+   each, with where and the smallest fix; "None" is fine. A rejection that restates a
+   mapping contract is a plan mistake, not a bug or a gap. See [references/lessons.md](references/lessons.md).
 10. **Stop on a blocking gap.** Before building toward a behavior, confirm the outcome can be
     measured with the tools at hand and take a baseline. When a check cannot be run, a tool
     contradicts its documentation, or the next step would work around a tool, controller or
-    core limitation, stop and report the gap before continuing. Cap each goal at a few
+    core limitation, stop and report the gap before continuing. A rejection that restates a
+    mapping contract is a mistake in the plan, not a gap. Cap each goal at a few
     adjustment rounds without a passing check; past that, present options instead of trying
     a new mechanism.
+11. **Derive the burst rate from the body.** Before embodiment behavior work, set it from
+    the body's fastest dynamic and the loop depth (see
+    [references/embodiment.md](references/embodiment.md#choosing-the-burst-rate)); never
+    keep the default for balance or other unstable tasks. Changing it is one call,
+    `set_burst_engine_frequency(frequency_hz)`. The return is the confirmation.
+11. **Go through Studio when it is running.** With Neurorobotics Studio open, call FEAGI
+    tools on the `neurorobotics-studio` server (same names and arguments): Studio logs the
+    call, asks approval for changes and snapshots the genome. The standalone `feagi` server
+    then refuses with a hand-off message; follow it. If a tool is missing there, set the
+    assistant's tool set to "Everything" in Studio, Settings, AI assistants.
+10. **Keep the design notebook (Studio only).** Skip this rule when `read_design_notebook`
+    is not a tool. Before a stage, `append_design_note` with kind `hypothesis` and the acceptance
+    check as a number. After the verify read, append a `measurement` with `metrics`, then a
+    `verdict` that `amends` the hypothesis. When a mechanism fails its check twice, append a
+    `dead_end` saying why. Mirror each implementation gap as a notebook `gap`. Do not file a
+    bug as a `gap`. Generic facts still go to
+    [references/lessons.md](references/lessons.md). Entries are at most 5 lines, numbers and
+    refs only, never pasted logs or traces. Subagents append their own stage results; the main
+    session writes goals, hypotheses and verdicts. Never amend another author's entry except
+    to set a hypothesis status.
 
 ## Keep responses small
 
@@ -134,6 +161,7 @@ independent calls together in one turn, and never poll physics or logs in a loop
 | Classifiers, segmentation, depth maps, value planes | `inspect_classifier()`, `wire_value_passthrough()` | [value-planes-and-classifiers.md](references/value-planes-and-classifiers.md) |
 | Neuromodulators | `list_modulator_types()`, `create_modulator()` | [memory-and-plasticity.md](references/memory-and-plasticity.md) |
 | Test or debug signal flow, a silent output, a dead FEAGI | `probe_area_response()`, `trace_signal_path()`, `diagnose_feagi_runtime()` | [debugging.md](references/debugging.md) |
+| Change the burst frequency | `set_burst_engine_frequency(frequency_hz)` once. The return confirms it | [embodiment.md](references/embodiment.md) |
 | Robots, joints, MuJoCo scenes, simulator assets | `get_registered_agents()`, `get_agent_joint_map()`, `get_mujoco_scene_config()` | [embodiment.md](references/embodiment.md) |
 | Measure robot behavior (balance, episodes, brain-to-body timing) | `measure_balance()`, `record_aligned_trace()` | [embodiment.md](references/embodiment.md) |
 | Save, snapshot, load, or merge genomes | `snapshot_genome()`, `save_genome_to_filesystem()`, `queue_amalgamation_by_payload()` | [genome-lifecycle.md](references/genome-lifecycle.md) |

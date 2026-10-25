@@ -31,6 +31,7 @@ DESTRUCTIVE_TOOLS = frozenset(
         "delete_modulator",
         "delete_genome_snapshot",
         "reset_mapping_weights",
+        "reset_area_incoming_weights",
     }
 )
 
@@ -94,6 +95,7 @@ TOOL_CATEGORIES: dict[str, tuple[str, ...]] = {
         "clone_cortical_area",
         "delete_cortical_area",
         "reset_cortical_neural_state",
+        "reset_area_incoming_weights",
         "get_cortical_template",
     ),
     "Input and output areas (IPU/OPU)": (
@@ -112,6 +114,7 @@ TOOL_CATEGORIES: dict[str, tuple[str, ...]] = {
         "get_cortical_map_detailed",
         "trace_signal_path",
         "get_cortical_synapse_counts",
+        "get_total_synapse_count",
         "list_area_synapses",
     ),
     "Connectivity: rules and wiring": (
@@ -227,6 +230,28 @@ TOOL_CATEGORIES: dict[str, tuple[str, ...]] = {
     ),
 }
 
+# Tools served by the neurorobotics-studio MCP server, not feagi-mcp; they exist only when
+# Studio is connected. Listed in the index under their own section and accepted by the
+# skill reference check even though server.py does not define them.
+STUDIO_ONLY_SECTION = "Studio-only tools (neurorobotics-studio server; present only when Studio is connected)"
+STUDIO_ONLY_TOOLS: dict[str, str] = {
+    "read_design_notebook": (
+        "`read_design_notebook(view?, kinds?, since?, query?, limit?)`: the experiment's design "
+        "notebook; the default view is a digest of goal, constraints, baseline, open hypotheses, "
+        "dead ends and recent entries."
+    ),
+    "append_design_note": (
+        "`append_design_note(kind, title, body?, metrics?, status?, refs?, amends?, tags?)`: adds "
+        "one entry (goal, constraint, baseline, hypothesis, change, measurement, verdict, "
+        "dead_end, idea, gap)."
+    ),
+}
+
+
+def is_known_tool(name: str, server_tools: set[str] | frozenset[str]) -> bool:
+    """True for a feagi-mcp tool or a Studio-only tool."""
+    return name in server_tools or name in STUDIO_ONLY_TOOLS
+
 
 def repository_root() -> Path:
     """feagi-mcp checkout root (``src/feagi_mcp`` is two levels below it)."""
@@ -317,4 +342,7 @@ def render_tool_index(summaries: dict[str, str]) -> str:
             summary = summaries[name] or "(no description)"
             lines.append(f"- `{name}()`: {summary}{marker}")
         lines.append("")
+    lines += [f"## {STUDIO_ONLY_SECTION}", ""]
+    lines += [f"- {desc}" for desc in STUDIO_ONLY_TOOLS.values()]  # desc starts with `name(params)`
+    lines.append("")
     return "\n".join(lines).rstrip() + "\n"

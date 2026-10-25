@@ -71,7 +71,7 @@ Confirm availability with `describe_connectivity_rules()`; these are the usual c
 | `bitmask_encoder_x/y/z`, `bitmask_decoder_x/y/z` | Pack or unpack bitmask values along an axis | No |
 | `episodic_memory` | Feed a memory area so it forms memory neurons | No |
 | `associative_memory` | STDP association from a memory area | No |
-| `memory_replay` | Recall a learned trace | No |
+| `memory_replay` | Only onto that memory area's own twin. Any other memory-to-ordinary link is `associative_memory` | No |
 
 ## Mapping rule fields
 
