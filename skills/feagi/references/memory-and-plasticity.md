@@ -114,6 +114,46 @@ and see per-area ledger windows with `get_fire_ledger_areas_window_config()`.
 Do not quote internal parameter names, kernel details, or module paths that tools or this
 skill do not show; they change between releases.
 
+## Stop new memories forming (`memory.formation`)
+
+`memory.formation` is an area-level modulator for memory areas. With its driver active at
+-100% the area forms no new memory neurons. Pattern detection still runs, so a known pattern
+still reactivates its neuron. Recall and firing of existing memory neurons, short-term aging,
+long-term conversion and eviction continue unchanged. Skipped creations are not failures:
+they count in `formation_suppressed_total`, not `creation_failed_total`. With no
+subscription or a silent driver the area forms memories as usual. Non-memory areas reject it.
+
+**When to use it**
+- Hold memory fixed while you measure or test a brain.
+- Stop storing patterns during states you do not want remembered (fallen, reset, idle).
+- Gate encoding to salient moments: keep the driver active except when something worth
+  remembering happens.
+
+**How to wire it**
+1. `create_modulator("no_new_memory", {"type": "memory.formation", "magnitude_percent": -100,
+   "effect_duration_bursts": 1, "rest_bursts": 0, "graded": false})`. Read the driver area
+   id from `get_modulator()`.
+2. Pick the signal that should suppress formation (or create a small `1x1x1` area for it) and
+   wire it into the driver area with `apply_connectivity_rule()`, the same way the reward
+   detector is wired into a `synaptic.reward` driver. The driver counts as active on every
+   burst its neuron fires. For a manual hold during a test, a large `effect_duration_bursts`
+   keeps the driver on after one `stimulate_area()`.
+3. `set_area_modulators(memory_area_id, ["no_new_memory"])` on each memory area to suppress.
+   The call replaces the list, so include the area's existing modulator ids.
+4. Verify with `get_memory_area_runtime_config(memory_area_id)`:
+   `lifecycle_totals.formation_suppressed_total` rises while `created_total` stays flat, and
+   a `memory_formation_suppressed` finding appears. `modulator_usage()` lists the subscribers.
+
+**Pairing with plastic mappings.** A memory area is not the only learner. For plastic
+mappings (`stdp` / `rstdp`) subscribe the rule to a `synaptic.learning_rate` modulator at
+-100% on the same driver area (a second `create_modulator()` whose driver is that area, then
+`set_mapping_modulators()`). One driver then freezes both memory formation and mapping
+learning.
+
+**Design choice.** Whether to suppress is the genome designer's call. The Trainer does not
+drive `memory.formation`, and learning on-line during a test may be what you want. Do not add
+the modulator to freeze a brain unless the task says to.
+
 ## Time-series memory cascade (ECG and similar signals)
 
 For one scalar input sampled once per burst (typically a `[1, 1, 1]` area), build a cascade of
@@ -148,7 +188,9 @@ areas or mappings are modulated for a number of bursts.
 - Types (`list_modulator_types()`): `neuro.*` types (`neuro.firing_threshold`,
   `neuro.leak`, `neuro.firing_probability`) modulate neurons in subscribed areas;
   `synaptic.*` types (`synaptic.transmission_gain`, `synaptic.reward`,
-  `synaptic.learning_rate`) modulate subscribed mappings.
+  `synaptic.learning_rate`, `synaptic.gate`) modulate subscribed mappings;
+  `memory.formation` (memory areas): driver at -100% stops new memory neurons forming;
+  existing memories still fire and age.
 - Create: `create_modulator(modulator_id, definition)` with `type`, `magnitude_percent`
   (at least -100), `effect_duration_bursts` (at least 1), `rest_bursts`, `graded`, and
   `full_scale_potential` when graded.

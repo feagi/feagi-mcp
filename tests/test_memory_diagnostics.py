@@ -34,6 +34,7 @@ def test_lifecycle_totals_absent_area_is_unknown_not_zero() -> None:
         "neuron_count": None,
         "evicted_total": None,
         "creation_failed_total": None,
+        "formation_suppressed_total": None,
     }
     stats = {"kmem": {"created_total": 7, "deleted_total": 5, "neuron_count": 2}}
     assert lifecycle_totals(stats, "kmem") == {
@@ -42,6 +43,7 @@ def test_lifecycle_totals_absent_area_is_unknown_not_zero() -> None:
         "neuron_count": 2,
         "evicted_total": None,
         "creation_failed_total": None,
+        "formation_suppressed_total": None,
     }
     stats = {"kmem": {"evicted_total": 4, "creation_failed_total": 1}}
     out = lifecycle_totals(stats, "kmem")

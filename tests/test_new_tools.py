@@ -230,6 +230,48 @@ class TestMemoryAreaRuntimeConfigTool:
         assert result["findings"] == []
 
     @pytest.mark.asyncio
+    async def test_formation_suppressed_total_and_finding(self, monkeypatch):
+        """A memory.formation subscriber with suppressed creations gets an info finding."""
+        server = self._patch_memory_endpoints(monkeypatch, {}, None)
+
+        async def fake_props(_cortical_id: str):
+            return {
+                "cortical_id": "mem_id",
+                "cortical_type": "memory",
+                "properties": {"modulators": ["no_new_memory"]},
+            }
+
+        async def fake_modulators():
+            return {"no_new_memory": {"type": "memory.formation"}}
+
+        monkeypatch.setattr(server.feagi, "fetch_cortical_area_properties", fake_props)
+        monkeypatch.setattr(server.feagi, "list_modulators", fake_modulators)
+        self.memory_area_stats = {
+            "mem_id": {
+                "created_total": 4,
+                "deleted_total": 0,
+                "neuron_count": 4,
+                "formation_suppressed_total": 7,
+            }
+        }
+        result = await server.get_memory_area_runtime_config("mem_id")
+        assert result["lifecycle_totals"]["formation_suppressed_total"] == 7
+        assert result["lifecycle_totals"]["creation_failed_total"] is None
+        assert [f["code"] for f in result["findings"]] == ["memory_formation_suppressed"]
+
+        # Not subscribed: counter is reported, no finding. Older FEAGI: null, no error.
+        async def other_modulators():
+            return {"no_new_memory": {"type": "neuro.leak"}}
+
+        monkeypatch.setattr(server.feagi, "list_modulators", other_modulators)
+        result = await server.get_memory_area_runtime_config("mem_id")
+        assert result["findings"] == []
+        self.memory_area_stats = {"mem_id": {"created_total": 1, "neuron_count": 1}}
+        result = await server.get_memory_area_runtime_config("mem_id")
+        assert result["lifecycle_totals"]["formation_suppressed_total"] is None
+        assert result["findings"] == []
+
+    @pytest.mark.asyncio
     async def test_mapping_table_error_is_returned(self, monkeypatch):
         """A failed mapping read is reported, not treated as an empty upstream list."""
         server = self._patch_memory_endpoints(monkeypatch, {}, None)

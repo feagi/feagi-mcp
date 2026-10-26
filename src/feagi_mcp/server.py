@@ -231,8 +231,11 @@ async def get_memory_area_runtime_config(cortical_id: str, page_size: int = 1) -
     - Effective lifecycle values (init lifespan, growth rate, LT threshold).
     - Source attribution for each lifecycle value (runtime vs cortical properties).
     - Consistency checks to flag mismatched values between endpoint surfaces.
-    - ``lifecycle_totals``: lifetime created/deleted/evicted neurons and failed creations
-      from health_check (``null`` on older FEAGI).
+    - ``lifecycle_totals``: lifetime created/deleted/evicted neurons, failed creations and
+      ``formation_suppressed_total`` (creations skipped by a subscribed ``memory.formation``
+      modulator; not failures) from health_check (``null`` on older FEAGI). ``findings``
+      adds an info entry when the area subscribes to ``memory.formation`` and that count
+      is above 0.
     - ``memory_pool``: the shared pool all memory areas draw from (``pool_capacity``,
       ``pool_in_use``, ``pool_ltm``). ``findings`` flags use above 90% and any failed creation.
     - ``effective_lifecycle.memory_neuron_cap`` (0 = no per-area cap) and ``ltm_eviction``
@@ -337,15 +340,17 @@ async def get_memory_area_runtime_config(cortical_id: str, page_size: int = 1) -
         }
     health = await feagi.health_check()
     memory_area_stats = health.get("memory_area_stats") if isinstance(health, dict) else None
+    formation_subscribed = await _subscribes_to_memory_formation(area, props_dict)
     diagnostics = memory_area_diagnostics(
         cortical_id,
         inbound.get("items", []),
         memory_area_stats if isinstance(memory_area_stats, dict) else None,
         lt_count,
         _pool_with_fallback(memory_runtime, health),
+        formation_subscribed,
     )
     # Per-area counters can also arrive on the memory endpoint itself.
-    for counter in ("evicted_total", "creation_failed_total"):
+    for counter in ("evicted_total", "creation_failed_total", "formation_suppressed_total"):
         if diagnostics[counter] is None:
             diagnostics[counter] = _positive_or_zero_int(memory_runtime.get(counter))
     if diagnostics["creation_failed_total"] and not any(
@@ -391,6 +396,7 @@ async def get_memory_area_runtime_config(cortical_id: str, page_size: int = 1) -
             "deleted_total": diagnostics["deleted_total"],
             "evicted_total": diagnostics["evicted_total"],
             "creation_failed_total": diagnostics["creation_failed_total"],
+            "formation_suppressed_total": diagnostics["formation_suppressed_total"],
             "source": "health_check.memory_area_stats[cortical_id]",
         },
         "memory_pool": diagnostics["memory_pool"],
@@ -422,6 +428,24 @@ async def get_memory_area_runtime_config(cortical_id: str, page_size: int = 1) -
             },
         },
     }
+
+
+async def _subscribes_to_memory_formation(area: dict[str, Any], props: dict[str, Any]) -> bool:
+    """True when the area lists a ``memory.formation`` modulator. Null-safe: False on any error."""
+    ids = area.get("modulators", props.get("modulators"))
+    if not isinstance(ids, list) or not ids:
+        return False
+    try:
+        instances = await feagi.list_modulators()
+    except Exception:
+        return False
+    if not isinstance(instances, dict):
+        return False
+    for modulator_id in ids:
+        instance = instances.get(modulator_id)
+        if isinstance(instance, dict) and instance.get("type") == "memory.formation":
+            return True
+    return False
 
 
 def _positive_or_zero_int(value: Any) -> int | None:
@@ -1055,7 +1079,9 @@ async def get_modulator(modulator_id: str) -> dict[str, Any]:
 async def create_modulator(modulator_id: str, definition: dict[str, Any]) -> dict[str, Any]:
     """Create a modulator instance and its 1x1x1 driver area.
 
-    ``definition`` fields: ``type``, ``magnitude_percent`` (>= -100),
+    ``definition`` fields: ``type`` (see ``list_modulator_types``; includes
+    ``memory.formation``, subscribed on memory areas, driver at -100% stops new memory
+    neurons forming), ``magnitude_percent`` (>= -100),
     ``effect_duration_bursts`` (>= 1), ``rest_bursts``, ``graded``,
     and ``full_scale_potential`` when graded.
     """
@@ -1088,7 +1114,8 @@ async def delete_modulator(modulator_id: str, force: bool = False) -> dict[str, 
 
 @mcp.tool()
 async def set_area_modulators(cortical_id: str, modulator_ids: list[str]) -> dict[str, Any]:
-    """Replace the neuromodulator subscriptions on a cortical area."""
+    """Replace the area-level modulator subscriptions (``neuro.*`` kinds, and
+    ``memory.formation`` on memory areas) on a cortical area."""
     return await feagi.update_cortical_area(cortical_id, {"modulators": modulator_ids})
 
 

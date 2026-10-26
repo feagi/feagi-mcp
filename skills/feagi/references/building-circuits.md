@@ -12,6 +12,12 @@
 
 ## Workflow
 
+0. **Hub first** (when Studio is connected). `search_brain_hub_genomes` with the task's key
+   terms; show good matches with `show_in_studio` (kind `hub_genomes`), say in one line how
+   each could help, and prefer `augment_genome_from_hub` to building from scratch. None found:
+   say so in one line and build. Do not repeat the search for the same goal unless the plan
+   changes. Merge Hub genomes only with `augment_genome_from_hub` / `replace_genome_from_hub`
+   so the download and ancestry are recorded.
 1. **Name the function** the user wants (`OR Gate`, `Walk CPG`, `Sit`, `Balance`).
 2. **Find or create the region.** `get_brain_regions()`; reuse a region already titled for
    this function, otherwise `create_brain_region(title, coordinates_2d, coordinates_3d)`.
@@ -31,6 +37,12 @@
 6. **Verify** with `probe_area_response()` (see [debugging.md](debugging.md)). With Studio,
    append a `measurement` with `metrics`, then a `verdict` that amends the hypothesis.
 7. **Report** what you created, by name, and offer `save_genome_to_filesystem()`.
+8. **Sharing nudge** (rare): only after a verified acceptance check, or a finished, verified,
+   self-contained circuit (a region with clear inputs and outputs). One sentence naming what
+   would be shared (genome or connectome, which region), at most once per goal or session,
+   never after a decline or while troubleshooting. Published versions cannot be edited or
+   deleted but can be superseded; connectomes carry learned data and need two-step consent.
+   The user publishes in Studio (Publish version…); you never publish.
 
 Choose defaults instead of asking: role-based names, the smallest dimensions that work
 (`[1, 1, 1]` for boolean logic, one voxel column per channel for motor drives), and

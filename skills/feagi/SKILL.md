@@ -38,6 +38,8 @@ guessing.
    id, IPU widths) with the call that restores each. Re-apply what you need before building.
 4. Pull only what the request needs. Prefer filtered, compact tools (see "Keep responses
    small" below).
+5. Before designing or building a circuit, when Studio is connected, check Brain Hub (step 0
+   of "Build a circuit").
 
 ## Vocabulary: map the user's words to FEAGI objects
 
@@ -159,7 +161,7 @@ independent calls together in one turn, and never poll physics or logs in a loop
 | Connect area A to area B | `recommend_connectivity_rules()`, `apply_connectivity_rule()` | [connectivity.md](references/connectivity.md) |
 | Learning: STDP, R-STDP, memory areas, time series | `get_memory_area_runtime_config()`, `set_memory_mp_encoding()` | [memory-and-plasticity.md](references/memory-and-plasticity.md) |
 | Classifiers, segmentation, depth maps, value planes | `inspect_classifier()`, `wire_value_passthrough()` | [value-planes-and-classifiers.md](references/value-planes-and-classifiers.md) |
-| Neuromodulators | `list_modulator_types()`, `create_modulator()` | [memory-and-plasticity.md](references/memory-and-plasticity.md) |
+| Neuromodulators, `memory.formation` (stop new memories forming) | `list_modulator_types()`, `create_modulator()` | [memory-and-plasticity.md](references/memory-and-plasticity.md) |
 | Test or debug signal flow, a silent output, a dead FEAGI | `probe_area_response()`, `trace_signal_path()`, `diagnose_feagi_runtime()` | [debugging.md](references/debugging.md) |
 | Change the burst frequency | `set_burst_engine_frequency(frequency_hz)` once. The return confirms it | [embodiment.md](references/embodiment.md) |
 | Robots, joints, MuJoCo scenes, simulator assets | `get_registered_agents()`, `get_agent_joint_map()`, `get_mujoco_scene_config()` | [embodiment.md](references/embodiment.md) |
@@ -197,6 +199,12 @@ independent calls together in one turn, and never poll physics or logs in a loop
 
 ### Build a circuit
 
+0. Hub first (when Studio is connected). Call `search_brain_hub_genomes` with the task's key
+   terms. If there are good matches, show them (`show_in_studio` kind `hub_genomes`), say in
+   one line how each could help, and prefer `augment_genome_from_hub` over building from
+   scratch. If there are none, say so in one line and build. Do not search again for the same
+   goal unless the plan changes. Hub genomes are merged only through `augment_genome_from_hub`
+   / `replace_genome_from_hub`, which record the download and ancestry.
 1. Name the function. `get_brain_regions()` to reuse a matching region, otherwise
    `create_brain_region(title=<function>, coordinates_2d, coordinates_3d)` under the root, with
    coordinates next to the existing regions (see
@@ -208,6 +216,13 @@ independent calls together in one turn, and never poll physics or logs in a loop
    smallest dimensions that do the job (often `[1, 1, 1]` for logic).
 4. Wire each edge (next workflow), then verify with `probe_area_response()`.
 5. Summarize what was created, and offer `save_genome_to_filesystem()`.
+6. Sharing nudge (rare). Only after a verified result passed its acceptance check, or a
+   self-contained reusable circuit (a region with clear inputs and outputs) was just finished
+   and verified: suggest publishing to Brain Hub in one sentence naming what would be shared
+   (genome or connectome, which region). At most once per goal or session, never after the
+   user declined, never while troubleshooting. Say that published versions cannot be edited
+   or deleted but can be superseded, and that connectomes carry learned data and need
+   two-step consent. Publishing happens in Studio (Publish version…); never publish yourself.
 
 ### Wire A to B
 

@@ -61,6 +61,11 @@ All of these replace the running brain. Snapshot and confirm first.
 Amalgamation adds another genome (for example a circuit from Brain Hub or a region export)
 into the running brain without replacing it.
 
+Brain Hub genomes: merge them with Studio's `augment_genome_from_hub` (or
+`replace_genome_from_hub` to replace the brain). These register the download and the
+ancestry, including the exact release. `queue_amalgamation_by_payload` is for local files and
+region exports only. It records no Hub download and no lineage.
+
 1. `queue_amalgamation_by_payload(genome_json)` with the full genome document as a JSON
    string. It returns an `amalgamation_id`.
 2. `health_check()` shows `amalgamation_pending` and `brain_regions_root`.
@@ -70,4 +75,4 @@ into the running brain without replacing it.
    which is expected.
 4. Inspect the new region with `get_region_circuit()` and wire it into the rest of the brain.
 
-In Neurorobotics Studio, users can also merge Brain Hub genomes from the desktop app.
+In Neurorobotics Studio, users can also merge Brain Hub genomes from the desktop app (same registration).

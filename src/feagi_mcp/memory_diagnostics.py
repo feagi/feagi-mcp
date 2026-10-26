@@ -22,6 +22,7 @@ CODE_NO_EPISODIC_UPSTREAM = "memory_no_episodic_upstream"
 CODE_EXPIRES_UNMATCHED = "memory_neurons_expire_unmatched"
 CODE_POOL_NEARLY_FULL = "memory_pool_nearly_full"
 CODE_CREATION_FAILED = "memory_creation_failed"
+CODE_FORMATION_SUPPRESSED = "memory_formation_suppressed"
 
 #: Pool use above this fraction of ``pool_capacity`` raises a finding.
 POOL_USE_WARN_FRACTION = 0.9
@@ -64,6 +65,7 @@ def lifecycle_totals(
         "neuron_count": _int_or_none(stats.get("neuron_count")),
         "evicted_total": _int_or_none(stats.get("evicted_total")),
         "creation_failed_total": _int_or_none(stats.get("creation_failed_total")),
+        "formation_suppressed_total": _int_or_none(stats.get("formation_suppressed_total")),
     }
 
 
@@ -89,8 +91,13 @@ def memory_area_diagnostics(
     memory_area_stats: dict[str, Any] | None,
     long_term_neuron_count: int | None,
     memory_pool: dict[str, Any] | None = None,
+    formation_subscribed: bool = False,
 ) -> dict[str, Any]:
-    """Upstream wiring, lifecycle totals, and findings for one memory area."""
+    """Upstream wiring, lifecycle totals, and findings for one memory area.
+
+    ``formation_subscribed`` is true when the area subscribes to a ``memory.formation``
+    modulator; a non-zero ``formation_suppressed_total`` then yields an info finding.
+    """
     episodic_upstream = sorted(
         {
             source
@@ -150,6 +157,19 @@ def memory_area_diagnostics(
                     f"{failed} memory neuron creations failed in this area (area cap or "
                     f"shared pool full). Check memory_neuron_cap, ltm_eviction (not 'none') "
                     f"and pool use."
+                ),
+            }
+        )
+    suppressed = totals["formation_suppressed_total"]
+    if formation_subscribed and suppressed:
+        findings.append(
+            {
+                "severity": "info",
+                "code": CODE_FORMATION_SUPPRESSED,
+                "message": (
+                    f"This area subscribes to memory.formation and {suppressed} new-pattern "
+                    f"creations were suppressed. While the driver is active at -100% no new "
+                    f"memory neurons form; existing ones still fire and age. Not a failure."
                 ),
             }
         )

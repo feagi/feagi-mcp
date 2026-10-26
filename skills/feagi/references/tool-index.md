@@ -133,7 +133,7 @@ with the user first. Use the task references for when and how to call each tool.
 - `rename_modulator()`: Rename a modulator and rewrite subscriber references.
 - `modulator_usage()`: List areas and mapping rules subscribed to a modulator.
 - `delete_modulator()`: Delete a modulator and its driver. Without force, subscribers reject the delete. **Destructive.**
-- `set_area_modulators()`: Replace the neuromodulator subscriptions on a cortical area.
+- `set_area_modulators()`: Replace the area-level modulator subscriptions (`neuro.*` kinds, and
 - `unsubscribe_area_modulator()`: Remove one neuromodulator subscription from a cortical area.
 - `set_mapping_modulators()`: Replace synaptic modulator subscriptions on the mapping from src to dst.
 - `unsubscribe_mapping_modulator()`: Remove one synaptic modulator subscription from a mapping.
