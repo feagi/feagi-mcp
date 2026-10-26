@@ -8,6 +8,7 @@
 - Simulator ground truth
 - Choosing the burst rate
 - Measuring behavior
+- Death and falls
 - MuJoCo scene settings
 - Simulator asset packs
 
@@ -122,6 +123,19 @@ experiment (`_experiment.state` is `running`).
   that restores it.
 - For joint trajectories over time without brain alignment, the Studio tools
   `record_embodiment_trace` and `run_embodiment_trial` remain the right choice.
+
+## Death and falls
+
+- Death resets the scene and ends a Trainer attempt as death.
+- Never drive Death from tilt, a fall detector, floor contact, a learning or affect signal,
+  or a timer. A fallen robot must stay in the scene so it can learn to recover.
+- Attempt endings for balance or locomotion belong to the Trainer: max tilt, Pain,
+  truncation.
+- An existing fall > Death path is a bug to remove. Howard: an accumulating zero-leak
+  detector fired Death every ~0.7 s, 42 times in 31 s, and gave 0/40 Trainer successes.
+- Check before any Trainer run: nothing maps into Death from sensory or vestibular areas,
+  and Death fires 0 times in 20 s. Count `[DEATH]` lines in the MuJoCo controller log, or
+  use `monitor_activity` on Death.
 
 ## MuJoCo scene settings
 

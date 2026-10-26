@@ -137,8 +137,8 @@ reverts live area widths and the burst rate silently.
   plus transport was 0.30 s of loop latency, equal to the median fall time (tau about
   0.1 s). Derive the rate from tau and hops (`embodiment.md`, "Choosing the burst rate")
   before wiring anything.
-- **Brain death resets the scene.** Wiring a fall detector into the `Death` core area makes
-  the simulator reset on every fall, which turns time-between-resets into a survival metric.
+- **Wiring falls into Death kills learning.** The robot never gets to recover or learn to
+  get up. Let the Trainer end attempts; see `embodiment.md`, "Death and falls".
 
 ## Diagnosing before designing
 
