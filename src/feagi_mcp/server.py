@@ -423,7 +423,9 @@ async def get_memory_area_runtime_config(cortical_id: str, page_size: int = 1) -
                 "neuron_init_lifespan": area.get("neuron_init_lifespan"),
                 "neuron_lifespan_growth_rate": area.get("neuron_lifespan_growth_rate"),
                 "neuron_longterm_mem_threshold": area.get("neuron_longterm_mem_threshold"),
-                "memory_neuron_cap": area.get("memory_neuron_cap", props_dict.get("memory_neuron_cap")),
+                "memory_neuron_cap": area.get(
+                    "memory_neuron_cap", props_dict.get("memory_neuron_cap")
+                ),
                 "ltm_eviction": area.get("ltm_eviction", props_dict.get("ltm_eviction")),
             },
         },
@@ -1995,7 +1997,8 @@ async def update_cortical_area(cortical_id: str, updates: dict[str, Any]) -> dic
     Memory areas: ``memory_neuron_cap`` (int >= 0; most memory neurons this area may hold,
     0 = no per-area cap, only the shared pool limits it) and ``ltm_eviction`` (``lru`` or
     ``none``; when the cap or the shared pool is full, ``lru`` evicts the least recently
-    reactivated neuron instead of failing creation). ``mp_change_mode`` (``none``, ``mp_differential``, ``mp_ratio``) makes
+    reactivated neuron instead of failing creation). ``mp_change_mode``
+    (``none``, ``mp_differential``, ``mp_ratio``) makes
     memories match MP changes over the temporal window instead of absolute values (needs
     ``temporal_depth`` >= 2; replay is off). Set ``mp_learning_enabled: false`` in the same
     call when switching from MP learning; FEAGI rejects both on. Tune with

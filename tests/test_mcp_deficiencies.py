@@ -271,21 +271,6 @@ class TestBurstEngineControl:
         assert result.get("error")
         mock_client._client.put.assert_not_called()
 
-
-def test_confirm_frequency_change_marks_the_return_as_final():
-    from feagi_mcp.server import confirm_frequency_change
-
-    confirmed = confirm_frequency_change({"burst_frequency_hz": 200.0})
-    assert confirmed["burst_frequency_hz"] == 200.0
-    assert "confirmation" in confirmed["note"]
-
-
-def test_confirm_frequency_change_leaves_errors():
-    from feagi_mcp.server import confirm_frequency_change
-
-    err = {"error": "frequency_hz must be positive"}
-    assert confirm_frequency_change(err) is err
-
     @pytest.mark.asyncio
     async def test_get_fire_ledger_areas_window_config(self, mock_client):
         mock_client._client.get.return_value = _ok(
@@ -327,6 +312,21 @@ def test_confirm_frequency_change_leaves_errors():
         resume = await mock_client.resume_burst_engine()
         assert resume["message"] == "Resumed"
         assert mock_client._client.post.call_args.args[0].endswith("/v1/burst_engine/resume")
+
+
+def test_confirm_frequency_change_marks_the_return_as_final():
+    from feagi_mcp.server import confirm_frequency_change
+
+    confirmed = confirm_frequency_change({"burst_frequency_hz": 200.0})
+    assert confirmed["burst_frequency_hz"] == 200.0
+    assert "confirmation" in confirmed["note"]
+
+
+def test_confirm_frequency_change_leaves_errors():
+    from feagi_mcp.server import confirm_frequency_change
+
+    err = {"error": "frequency_hz must be positive"}
+    assert confirm_frequency_change(err) is err
 
 
 class TestNeuronInspection:

@@ -363,6 +363,7 @@ class TestClientSynapseCounts:
 
         async def listing(cid, direction="outgoing", view="edges", **_):
             assert direction == "incoming"
+            assert view == "summary"
             return {"synapse_count": {"A": 14, "B": 6}[cid]}
 
         monkeypatch.setattr(client, "get_cortical_id_name_mapping", mapping)
