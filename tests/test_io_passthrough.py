@@ -342,11 +342,16 @@ class TestClientSynapseCounts:
     @pytest.mark.asyncio
     async def test_zero_counter_falls_back_to_incoming_listing(self, client):
         client._client.post.return_value = _ok(
-            {"cortical_name": "Balance_Boost", "incoming_synapse_count": 0,
-             "outgoing_synapse_count": 0, "neuron_count": 4}
+            {
+                "cortical_name": "Balance_Boost",
+                "incoming_synapse_count": 0,
+                "outgoing_synapse_count": 0,
+                "neuron_count": 4,
+            }
         )
-        edges = [{"source_neuron_id": i, "target_neuron_id": 9, "weight": 1, "psp": 1}
-                 for i in range(14)]
+        edges = [
+            {"source_neuron_id": i, "target_neuron_id": 9, "weight": 1, "psp": 1} for i in range(14)
+        ]
         client._client.get.return_value = _ok(edges)
         result = await client.get_cortical_synapse_counts(DST)
         assert client._client.get.call_args.args[0].endswith("/synapses/incoming")

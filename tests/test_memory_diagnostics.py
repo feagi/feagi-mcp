@@ -90,8 +90,14 @@ def test_annotate_shared_edges_only_marks_multi_rule_edges() -> None:
 
 def test_pool_over_ninety_percent_and_failed_creations_are_flagged() -> None:
     pool = {"pool_capacity": 1000, "pool_in_use": 901, "pool_ltm": 800}
-    stats = {"kmem": {"created_total": 5, "deleted_total": 0, "neuron_count": 5,
-                      "creation_failed_total": 3}}
+    stats = {
+        "kmem": {
+            "created_total": 5,
+            "deleted_total": 0,
+            "neuron_count": 5,
+            "creation_failed_total": 3,
+        }
+    }
     out = memory_area_diagnostics("kmem", _items(), stats, 0, pool)
     codes = [f["code"] for f in out["findings"]]
     assert codes == [CODE_POOL_NEARLY_FULL, CODE_CREATION_FAILED]

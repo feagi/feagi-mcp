@@ -66,6 +66,7 @@ composer_sim_packs = ComposerSimulatorPacksClient(
     timeout=config.timeout_seconds,
 )
 
+
 class _StudioAwareFastMCP(FastMCP):
     """FastMCP that refuses tool calls while Neurorobotics Studio manages this FEAGI.
 

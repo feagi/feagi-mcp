@@ -234,8 +234,7 @@ TOOL_CATEGORIES: dict[str, tuple[str, ...]] = {
 # Studio is connected. Listed in the index under their own section and accepted by the
 # skill reference check even though server.py does not define them.
 STUDIO_ONLY_SECTION = (
-    "Studio-only tools (neurorobotics-studio server; "
-    "present only when Studio is connected)"
+    "Studio-only tools (neurorobotics-studio server; present only when Studio is connected)"
 )
 STUDIO_ONLY_TOOLS: dict[str, str] = {
     "read_design_notebook": (
