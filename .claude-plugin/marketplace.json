@@ -12,7 +12,7 @@
       "name": "feagi",
       "source": "./",
       "description": "Inspect, build, wire, test, and debug brains in a running FEAGI instance through the feagi MCP server.",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "category": "robotics",
       "homepage": "https://feagi.org",
       "license": "Apache-2.0"
