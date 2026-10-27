@@ -107,6 +107,17 @@ reverts live area widths and the burst rate silently.
 - **Base plasticity potentiates without reward.** Co-active pairs on a plastic rule drift
   upward even when no reward fires. Make the reward detector reachable (it must fire in
   normal operation) and keep the Hebbian step small, or the actor self-reinforces.
+- **Learned classifier links died with short-term memories.** Interleaved training formed
+  links but every pattern's memory neuron expired (9-burst lifespan) before the pattern
+  returned, deleting its links, so tests read 0 links and no output. Reward consolidation now
+  promotes rewarded memory neurons to long-term. If links still vanish, check that reward
+  reached them. Detail: [value-planes-and-classifiers.md](value-planes-and-classifiers.md).
+- **Present sample and label in one protocol step.** Separate stimulate calls run one after
+  another, and two protocol calls in parallel share bursts and double-post. Both corrupted
+  classifier training runs.
+- **`diagnose_mapping_plasticity` once read 0 on memory-to-memory mappings** while links
+  existed. It now counts them; if numbers disagree with `list_area_synapses()` on the
+  destination (incoming), trust the realized synapses and report it.
 - **Prove plasticity is alive with a probe.** Two rules on one pair, a strong non-plastic
   `block_to_block` and a weak plastic one, guarantee co-activity; if the plastic weights and
   the generation counter do not move in 45 s, nothing will.

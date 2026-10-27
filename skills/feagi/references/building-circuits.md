@@ -177,10 +177,11 @@ Same structure as the OR gate, in a region titled `AND Gate`, with `AndGate_Inpu
    (`neuron_leak_coefficient` above 0), keep the threshold between one and two inputs' worth
    after leak.
 5. Verify all three cases. Input A alone and input B alone:
-   `probe_area_response()` should report `responded: false`. Both together: call
-   `stimulate_area(area_id=<input>, coordinates=[0, 0, 0], potential=1.0, duration_ms=1000)`
-   for A and then B (the long duration makes the two stimuli overlap across many bursts), then
-   `monitor_activity(area_id=<output>, duration_ms=500)` should show firing.
-   (`stimulate_area_batch()` fires many voxels of one area, not two areas.)
+   `probe_area_response()` should report `responded: false`. Both together:
+   `run_stimulus_protocol(steps=[{"label": "A+B", "bursts": 5, "stimuli":
+   [{"area_id": <input A>, "coordinates": [[0, 0, 0]]}, {"area_id": <input B>,
+   "coordinates": [[0, 0, 0]]}]}], record_areas=[<output>], tail_bursts=3)` should show the
+   output firing. Two `stimulate_area()` calls would run one after the other and never overlap.
+   (If A and B are voxels of one area, use one stimulus entry with both coordinates.)
 6. Report the threshold you chose and why, and that changes are unsaved. PSP and leak are only
    known once the areas exist, so read them after creating instead of assuming.

@@ -160,7 +160,7 @@ independent calls together in one turn, and never poll physics or logs in a loop
 | Build a new circuit (gate, CPG, reflex, controller) | `create_brain_region()`, `suggest_cortical_anchor_positions()`, `create_cortical_area()` | [building-circuits.md](references/building-circuits.md) |
 | Connect area A to area B | `recommend_connectivity_rules()`, `apply_connectivity_rule()` | [connectivity.md](references/connectivity.md) |
 | Learning: STDP, R-STDP, memory areas, time series | `get_memory_area_runtime_config()`, `set_memory_mp_encoding()` | [memory-and-plasticity.md](references/memory-and-plasticity.md) |
-| Classifiers, segmentation, depth maps, value planes | `inspect_classifier()`, `wire_value_passthrough()` | [value-planes-and-classifiers.md](references/value-planes-and-classifiers.md) |
+| Classifiers (training with reward and punishment), segmentation, depth maps, value planes | `inspect_classifier()`, `wire_value_passthrough()`, `run_stimulus_protocol()` | [value-planes-and-classifiers.md](references/value-planes-and-classifiers.md) |
 | Neuromodulators, `memory.formation` (stop new memories forming) | `list_modulator_types()`, `create_modulator()` | [memory-and-plasticity.md](references/memory-and-plasticity.md) |
 | Test or debug signal flow, a silent output, a dead FEAGI | `probe_area_response()`, `trace_signal_path()`, `diagnose_feagi_runtime()` | [debugging.md](references/debugging.md) |
 | Change the burst frequency | `set_burst_engine_frequency(frequency_hz)` once. The return confirms it | [embodiment.md](references/embodiment.md) |

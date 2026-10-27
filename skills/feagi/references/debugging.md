@@ -21,8 +21,13 @@ step, hop by hop for multi-stage circuits, and report the result.
 
 For manual tests:
 
-- `stimulate_area(area_id, coordinates, potential, duration_ms)` fires one voxel;
-  `stimulate_area_batch()` fires many in one area.
+- `stimulate_area()` / `stimulate_area_batch()` fire one area for one burst by default;
+  `bursts=N` (or `duration_ms`) holds the stimulus for N consecutive bursts. Separate calls
+  run one after another, never together.
+- To present several areas together (sample + label, two inputs of a gate), or a timed
+  sequence with rests, use `run_stimulus_protocol(steps, record_areas)`: one request per burst
+  carries all stimuli, and it records per-burst firing of `record_areas` with no missed bursts.
+  Run one protocol call at a time.
 - `monitor_activity(area_id, duration_ms)` or `monitor_activity_batch(area_ids, ...)` then
   shows counts and rates.
 
@@ -39,6 +44,12 @@ The burst engine must be running for anything to propagate: check
 | What motors received last burst | `get_motor_snapshot_last(cortical_id=...)` |
 | Burst rate, counter, run state | `get_burst_engine_config()`, `get_burst_counter()`, `get_burst_engine_status()` |
 | System-wide counters | `get_runtime_metrics()`, `health_check()` |
+| Per-burst firing during a stimulus sequence | `run_stimulus_protocol()` |
+
+`get_fire_queue_detailed()` returns `timestep` (the burst the sample belongs to) and
+`current_burst`. `monitor_activity()` polls about every 50 ms, counts each burst once and
+reports `bursts_unsampled`; above 20 Hz it misses bursts, so use `run_stimulus_protocol()`
+when every burst matters.
 
 `monitor_activity()` rates are sampled over the window, not counted per burst. A rate near
 half the burst frequency on a one-neuron loop does not mean the neuron fires every other
@@ -115,6 +126,8 @@ IPU width vs the columns present in the last sensor snapshot.
   destination's PSP cap, the five largest and five smallest synapses) and reports
   `avg_delta` and `max_delta`. A flat series while the pair co-fires means no learning:
   check reward modulators and `plasticity_flag` with `diagnose_mapping_plasticity()`.
+- For memory-to-memory mappings `diagnose_mapping_plasticity()` splits
+  `memory_neuron_synapse_count` (learned links) from `placeholder_synapse_count`.
 - `freeze_mapping_plasticity(src_area, dst_area, frozen=True)` stops learning on one
   mapping by rewriting its rules with `plasticity_flag` off (FEAGI has no per-mapping
   freeze route). It reports weights before and after; `weights_preserved` false means the

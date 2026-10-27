@@ -8,6 +8,7 @@ import math
 import os
 import re
 import time
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
@@ -356,6 +357,25 @@ def _intent_matches(metadata: dict[str, Any], tokens: set[str]) -> int:
     return score
 
 
+def _fired_in_areas(fire_queue: dict[str, Any], area_ids: list[str]) -> dict[str, list[list[int]]]:
+    """Fired ``[x, y, z]`` voxels per requested area in a fire-queue sample."""
+    areas = fire_queue.get("cortical_areas")
+    if not isinstance(areas, dict):
+        return {}
+    out: dict[str, list[list[int]]] = {}
+    for area_id in area_ids:
+        entry = areas.get(area_id)
+        if not isinstance(entry, dict):
+            continue
+        xs = entry.get("coordinates_x") or []
+        ys = entry.get("coordinates_y") or []
+        zs = entry.get("coordinates_z") or []
+        voxels = [[int(x), int(y), int(z)] for x, y, z in zip(xs, ys, zs, strict=False)]
+        if voxels:
+            out[area_id] = voxels
+    return out
+
+
 def _as_json_dict(data: Any) -> dict[str, Any]:
     """Narrow ``response.json()`` / API payloads to ``dict`` for strict typing."""
     if isinstance(data, dict):
@@ -395,6 +415,10 @@ def _summarize_cortical_activity(payload: dict[str, Any]) -> dict[str, Any]:
         slim_stats.pop("active_neurons", None)
         summarized["firing_statistics"] = slim_stats
     return summarized
+
+
+# Dynamic memory neurons are allocated from this id upward (dense neurons stay below).
+MEMORY_NEURON_ID_BASE = 50_000_000
 
 
 def _path_id(value: str) -> str:
@@ -1116,6 +1140,9 @@ def _channel_aliases(channel: dict[str, Any]) -> list[str]:
         if isinstance(value, str) and value and value not in aliases:
             aliases.append(value)
     return aliases
+
+
+STIMULATION_HOLD_MAX_MS = 30_000
 
 
 class FeagiClient:
@@ -2616,45 +2643,330 @@ class FeagiClient:
             logger.error(f"get_area_parameters failed: {e}")
             return {"error": str(e)}
 
+    async def _post_stimulation(
+        self, stimulation_payload: dict[str, list[list[int]]], mode: str
+    ) -> dict[str, Any]:
+        """POST one ``manual_stimulation`` payload (fires exactly one burst)."""
+        response = await self._client.post(
+            f"{self.base_url}/v1/agent/manual_stimulation",
+            json={
+                "stimulation_payload": stimulation_payload,
+                "mode": mode,
+            },
+        )
+        if response.status_code == 200:
+            result = _as_json_dict(response.json())
+            return {
+                "success": result.get("success", False),
+                "neurons_stimulated": result.get("unique_neuron_ids", 0),
+                "matched_coordinates": result.get("matched_coordinates", 0),
+                "mode": result.get("mode", "unknown"),
+            }
+        return {
+            "success": False,
+            "error": f"HTTP {response.status_code}",
+            "message": response.text,
+        }
+
+    async def _run_burst_gated(
+        self,
+        wanted: int,
+        interval: float,
+        on_burst: Callable[[int, int], Awaitable[bool]],
+    ) -> int | None:
+        """Call ``on_burst(counter, index)`` once per new burst counter value.
+
+        Polls the burst counter (no doubles, no gaps unless a poll misses a
+        burst) until ``wanted`` callbacks returned True, one returned False, or
+        the timeout guard expired. Returns the number of successful callbacks,
+        or None when the counter is unavailable.
+        """
+        done = 0
+        last_seen: int | None = None
+        poll_s = min(max(interval / 4.0, 0.002), 0.05)
+        deadline = time.monotonic() + wanted * interval * 2.0 + 2.0
+        while done < wanted and time.monotonic() < deadline:
+            counter = (await self.get_burst_counter()).get("burst_counter")
+            if not isinstance(counter, int):
+                return None
+            if counter == last_seen:
+                await asyncio.sleep(poll_s)
+                continue
+            last_seen = counter
+            if not await on_burst(counter, done):
+                break
+            done += 1
+        return done
+
+    async def _hold_stimulation(
+        self,
+        stimulation_payload: dict[str, list[list[int]]],
+        mode: str,
+        duration_ms: int | None,
+        bursts: int | None,
+    ) -> dict[str, Any]:
+        """Re-post the same payload once per burst for ``duration_ms`` or ``bursts``.
+
+        FEAGI fires one burst per ``manual_stimulation`` call, so a hold is a
+        series of posts. The burst counter gates each post: one post per new
+        counter value (no doubles, no gaps unless the poll misses a burst).
+        ``bursts`` wins over ``duration_ms``; the hold is capped at
+        ``STIMULATION_HOLD_MAX_MS``. With neither set, one post is made.
+        """
+        if bursts is None and duration_ms is None:
+            return await self._post_stimulation(stimulation_payload, mode)
+        config = await self.get_burst_engine_config()
+        interval = config.get("burst_interval_seconds")
+        if not isinstance(interval, (int, float)) or interval <= 0:
+            return {
+                "success": False,
+                "error": "burst_interval_seconds unavailable from /v1/burst_engine/config",
+                "config": config,
+            }
+        max_bursts = max(1, math.ceil(STIMULATION_HOLD_MAX_MS / 1000.0 / interval))
+        if bursts is not None:
+            wanted = int(bursts)
+        else:
+            wanted = math.ceil(max(0, int(cast(int, duration_ms))) / 1000.0 / interval)
+        capped = wanted > max_bursts
+        wanted = min(max(1, wanted), max_bursts)
+
+        last_result: dict[str, Any] = {"success": False}
+        first_burst: int | None = None
+        last_burst: int | None = None
+
+        async def _post_hold(counter: int, _index: int) -> bool:
+            nonlocal last_result, first_burst, last_burst
+            last_result = await self._post_stimulation(stimulation_payload, mode)
+            if not last_result.get("success"):
+                return False
+            if first_burst is None:
+                first_burst = counter
+            last_burst = counter
+            return True
+
+        posted = await self._run_burst_gated(wanted, interval, _post_hold)
+        if posted is None:
+            return {"success": False, "error": "burst_counter unavailable"}
+        result = dict(last_result)
+        result.update(
+            {
+                "bursts_held": posted,
+                "bursts_requested": wanted,
+                "first_burst": first_burst,
+                "last_burst": last_burst,
+                "burst_interval_seconds": interval,
+            }
+        )
+        if capped:
+            result["capped_at_ms"] = STIMULATION_HOLD_MAX_MS
+        if result.get("success") and posted < wanted:
+            result["success"] = False
+            result["error"] = "hold timed out before all bursts were posted"
+        return result
+
+    async def run_stimulus_protocol(
+        self,
+        steps: list[dict[str, Any]],
+        record_areas: list[str],
+        tail_bursts: int = 0,
+        mode: str = "force_fire",
+    ) -> dict[str, Any]:
+        """Present a timed stimulus sequence and record per-burst firing.
+
+        Each step holds for ``bursts`` bursts; on every new burst counter value
+        all of the step's stimuli are POSTed as one ``manual_stimulation``
+        payload (rest steps post nothing), then the fire queue is read and each
+        distinct sample ``timestep`` is recorded once, keeping ``record_areas``.
+        A sample is tagged with the step of the latest post whose burst counter
+        is strictly lower than the sample timestep (a stimulus posted at counter
+        c fires on burst c+1). Total bursts are capped by
+        ``STIMULATION_HOLD_MAX_MS``.
+        """
+        try:
+            return await self._run_stimulus_protocol(steps, record_areas, tail_bursts, mode)
+        except Exception as e:
+            logger.error(f"run_stimulus_protocol failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def _run_stimulus_protocol(
+        self,
+        steps: list[dict[str, Any]],
+        record_areas: list[str],
+        tail_bursts: int,
+        mode: str,
+    ) -> dict[str, Any]:
+        if not steps:
+            return {"success": False, "error": "steps must be non-empty"}
+        if not record_areas:
+            return {"success": False, "error": "record_areas must be non-empty"}
+        merged: list[dict[str, list[list[int]]]] = []
+        step_bursts: list[int] = []
+        for i, step in enumerate(steps):
+            n = step.get("bursts")
+            if not isinstance(n, int) or isinstance(n, bool) or n < 1:
+                return {"success": False, "error": f"steps[{i}].bursts must be an int >= 1"}
+            payload: dict[str, list[list[int]]] = {}
+            for j, stim in enumerate(step.get("stimuli") or []):
+                area = stim.get("area_id")
+                coords = stim.get("coordinates") or []
+                if not isinstance(area, str) or not coords:
+                    return {
+                        "success": False,
+                        "error": f"steps[{i}].stimuli[{j}] needs area_id and coordinates",
+                    }
+                for c in coords:
+                    if len(c) != 3:
+                        return {
+                            "success": False,
+                            "error": f"steps[{i}].stimuli[{j}] coordinate {c!r} is not [x, y, z]",
+                        }
+                payload.setdefault(area, []).extend(
+                    [int(c[0]), int(c[1]), int(c[2])] for c in coords
+                )
+            merged.append(payload)
+            step_bursts.append(n)
+        tail = max(0, int(tail_bursts))
+
+        config = await self.get_burst_engine_config()
+        interval = config.get("burst_interval_seconds")
+        if not isinstance(interval, (int, float)) or interval <= 0:
+            return {
+                "success": False,
+                "error": "burst_interval_seconds unavailable from /v1/burst_engine/config",
+                "config": config,
+            }
+        max_bursts = max(1, math.ceil(STIMULATION_HOLD_MAX_MS / 1000.0 / interval))
+        wanted = sum(step_bursts) + tail
+        capped = wanted > max_bursts
+        wanted = min(wanted, max_bursts)
+        # step index for each gated burst index; None marks a tail burst
+        schedule: list[int | None] = []
+        for idx, n in enumerate(step_bursts):
+            schedule.extend([idx] * n)
+        schedule.extend([None] * tail)
+        schedule = schedule[:wanted]
+
+        posts: list[tuple[int, int]] = []  # (counter at post, step index)
+        step_posts: dict[int, list[int]] = {}
+        observed: set[int] = set()
+        recorded: dict[int, dict[str, list[list[int]]]] = {}
+        errors: list[str] = []
+        last_counter: int | None = None
+
+        async def _on_burst(counter: int, index: int) -> bool:
+            nonlocal last_counter
+            last_counter = counter
+            step_idx = schedule[index]
+            if step_idx is not None:
+                payload = merged[step_idx]
+                if payload:
+                    res = await self._post_stimulation(payload, mode)
+                    if not res.get("success"):
+                        errors.append(f"post failed at burst {counter}: {res.get('error')}")
+                        return False
+                posts.append((counter, step_idx))
+                step_posts.setdefault(step_idx, []).append(counter)
+            fq = await self.get_fire_queue_detailed()
+            ts = fq.get("timestep")
+            if fq.get("error") or not isinstance(ts, int) or fq.get("sample_available") is False:
+                return True
+            observed.add(ts)
+            if ts in recorded:
+                return True
+            fired = _fired_in_areas(fq, record_areas)
+            if fired:
+                recorded[ts] = fired
+            return True
+
+        done = await self._run_burst_gated(wanted, interval, _on_burst)
+        if done is None:
+            return {"success": False, "error": "burst_counter unavailable"}
+
+        def _step_of(ts: int) -> int | None:
+            owner: int | None = None
+            for counter, step_idx in posts:
+                if counter < ts:
+                    owner = step_idx
+                else:
+                    break
+            return owner
+
+        area_stats: dict[str, dict[str, Any]] = {
+            a: {"firing_bursts": 0, "voxel_counts": {}} for a in record_areas
+        }
+        burst_rows: list[dict[str, Any]] = []
+        for ts in sorted(recorded):
+            fired = recorded[ts]
+            burst_rows.append({"burst": ts, "step": _step_of(ts), "areas": fired})
+            for area, voxels in fired.items():
+                stats = area_stats[area]
+                stats["firing_bursts"] += 1
+                for v in voxels:
+                    key = f"{v[0]},{v[1]},{v[2]}"
+                    stats["voxel_counts"][key] = stats["voxel_counts"].get(key, 0) + 1
+        missed: list[int] = []
+        if posts and observed:
+            lo = posts[0][0] + 1
+            hi = max(max(observed), last_counter or 0)
+            missed = [b for b in range(lo, hi + 1) if b not in observed]
+
+        step_rows = []
+        for idx, step in enumerate(steps):
+            bursts_posted = step_posts.get(idx, [])
+            step_rows.append(
+                {
+                    "step": idx,
+                    "label": step.get("label"),
+                    "first_burst": bursts_posted[0] if bursts_posted else None,
+                    "last_burst": bursts_posted[-1] if bursts_posted else None,
+                    "bursts_posted": len(bursts_posted),
+                }
+            )
+        result: dict[str, Any] = {
+            "success": done >= wanted and not errors,
+            "steps": step_rows,
+            "areas": area_stats,
+            "bursts": burst_rows,
+            "bursts_missed": missed,
+            "bursts_run": done,
+            "bursts_requested": wanted,
+            "burst_interval_seconds": interval,
+        }
+        if errors:
+            result["error"] = errors[0]
+        elif done < wanted:
+            result["error"] = "protocol timed out before all bursts were run"
+        if capped:
+            result["capped_at_ms"] = STIMULATION_HOLD_MAX_MS
+        return result
+
     async def stimulate_area(
         self,
         area_id: str,
         coordinates: list[int],
-        _potential: float,
-        _duration_ms: int = 100,
+        _potential: float | None = None,
+        duration_ms: int | None = None,
+        bursts: int | None = None,
     ) -> dict[str, Any]:
-        """Stimulate a cortical area with a specific potential.
+        """Stimulate one voxel of a cortical area.
 
         Args:
             area_id: Cortical area identifier
             coordinates: [x, y, z] coordinates within the area
-            potential: Stimulation potential value
-            duration_ms: Duration of stimulation in milliseconds (currently unused by API)
+            _potential: Unused; the manual_stimulation API takes no potential
+            duration_ms: Hold the stimulus for this long by re-posting once per
+                burst (capped at 30 s). Default None means one burst.
+            bursts: Hold for exactly this many bursts (wins over duration_ms)
 
         Returns:
-            Stimulation result
+            Stimulation result; with a hold also ``bursts_held``,
+            ``first_burst`` and ``last_burst``.
         """
         try:
-            response = await self._client.post(
-                f"{self.base_url}/v1/agent/manual_stimulation",
-                json={
-                    "stimulation_payload": {area_id: [coordinates]},
-                    "mode": "force_fire",
-                },
+            return await self._hold_stimulation(
+                {area_id: [coordinates]}, "force_fire", duration_ms, bursts
             )
-            if response.status_code == 200:
-                result = _as_json_dict(response.json())
-                return {
-                    "success": result.get("success", False),
-                    "neurons_stimulated": result.get("unique_neuron_ids", 0),
-                    "matched_coordinates": result.get("matched_coordinates", 0),
-                    "mode": result.get("mode", "unknown"),
-                }
-            return {
-                "success": False,
-                "error": f"HTTP {response.status_code}",
-                "message": response.text,
-            }
         except Exception as e:
             logger.error(f"stimulate_area failed: {e}")
             return {"success": False, "error": str(e)}
@@ -2663,6 +2975,8 @@ class FeagiClient:
         self,
         stimulation_payload: dict[str, list[list[int]]],
         mode: str = "force_fire",
+        duration_ms: int | None = None,
+        bursts: int | None = None,
     ) -> dict[str, Any]:
         """Stimulate multiple cortical areas in one request (same burst / tick).
 
@@ -2671,31 +2985,14 @@ class FeagiClient:
         Args:
             stimulation_payload: Map cortical_id -> list of [x, y, z] coordinate lists
             mode: Stimulation mode (default ``force_fire``)
+            duration_ms: Optional hold, re-posting once per burst (cap 30 s)
+            bursts: Optional hold in bursts (wins over duration_ms)
 
         Returns:
             Same shape as :meth:`stimulate_area` (success, neuron counts, etc.)
         """
         try:
-            response = await self._client.post(
-                f"{self.base_url}/v1/agent/manual_stimulation",
-                json={
-                    "stimulation_payload": stimulation_payload,
-                    "mode": mode,
-                },
-            )
-            if response.status_code == 200:
-                result = _as_json_dict(response.json())
-                return {
-                    "success": result.get("success", False),
-                    "neurons_stimulated": result.get("unique_neuron_ids", 0),
-                    "matched_coordinates": result.get("matched_coordinates", 0),
-                    "mode": result.get("mode", "unknown"),
-                }
-            return {
-                "success": False,
-                "error": f"HTTP {response.status_code}",
-                "message": response.text,
-            }
+            return await self._hold_stimulation(stimulation_payload, mode, duration_ms, bursts)
         except Exception as e:
             logger.error(f"stimulate_areas failed: {e}")
             return {"success": False, "error": str(e)}
@@ -2705,6 +3002,8 @@ class FeagiClient:
         area_id: str,
         coordinates_list: list[list[int]],
         mode: str = "force_fire",
+        duration_ms: int | None = None,
+        bursts: int | None = None,
     ) -> dict[str, Any]:
         """Stimulate many voxels in one cortical area in a single HTTP request.
 
@@ -2714,6 +3013,8 @@ class FeagiClient:
             area_id: Cortical area identifier (wire-format base64 id).
             coordinates_list: Non-empty list of ``[x, y, z]`` voxel coordinates.
             mode: Stimulation mode (default ``force_fire``).
+            duration_ms: Optional hold, one post per burst (cap 30 s).
+            bursts: Optional hold in bursts (wins over duration_ms).
 
         Returns:
             Same aggregate shape as :meth:`stimulate_area` / :meth:`stimulate_areas`.
@@ -2734,7 +3035,9 @@ class FeagiClient:
                     ),
                 }
             normalized.append([int(coords[0]), int(coords[1]), int(coords[2])])
-        return await self.stimulate_areas({area_id: normalized}, mode=mode)
+        return await self.stimulate_areas(
+            {area_id: normalized}, mode=mode, duration_ms=duration_ms, bursts=bursts
+        )
 
     async def get_embodiment_status(self) -> dict[str, Any]:
         """Get status of connected embodiment controllers."""
@@ -4042,22 +4345,35 @@ class FeagiClient:
             }
         limit = max(1, min(int(sample_limit), 200))
 
-        mapping_res, syn_res, dst_area_properties = await asyncio.gather(
+        (
+            mapping_res,
+            syn_res,
+            dst_incoming_res,
+            dst_area_properties,
+            src_area_properties,
+        ) = await asyncio.gather(
             self.get_cortical_mapping(src, dst),
             self.list_area_synapses(src, direction="outgoing"),
+            self.list_area_synapses(dst, direction="incoming"),
             self.fetch_cortical_area_properties(dst),
+            self.fetch_cortical_area_properties(src),
         )
 
-        dst_properties = (
-            dst_area_properties.get("properties") if isinstance(dst_area_properties, dict) else None
-        )
-        is_memory_destination = bool(
-            isinstance(dst_area_properties, dict)
-            and (
-                str(dst_area_properties.get("cortical_type", "")).lower() == "memory"
-                or (isinstance(dst_properties, dict) and dst_properties.get("is_mem_type") is True)
+        def _is_memory_area(props: Any) -> bool:
+            if not isinstance(props, dict):
+                return False
+            nested = props.get("properties")
+            if nested is not None and not isinstance(nested, dict):
+                nested = None
+            for key in ("cortical_type", "cortical_group", "area_type"):
+                if str(props.get(key, "")).strip().lower() == "memory":
+                    return True
+            return bool(nested and nested.get("is_mem_type") is True) or (
+                props.get("is_mem_type") is True
             )
-        )
+
+        is_memory_destination = _is_memory_area(dst_area_properties)
+        is_memory_source = _is_memory_area(src_area_properties)
 
         # Resolve destination membership through the endpoint that owns each
         # neuron type. Dense-neuron listing excludes dynamic memory-range IDs.
@@ -4148,6 +4464,13 @@ class FeagiClient:
             raw_syn = syn_res.get("synapses")
             if isinstance(raw_syn, list):
                 synapses = [s for s in raw_syn if isinstance(s, dict)]
+        # Realized synapses into the destination (the endpoint attributes dense and
+        # memory neurons to the area, so every target here is in ``dst`` by construction).
+        incoming_synapses: list[dict[str, Any]] = []
+        if isinstance(dst_incoming_res, dict):
+            raw_in = dst_incoming_res.get("synapses")
+            if isinstance(raw_in, list):
+                incoming_synapses = [s for s in raw_in if isinstance(s, dict)]
 
         def _as_int(value: Any) -> int | None:
             if isinstance(value, bool):
@@ -4175,13 +4498,41 @@ class FeagiClient:
                     return None
             return None
 
+        # Source membership: neurons that own an outgoing edge from ``src`` (the endpoint
+        # includes dynamic memory neurons) plus, for a memory source, its memory neurons.
+        src_neuron_ids: set[int] = set()
+        for syn in synapses:
+            sid = _as_int(syn.get("source_neuron_id"))
+            if sid is not None:
+                src_neuron_ids.add(sid)
+        # Targets realized in dst per its incoming endpoint (covers memory neurons that
+        # the regular neuron listing never returns).
+        dst_incoming_target_ids: set[int] = set()
+        for syn in incoming_synapses:
+            tid = _as_int(syn.get("target_neuron_id"))
+            if tid is not None:
+                dst_incoming_target_ids.add(tid)
+        seen_pairs: set[tuple[int | None, int | None]] = set()
+        candidates: list[tuple[dict[str, Any], bool]] = [(s, False) for s in synapses]
+        for syn in incoming_synapses:
+            sid = _as_int(syn.get("source_neuron_id"))
+            if sid is not None and sid in src_neuron_ids:
+                candidates.append((syn, True))
+
         matched: list[dict[str, Any]] = []
         skipped_without_target_identity = 0
-        for syn in synapses:
+        for syn, from_dst_incoming in candidates:
+            pair = (_as_int(syn.get("source_neuron_id")), _as_int(syn.get("target_neuron_id")))
+            if pair in seen_pairs:
+                continue
             target_id = _as_int(syn.get("target_neuron_id"))
             reported_target_cortical_id = syn.get("target_cortical_id")
             reported_target_cortical_idx = _as_int(syn.get("target_cortical_idx"))
-            target_id_matches = target_id is not None and target_id in dst_neuron_ids
+            target_id_matches = target_id is not None and (
+                target_id in dst_neuron_ids or target_id in dst_incoming_target_ids
+            )
+            if from_dst_incoming:
+                target_id_matches = True
             target_cortical_id_matches = (
                 isinstance(reported_target_cortical_id, str) and reported_target_cortical_id == dst
             )
@@ -4202,6 +4553,7 @@ class FeagiClient:
 
             if not matched_to_dst:
                 continue
+            seen_pairs.add(pair)
 
             # Destination-neuron membership is authoritative when the synapse payload
             # lacks identity metadata for dynamically allocated memory neurons.
@@ -4232,6 +4584,16 @@ class FeagiClient:
                     "reported_target_cortical_idx": reported_target_cortical_idx,
                 }
             )
+
+        memory_neuron_synapse_count = sum(
+            1
+            for m in matched
+            if any(
+                isinstance(m.get(k), int) and m[k] >= MEMORY_NEURON_ID_BASE
+                for k in ("source_neuron_id", "target_neuron_id")
+            )
+        )
+        placeholder_synapse_count = len(matched) - memory_neuron_synapse_count
 
         weights = [w for w in (_as_float(s.get("weight")) for s in matched) if w is not None]
         zero_weight_count = sum(1 for w in weights if w == 0.0)
@@ -4303,16 +4665,25 @@ class FeagiClient:
                 "skipped_without_target_identity": skipped_without_target_identity,
             },
             "resolution": {
+                # Regular area: neurons in the area listing. Memory area: live memory
+                # neurons (ids >= MEMORY_NEURON_ID_BASE), not placeholder neurons.
                 "destination_neuron_count": len(dst_neuron_ids),
                 "destination_cortical_idx": dst_idx,
                 "destination_is_memory_area": is_memory_destination,
+                "source_is_memory_area": is_memory_source,
+                "incoming_synapse_count_to_dst": len(incoming_synapses),
             },
         }
+        if is_memory_destination or is_memory_source:
+            result["synapse_scan"]["memory_neuron_synapse_count"] = memory_neuron_synapse_count
+            result["synapse_scan"]["placeholder_synapse_count"] = placeholder_synapse_count
 
         if isinstance(mapping_res, dict) and mapping_res.get("error"):
             result["mapping_fetch_error"] = mapping_res
         if isinstance(syn_res, dict) and syn_res.get("error"):
             result["synapse_fetch_error"] = syn_res
+        if isinstance(dst_incoming_res, dict) and dst_incoming_res.get("error"):
+            result["incoming_synapse_fetch_error"] = dst_incoming_res
         if dst_neuron_fetch_error is not None:
             result["destination_neuron_fetch_error"] = dst_neuron_fetch_error
 

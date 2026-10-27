@@ -651,24 +651,30 @@ async def get_embodiment_status() -> dict[str, Any]:
 async def stimulate_area(
     area_id: str,
     coordinates: list[int],
-    potential: float,
-    duration_ms: int = 100,
+    potential: float | None = None,
+    duration_ms: int | None = None,
+    bursts: int | None = None,
 ) -> dict[str, Any]:
     """Stimulate a cortical area for testing.
 
-    Injects a spike or continuous potential into specific neurons. Use this to
-    trigger CPGs, test signal propagation, or activate behavior circuits.
+    Force-fires one voxel. FEAGI fires exactly one burst per call, so by
+    default the stimulus lasts one burst. To hold it, set ``duration_ms`` or
+    ``bursts``: the same payload is re-posted once per burst, gated by the burst
+    counter (interval from ``burst_interval_seconds``), capped at 30 s.
 
     Args:
         area_id: Cortical area identifier
         coordinates: [x, y, z] neuron coordinates within the area
-        potential: Stimulation potential (typically 0.0 to 1.0)
-        duration_ms: Duration of stimulation in milliseconds
+        potential: Unused; the manual_stimulation API takes no potential
+        duration_ms: Hold time in milliseconds (default: one burst)
+        bursts: Hold for exactly this many bursts (wins over duration_ms)
 
     Returns:
-        Success status and neurons activated
+        Success status and neurons activated. With a hold also
+        ``bursts_held``, ``first_burst`` and ``last_burst`` (counter values
+        at post time).
     """
-    result = await feagi.stimulate_area(area_id, coordinates, potential, duration_ms)
+    result = await feagi.stimulate_area(area_id, coordinates, potential, duration_ms, bursts)
     return result
 
 
@@ -677,26 +683,65 @@ async def stimulate_area_batch(
     area_id: str,
     coordinates_list: list[list[int]],
     mode: str = "force_fire",
+    duration_ms: int | None = None,
+    bursts: int | None = None,
 ) -> dict[str, Any]:
     """Stimulate many voxels in one cortical area in a single request.
 
     Use this to mirror encoder patterns onto a motor OPU, fill a z-slab, or
     fire a list of test coordinates without one MCP round trip per voxel.
     The FEAGI API receives one ``manual_stimulation`` payload for the whole
-    list. ``potential`` / ``duration_ms`` are not sent (same as
-    :func:`stimulate_area` today).
+    list and fires one burst per call. Set ``duration_ms`` or ``bursts`` to
+    hold the stimulus: the payload is re-posted once per burst (burst-counter
+    gated, capped at 30 s). ``potential`` is not sent.
 
     Args:
         area_id: Cortical area identifier (base64 wire id)
         coordinates_list: List of ``[x, y, z]`` integer coordinates; each must
             have length 3
         mode: Stimulation mode (default ``force_fire``)
+        duration_ms: Hold time in milliseconds (default: one burst)
+        bursts: Hold for exactly this many bursts (wins over duration_ms)
 
     Returns:
-        Success status and aggregate neuron / match counts from the API
+        Success status and aggregate neuron / match counts from the API; with
+        a hold also ``bursts_held``, ``first_burst`` and ``last_burst``
     """
-    result = await feagi.stimulate_area_batch(area_id, coordinates_list, mode)
+    result = await feagi.stimulate_area_batch(area_id, coordinates_list, mode, duration_ms, bursts)
     return result
+
+
+@mcp.tool()
+async def run_stimulus_protocol(
+    steps: list[dict[str, Any]],
+    record_areas: list[str],
+    tail_bursts: int = 0,
+    mode: str = "force_fire",
+) -> dict[str, Any]:
+    """Present a timed stimulus sequence and record per-burst firing in one call.
+
+    Replaces running a hold (``stimulate_area_batch`` with ``bursts``) and a
+    monitor concurrently. On each new burst counter value all of a step's
+    stimuli are posted as ONE ``manual_stimulation`` payload (every area fires
+    on the same burst), then the fire queue is read and each distinct sample
+    ``timestep`` is recorded once, keeping only ``record_areas``. Total bursts
+    are capped at 30 s of bursts. Memory-area neurons appear at (0,0,0).
+
+    Args:
+        steps: List of ``{"bursts": N, "stimuli": [{"area_id": str,
+            "coordinates": [[x, y, z], ...]}], "label": optional str}``.
+            Empty ``stimuli`` is a rest step.
+        record_areas: Area ids whose firing is recorded
+        tail_bursts: Bursts to record after the last step (default 0)
+        mode: Stimulation mode (default ``force_fire``)
+
+    Returns:
+        ``steps`` (label, first/last posted burst, bursts posted), ``areas``
+        (firing_bursts and per-voxel ``voxel_counts``), ``bursts`` (only
+        bursts where a recorded area fired: burst, step, areas),
+        ``bursts_missed`` (window bursts no read observed) and ``success``.
+    """
+    return await feagi.run_stimulus_protocol(steps, record_areas, tail_bursts, mode)
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -2288,6 +2333,13 @@ async def diagnose_mapping_plasticity(
     - ``expected_initial_weight`` for plastic rules (abs of the rule's
       ``postSynapticCurrent_multiplier``, default 1.0), to compare against the live stats
     - sample of matched synapses for direct inspection
+    - matching uses the source's outgoing and the destination's incoming realized
+      synapses, so memory-neuron edges (ids >= 50,000,000, absent from the regular
+      neuron listing) are included
+    - when either area is a memory area, ``synapse_scan`` adds
+      ``memory_neuron_synapse_count`` and ``placeholder_synapse_count``;
+      ``resolution.destination_neuron_count`` then counts the destination's live
+      memory neurons, not its placeholder neurons
 
     Args:
         src_area: Source cortical area ID (base64).

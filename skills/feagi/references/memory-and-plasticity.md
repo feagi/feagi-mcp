@@ -46,6 +46,12 @@ is full, `lru` evicts that area's least recently reactivated neuron, `none` fail
 `get_memory_area_runtime_config()` shows both, `evicted_total`, `creation_failed_total` and the
 `memory_pool`.
 
+**Reward consolidates.** On a reward-gated `associative_memory` mapping, a positive reward
+that creates or strengthens a synapse between two memory neurons promotes both to long-term at
+once, through the normal long-term path (cap and `ltm_eviction` apply). Expiry of a short-term
+memory neuron deletes every synapse touching it, so without reward a learned association lasts
+only as long as its neurons. Classifier use: [value-planes-and-classifiers.md](value-planes-and-classifiers.md).
+
 ## Membrane-potential encoding modes
 
 `set_memory_mp_encoding(cortical_id, mode, delta_quantization, ratio_quantization)` sets how a
@@ -104,6 +110,20 @@ Any rule that subscribes to `synaptic.reward` is reward-gated, in `stdp` mode as
 potentiation while the reward driver is silent. Confirm learning with
 `health_check().synaptic_plasticity_generation` moving and `list_area_synapses()` weights.
 
+**How a reward reaches a synapse.**
+- A modulator's driver firing on burst t sets R for burst t+1 (one burst later).
+- New synapses on a reward-gated mapping need R > 0 on the burst where both endpoints fire
+  inside `plasticity_window`. `eligibility_decay_bursts` does not help creation: a synapse
+  that does not exist has no trace.
+- An existing synapse keeps an eligibility trace; a reward up to about
+  `eligibility_decay_bursts` later still moves it (`w += eta * R * e`).
+- Only synapses whose own endpoint neurons fired get credit. For memory areas the exception
+  is the placeholder seed edge between the memory voxels, which counts any activity in its
+  areas.
+- Punishment never potentiates; it lowers weights to a floor of 0.
+- Several reward modulators on one rule sum into one R per burst (correct +100% and error
+  -100% firing together give 0).
+
 Reward and punishment detector areas must be driven only by hard-wired, non-plastic input.
 FEAGI's wireheading check rejects genomes where learning can feed its own reward.
 
@@ -137,7 +157,8 @@ subscription or a silent driver the area forms memories as usual. Non-memory are
    wire it into the driver area with `apply_connectivity_rule()`, the same way the reward
    detector is wired into a `synaptic.reward` driver. The driver counts as active on every
    burst its neuron fires. For a manual hold during a test, a large `effect_duration_bursts`
-   keeps the driver on after one `stimulate_area()`.
+   keeps the driver on after one `stimulate_area()` (see Driver semantics under Modulators);
+   it stops after that many bursts and then rests `rest_bursts`.
 3. `set_area_modulators(memory_area_id, ["no_new_memory"])` on each memory area to suppress.
    The call replaces the list, so include the area's existing modulator ids.
 4. Verify with `get_memory_area_runtime_config(memory_area_id)`:
@@ -194,6 +215,16 @@ areas or mappings are modulated for a number of bursts.
 - Create: `create_modulator(modulator_id, definition)` with `type`, `magnitude_percent`
   (at least -100), `effect_duration_bursts` (at least 1), `rest_bursts`, `graded`, and
   `full_scale_potential` when graded.
+- Driver semantics: the signal is on for exactly the bursts the driver neuron fires, and
+  takes effect on the following burst. FEAGI makes the driver a spike train: one firing
+  schedules forced firings at the same potential for up to `effect_duration_bursts`
+  consecutive bursts, then the neuron rests for `rest_bursts`. So one `stimulate_area()` holds
+  the signal for the effect duration and no longer, and a driver wired to a detector re-triggers
+  after each rest. `graded` scales the signal by the driver's membrane potential up to
+  `full_scale_potential`.
+- Deliver reward or punishment by hand (tests, external teachers): `POST /v1/training/reward`
+  or `/v1/training/punishment` with `{"modulator_ids": [...]}`; reward needs positive
+  modulators, punishment negative ones.
 - Subscribe: `set_area_modulators(cortical_id, modulator_ids)` for areas,
   `set_mapping_modulators(src_area, dst_area, modulator_ids, morphology_id)` for mappings.
   Both replace the full subscription list.

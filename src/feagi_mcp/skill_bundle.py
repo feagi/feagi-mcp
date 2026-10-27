@@ -173,6 +173,7 @@ TOOL_CATEGORIES: dict[str, tuple[str, ...]] = {
         "probe_area_response",
         "stimulate_area",
         "stimulate_area_batch",
+        "run_stimulus_protocol",
         "monitor_activity",
         "monitor_activity_batch",
         "get_fire_queue_detailed",

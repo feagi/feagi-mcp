@@ -8,7 +8,7 @@ Complete reference of all available tools, organized by category.
 |----------|------------|---------------|
 | [Monitoring](#monitoring-tools) | 2 | Observe neural activity, verify circuits |
 | [Inspection](#inspection-tools) | 4 | Analyze connections, trace paths, get parameters |
-| [Control](#control-tools) | 1 | Stimulate neurons for testing |
+| [Control](#control-tools) | 2 | Stimulate neurons for testing |
 | [Genome](#genome-tools) | 4 | Upload/download/validate architectures |
 | [Utility](#utility-tools) | 1 | Health checks, connectivity |
 
@@ -177,7 +177,9 @@ areas = await list_cortical_areas(name_contains="Speed", cortical_type="OPU")
 ### stimulate_area
 **Category:** Control  
 **Purpose:** Inject spikes into neurons for testing  
-**Signature:** `(area_id: str, coordinates: list[int], potential: float, duration_ms: int = 100) -> dict`
+**Signature:** `(area_id: str, coordinates: list[int], potential: float | None = None, duration_ms: int | None = None, bursts: int | None = None) -> dict`
+
+Default is one burst (FEAGI fires one burst per call). `duration_ms` / `bursts` re-post once per burst (cap 30 s) and return `bursts_held`, `first_burst`, `last_burst`; `potential` is unused.
 
 **When to use:**
 - Trigger CPGs to start oscillating
@@ -192,6 +194,17 @@ result = await stimulate_area("cStart", [0, 0, 0], 1.0, 500)
 ```
 
 **Status:** Awaiting FEAGI API `/v1/stimulate`
+
+---
+
+### run_stimulus_protocol
+**Category:** Control  
+**Purpose:** Present a timed sequence of stimuli and record per-burst firing of chosen areas in one call  
+**Signature:** `(steps: list[dict], record_areas: list[str], tail_bursts: int = 0, mode: str = "force_fire") -> dict`
+
+Each step is `{"bursts": N, "stimuli": [{"area_id": str, "coordinates": [[x,y,z], ...]}], "label": optional str}`; empty `stimuli` is a rest step. On each new burst counter value all of a step's stimuli are posted as one `manual_stimulation` payload, then `/v1/burst_engine/fire_queue/detailed` is read and each distinct sample `timestep` is recorded once (only `record_areas`). Samples are tagged with the step posted on the latest earlier burst. Total capped at 30 s of bursts.
+
+Returns `steps` (label, first/last posted burst, bursts posted), `areas` (`firing_bursts`, per-voxel `voxel_counts`), `bursts` (only bursts where a recorded area fired), `bursts_missed`, `success`. Memory-area neurons appear at (0,0,0).
 
 ---
 

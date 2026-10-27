@@ -36,6 +36,7 @@ CLASSIFIER_SLOT_FIELDS: tuple[tuple[str, str], ...] = (
     ("sample_memory", "sample_memory_id"),
     ("class_memory", "class_memory_id"),
     ("error", "error_area_id"),
+    ("correct", "correct_area_id"),
 )
 
 CLASSIFIER_SHARED_MAPPINGS: tuple[tuple[str, str, str, str], ...] = (
@@ -224,6 +225,8 @@ def scan_blockers(
         blockers.append("class_memory_missing")
     if "error" in missing_slots:
         blockers.append("error_missing")
+    if "correct" in missing_slots:
+        blockers.append("correct_missing")
     if "sample_mem_to_class_mem" in missing_mappings:
         blockers.append("associative_mapping_missing")
     output = _scan_slot(slots, "class_output")

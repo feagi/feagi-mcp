@@ -1256,6 +1256,13 @@ class TestConnectionManagement:
                 ],
             }
         )
+        outgoing_payload = mock_client.list_area_synapses.return_value
+        incoming_payload = {"synapses": []}
+
+        async def _by_direction(_area, direction="outgoing", **_kw):
+            return outgoing_payload if direction == "outgoing" else incoming_payload
+
+        mock_client.list_area_synapses = AsyncMock(side_effect=_by_direction)
         neuron_list_response = MagicMock()
         neuron_list_response.status_code = 200
         neuron_list_response.json.return_value = [10, 11]
@@ -1304,17 +1311,21 @@ class TestConnectionManagement:
             }
         )
         mock_client.list_area_synapses = AsyncMock(
-            return_value={
-                "synapses": [
-                    {
-                        "source_neuron_id": 50000001,
-                        "target_neuron_id": 50000002,
-                        "weight": 2.5,
-                        "target_cortical_id": None,
-                        "target_cortical_idx": 0,
-                    }
-                ]
-            }
+            side_effect=lambda _area, direction="outgoing", **_kw: (
+                {"synapses": []}
+                if direction == "incoming"
+                else {
+                    "synapses": [
+                        {
+                            "source_neuron_id": 50000001,
+                            "target_neuron_id": 50000002,
+                            "weight": 2.5,
+                            "target_cortical_id": None,
+                            "target_cortical_idx": 0,
+                        }
+                    ]
+                }
+            )
         )
         mock_client.list_memory_neurons = AsyncMock(
             side_effect=[
@@ -1335,6 +1346,72 @@ class TestConnectionManagement:
         assert result["resolution"]["destination_is_memory_area"] is True
         assert mock_client.list_memory_neurons.await_count == 2
         mock_client._client.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_mapping_diagnostic_memory_to_memory_counts_both_synapse_kinds(self, mock_client):
+        """Placeholder and memory-neuron synapses into a memory area both match."""
+        mock_client.get_cortical_mapping = AsyncMock(
+            return_value={
+                "rules": [{"morphology_id": "associative_memory", "plasticity_flag": True}]
+            }
+        )
+        mock_client.fetch_cortical_area_properties = AsyncMock(
+            return_value={"cortical_idx": 10, "cortical_type": "memory"}
+        )
+        outgoing = {
+            "synapses": [
+                {"source_neuron_id": 980, "target_neuron_id": 583, "weight": 1304.0},
+                {"source_neuron_id": 50000065, "target_neuron_id": 50000064, "weight": 867.0},
+                {"source_neuron_id": 980, "target_neuron_id": 7, "weight": 5.0},
+            ]
+        }
+        incoming = {
+            "synapses": [
+                {"source_neuron_id": 980, "target_neuron_id": 583, "weight": 1304.0},
+                {"source_neuron_id": 50000065, "target_neuron_id": 50000064, "weight": 867.0},
+            ]
+        }
+        mock_client.list_area_synapses = AsyncMock(
+            side_effect=lambda _area, direction="outgoing", **_kw: (
+                incoming if direction == "incoming" else outgoing
+            )
+        )
+        mock_client.list_memory_neurons = AsyncMock(
+            return_value={"memory_neuron_ids": [50000064], "has_more": False}
+        )
+
+        result = await mock_client.get_mapping_plasticity_diagnostics("mem_src", "mem_dst")
+
+        scan = result["synapse_scan"]
+        assert scan["matched_synapse_count_src_to_dst"] == 2
+        assert scan["memory_neuron_synapse_count"] == 1
+        assert scan["placeholder_synapse_count"] == 1
+        assert scan["weight_stats"]["min"] == 867.0
+        assert scan["weight_stats"]["max"] == 1304.0
+        assert result["resolution"]["destination_neuron_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_mapping_diagnostic_incoming_only_memory_synapse_matches(self, mock_client):
+        """A memory-neuron edge visible only in dst incoming still matches via its source."""
+        mock_client.get_cortical_mapping = AsyncMock(return_value={"rules": []})
+        mock_client.fetch_cortical_area_properties = AsyncMock(
+            return_value={"cortical_idx": 10, "cortical_type": "memory"}
+        )
+        outgoing = {"synapses": [{"source_neuron_id": 50000065, "target_neuron_id": 3}]}
+        incoming = {
+            "synapses": [{"source_neuron_id": 50000065, "target_neuron_id": 50000064, "weight": 9}]
+        }
+        mock_client.list_area_synapses = AsyncMock(
+            side_effect=lambda _area, direction="outgoing", **_kw: (
+                incoming if direction == "incoming" else outgoing
+            )
+        )
+        mock_client.list_memory_neurons = AsyncMock(
+            return_value={"memory_neuron_ids": [], "has_more": False}
+        )
+        result = await mock_client.get_mapping_plasticity_diagnostics("a", "b")
+        assert result["synapse_scan"]["matched_synapse_count_src_to_dst"] == 1
+        assert result["synapse_scan"]["memory_neuron_synapse_count"] == 1
 
     @pytest.mark.asyncio
     async def test_server_diagnose_mapping_plasticity_tool(self, monkeypatch):
@@ -1626,6 +1703,62 @@ class TestStimulation:
                 "mode": "force_fire",
             },
         )
+
+
+class TestStimulationHold:
+    """Holding a stimulus re-posts once per burst, gated by the burst counter."""
+
+    @staticmethod
+    def _wire(client, counters, interval=0.01):
+        def ok(payload):
+            r = MagicMock()
+            r.status_code = 200
+            r.json.return_value = payload
+            return r
+
+        seq = iter(counters)
+        last = [counters[-1]]
+
+        async def get(url):
+            if url.endswith("/config"):
+                return ok({"burst_interval_seconds": interval})
+            last[0] = next(seq, last[0])
+            return ok(last[0])
+
+        client._client.get = AsyncMock(side_effect=get)
+        client._client.post.return_value = ok({"success": True, "unique_neuron_ids": 1})
+
+    @pytest.mark.asyncio
+    async def test_default_is_one_post_without_config_reads(self, mock_client):
+        self._wire(mock_client, [1])
+        result = await mock_client.stimulate_area("a", [0, 0, 0], 1.0)
+        assert result["success"] is True
+        assert "bursts_held" not in result
+        assert mock_client._client.post.await_count == 1
+        mock_client._client.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_duration_posts_once_per_new_burst(self, mock_client):
+        # repeated counter values (same burst) must not cause double posts
+        self._wire(mock_client, [10, 10, 11, 11, 11, 12])
+        result = await mock_client.stimulate_area("a", [0, 0, 0], None, duration_ms=30)
+        assert mock_client._client.post.await_count == 3
+        assert result["bursts_held"] == 3
+        assert (result["first_burst"], result["last_burst"]) == (10, 12)
+
+    @pytest.mark.asyncio
+    async def test_duration_is_capped(self, mock_client):
+        self._wire(mock_client, list(range(1, 5000)), interval=1.0)
+        result = await mock_client.stimulate_area("a", [0, 0, 0], None, bursts=1000)
+        assert result["bursts_held"] == 30
+        assert result["capped_at_ms"] == 30_000
+
+    @pytest.mark.asyncio
+    async def test_batch_passes_hold_through(self, mock_client):
+        self._wire(mock_client, [5, 6])
+        result = await mock_client.stimulate_area_batch("a", [[0, 0, 0]], bursts=2)
+        assert result["bursts_held"] == 2
+        assert mock_client._client.post.await_count == 2
 
 
 class TestStimulateAreaBatch:

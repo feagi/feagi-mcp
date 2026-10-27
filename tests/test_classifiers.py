@@ -26,6 +26,7 @@ def _classifier() -> dict:
         "sample_memory_id": "kmem",
         "class_memory_id": "cmem",
         "error_area_id": "err",
+        "correct_area_id": "corr",
         "properties": {},
     }
 
@@ -60,6 +61,13 @@ def _areas() -> list[dict]:
         {
             "cortical_id": "err",
             "cortical_name": "Ela joon error",
+            "cortical_type": "custom",
+            "cortical_dimensions": [1, 1, 1],
+            "visible": True,
+        },
+        {
+            "cortical_id": "corr",
+            "cortical_name": "Ela joon correct",
             "cortical_type": "custom",
             "cortical_dimensions": [1, 1, 1],
             "visible": True,
@@ -142,6 +150,19 @@ def test_inspect_reports_twin_and_required_mappings() -> None:
         "sample_to_sample_mem",
         "class_to_class_mem",
     ]
+
+
+def test_inspect_lists_correct_slot_and_flags_when_missing() -> None:
+    payload = build_classifier_inspect(_classifier(), _areas(), _mappings())
+    assert payload["slots"]["correct"]["area_id"] == "corr"
+    assert payload["slots"]["correct"]["present"] is True
+    classifier = _classifier()
+    classifier["correct_area_id"] = ""
+    broken = build_classifier_inspect(classifier, _areas(), _mappings())
+    assert "correct" in broken["missing_slots"]
+    assert "correct_missing" in broken["blockers"]
+    assert "error_missing" not in broken["blockers"]
+    assert "correct_missing" in scan_blockers({}, ["correct"], [])
 
 
 def test_inspect_flags_missing_class_output() -> None:
