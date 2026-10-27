@@ -139,6 +139,37 @@ class MujocoSceneControl:
             "result": response.get("result"),
         }
 
+    async def measure_bodies(
+        self,
+        bodies: list[str],
+        contacts: list[dict[str, Any]],
+        controller_id: str = "mujoco",
+        control_url: str | None = None,
+    ) -> dict[str, Any]:
+        """Run the controller's read-only physics ``measure`` primitive."""
+        payload = {"action": "measure", "bodies": bodies, "contacts": contacts}
+        if control_url:
+            try:
+                base = loopback_base_url(control_url)
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
+        else:
+            target = resolve_control_target(controller_id)
+            if not target.get("ok"):
+                return target
+            base = str(target["control_url"])
+        try:
+            response = await self._post(base, payload, _READ_TIMEOUT_S)
+        except (httpx.HTTPError, OSError, TimeoutError) as exc:
+            return {"ok": False, "error": str(exc), "action": "measure"}
+        if response.get("ok") is not True:
+            return {
+                "ok": False,
+                "action": "measure",
+                "error": response.get("error") or "MuJoCo measure failed.",
+            }
+        return {"ok": True, "action": "measure", "result": response.get("result")}
+
     async def read_config(self, controller_id: str = "mujoco") -> dict[str, Any]:
         """Read every live MuJoCo settings section the control server exposes."""
         sections: dict[str, Any] = {}

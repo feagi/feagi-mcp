@@ -213,3 +213,27 @@ async def test_non_json_http_errors_still_raise(monkeypatch: pytest.MonkeyPatch)
     result = await MujocoSceneControl().command("list_scene_objects")
     assert result["ok"] is False
     assert "500" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_measure_bodies_posts_the_measure_action(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "feagi_mcp.mujoco_scene_control.discover_endpoint",
+        lambda _controller_id: _endpoint(),
+    )
+    seen: dict[str, Any] = {}
+
+    async def poster(url: str, payload: dict[str, Any], _timeout: float) -> dict[str, Any]:
+        seen.update(url=url, payload=payload)
+        return {"ok": True, "result": {"bodies": {}, "contacts": [], "springs": {}}}
+
+    contacts = [{"a_except": ["part"], "b": "world"}]
+    result = await MujocoSceneControl(poster=poster).measure_bodies(["part"], contacts)
+    assert result["ok"] is True and result["action"] == "measure"
+    assert seen["url"] == "http://127.0.0.1:44000"
+    assert seen["payload"] == {"action": "measure", "bodies": ["part"], "contacts": contacts}
+
+    result = await MujocoSceneControl(poster=poster).measure_bodies(
+        [], [], control_url="http://example.com:9"
+    )
+    assert result["ok"] is False

@@ -3873,23 +3873,6 @@ class FeagiClient:
             "PUT", f"/v1/cortical_area/classifier/{_path_id(cleaned)}", updates
         )
 
-    async def attach_classifier_field(
-        self, classifier_id: str, field_area_id: str
-    ) -> dict[str, Any]:
-        """Bind an image field to a classifier and create its class output."""
-        cleaned = (classifier_id or "").strip()
-        field = (field_area_id or "").strip()
-        if not cleaned or not field:
-            return {
-                "error": "invalid_input",
-                "message": "classifier_id and field_area_id are required",
-            }
-        return await self._classifier_request(
-            "POST",
-            f"/v1/cortical_area/classifier/{_path_id(cleaned)}/field",
-            {"field_area_id": field},
-        )
-
     async def _classifier_request(
         self, method: str, path: str, body: dict[str, Any]
     ) -> dict[str, Any]:
@@ -6002,8 +5985,7 @@ class FeagiClient:
         replace_existing: bool = False,
         plasticity_mode: str | None = None,
         eligibility_decay_bursts: int | None = None,
-        reward_source_area: str | None = None,
-        punishment_source_area: str | None = None,
+        modulators: list[str] | None = None,
         max_weight: float | None = None,
         plasticity_eta: float | None = None,
     ) -> dict[str, Any]:
@@ -6142,10 +6124,8 @@ class FeagiClient:
                 if int(eligibility_decay_bursts) < 0:
                     return {"error": "eligibility_decay_bursts must be >= 0"}
                 new_rule["eligibility_decay_bursts"] = int(eligibility_decay_bursts)
-            if reward_source_area is not None:
-                new_rule["reward_source_area"] = str(reward_source_area)
-            if punishment_source_area is not None:
-                new_rule["punishment_source_area"] = str(punishment_source_area)
+            if modulators:
+                new_rule["modulators"] = [str(m) for m in modulators]
             if max_weight is not None:
                 try:
                     mw = float(max_weight)

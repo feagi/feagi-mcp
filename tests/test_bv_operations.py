@@ -33,3 +33,28 @@ def test_list_operation_summaries_shape():
 
 def test_brain_visualizer_operation_unknown():
     assert "nonexistent" not in BV_OPERATION_BY_ID
+
+
+def test_classifier_and_modulator_routes_match_brain_visualizer():
+    """Every live classifier and modulator path BV calls is in the MCP registry."""
+    import re
+    from pathlib import Path
+
+    address_list = (
+        Path(__file__).resolve().parents[2]
+        / "brain-visualizer/godot_source/addons/FeagiCoreIntegration/FeagiCore/Networking/API"
+        / "FEAGIHTTPAddressList.gd"
+    )
+    if not address_list.exists():
+        pytest.skip("brain-visualizer checkout not present")
+    bv = set()
+    for method, path in re.findall(
+        r'var (GET|POST|PUT|DELETE)_\w+: StringName = "(/v1/(?:modulator/|cortical_area/classifier)[^"]*)"',
+        address_list.read_text("utf-8"),
+    ):
+        if path.endswith("/field"):  # retired: the server rejects field attach/detach
+            continue
+        bv.add((method, path))
+    mcp = {(op.method, op.path_template) for op in BV_OPERATIONS}
+    assert bv, "no classifier/modulator paths parsed from FEAGIHTTPAddressList.gd"
+    assert bv <= mcp, f"missing from bv_operations: {sorted(bv - mcp)}"

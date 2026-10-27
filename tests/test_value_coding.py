@@ -320,14 +320,18 @@ class TestClassifierWriteTools:
         client._client.request.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_update_and_attach_hit_classifier_routes(self, client) -> None:
+    async def test_update_hits_classifier_route(self, client) -> None:
         client._client.request.return_value = _ok({"success": True})
-        await client.update_classifier("clf-1", {"reward_training": True})
+        await client.update_classifier(
+            "clf-1", {"reward_training": True, "reward_modulator_ids": ["joy", "ouch"]}
+        )
         assert client._client.request.call_args.args[0] == "PUT"
         assert client._client.request.call_args.args[1].endswith("/classifier/clf-1")
-        await client.attach_classifier_field("clf-1", "field")
-        assert client._client.request.call_args.args[1].endswith("/classifier/clf-1/field")
-        assert client._client.request.call_args.kwargs["json"] == {"field_area_id": "field"}
+        assert client._client.request.call_args.kwargs["json"]["reward_modulator_ids"] == [
+            "joy",
+            "ouch",
+        ]
+        assert not hasattr(client, "attach_classifier_field")
         bad = await client.update_classifier("clf-1", {"training_mode": "scanner"})
         assert bad["error"] == "invalid_input"
 
@@ -346,7 +350,6 @@ class TestServerDelegation:
             "decode_class_map",
             "create_classifier",
             "update_classifier",
-            "attach_classifier_field",
         ):
             monkeypatch.setattr(server.feagi, name, fake)
         assert (await server.wire_value_passthrough(TWIN, OSEG, 19))["args"] == [
@@ -356,4 +359,4 @@ class TestServerDelegation:
             None,
         ]
         assert (await server.decode_class_map(OSEG, 19))["args"] == [OSEG, 19, 200]
-        assert (await server.attach_classifier_field("c", "f"))["args"] == ["c", "f"]
+        assert not hasattr(server, "attach_classifier_field")

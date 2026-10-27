@@ -73,34 +73,48 @@ when synapses must specialize by range or class, or when a scanner classifier re
 ## Classifiers
 
 Classifiers are first-class genome objects, not cortical areas: list them with
-`list_classifiers()`, not by searching area names for `_kernel_mem` or `_class_mem`. A
-classifier owns a sample memory, a class memory, an error area, and an associative edge.
+`list_classifiers()`, not by searching area names for `_sample_mem` or `_class_mem`.
+`create_classifier(name, brain_region_id, coordinates_3d)` makes the classifier circuit with
+a sample memory, a class memory, an **error** area, a **correct** area, the associative edge
+(sample memory -> class memory), and two Reward modulators that adopt the answer areas as
+drivers: "*name* correct answer" (+100%) and "*name* error" (-100%).
 
-**Kernel mode**: `create_classifier()` with a kernel area and a `1 x 1 x n` class area.
-`attach_classifier_field()` requires the field to match the kernel area and creates
-`{classifier name} class output` as `1 x 1 x n`; on recall the winning class fires at depth z.
-`mp_driven_psp` stays off.
+**Inputs** are mappings, not tool arguments. Map a sample area onto the sample memory with
+morphology `classifier_sample` (several inputs hash as one pattern). Map each class area onto
+the class memory with `classifier_class`; FEAGI creates a class output shaped like that class
+input. Class memory replays onto the outputs.
 
-**Scanner mode**: `create_classifier()` with a `W x H x 1` mask area, a `kernel_size` whose Z
-equals the image field depth, and `class_count`. Then `attach_classifier_field()` for each
-image field; FEAGI creates a `W x H x 1` class output (twin) per field. Training reads the class
-from the mask potential. On recall each detected pixel is written once with the winning class
-(highest vote, ties to the lower id) as an exact potential. Changing class count, kernel size,
-or mode drops learned patterns. Modify with `update_classifier()`.
+**Answer check**: the error area fires on the next burst when a class output disagrees with
+its class input from the answer delay earlier, or an output has more than one neuron firing.
+The correct area fires when every class input that fired was answered with no error. The
+answer delay comes from the circuit: the class input -> class memory rule's
+`synaptic_delay_bursts` (default 1) plus one burst for the replay onto the output.
 
-**Routing to an output**: the Trainer only reads the segmentation OPU. Wire the twin with
-`wire_value_passthrough(twin, oseg, class_count=N)`, then confirm with
+**Reward training** (`update_classifier(id, {"reward_training": true, ...})`) makes the
+associative edge standard R-STDP. `reward_modulator_ids` lists the `synaptic.reward`
+modulators it learns from: positive ones strengthen the links active when they fire,
+negative ones weaken them. Turning reward training on with an empty list selects the
+classifier's correct-answer and error modulators. The edge's `eligibility_decay_bursts` is
+set to the answer delay + 2 so a late answer still reaches the active links. Strength is
+each modulator's `magnitude_percent`. `answer_feedback_area_id`, `answer_latency_bursts`,
+`learn_area_id` and `confidence_area_id` are stored but have no effect.
+
+`POST /v1/cortical_area/classifier/{id}/answer_modulators` creates missing answer areas and
+modulators (classifiers made before they existed, or after one was deleted) and returns
+their ids. To deliver reward or punishment by hand, `POST /v1/training/reward` or
+`/v1/training/punishment` with `{"modulator_ids": [...]}`; reward needs positive modulators,
+punishment negative ones.
+
+**Routing to an output**: wire a class output with
+`wire_value_passthrough(output, oseg, class_count=N)`, then confirm with
 `validate_magnitude_passthrough()`.
 
 ## Checking and debugging
 
-- `inspect_classifier()` resolves every slot and the four required mappings and reports
-  `missing_slots`, `missing_mappings`, `scan_blockers`, `scan_ready`, memory counts,
-  `memory_findings`, and `value_findings` (`class_count_missing`, `mask_not_single_layer`,
-  `twin_not_single_layer`, `twin_not_forwarding_value` with a fix). Use it instead of walking
-  areas and mappings by hand.
-- Common `scan_blockers`: `kernel_memory_no_ltm`, `field_burst_engine_off`,
-  `twin_burst_engine_off`, missing scan mapping or slots, and `memory_no_episodic_upstream`.
+- `inspect_classifier()` resolves every slot and the required mappings and reports
+  `missing_slots`, `missing_mappings`, `blockers`, `ready`, memory counts,
+  `memory_findings`, and `value_findings`. Use it instead of walking areas and mappings by
+  hand.
 - `decode_class_map(area, class_count)` decodes the last burst of a mask, twin, or segmentation
   output into a class histogram, an `undecodable` count (a sign of scaling or a non-value
   area), and up to `max_pixels` pixel rows.

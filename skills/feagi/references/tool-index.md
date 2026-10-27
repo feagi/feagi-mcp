@@ -128,11 +128,11 @@ with the user first. Use the task references for when and how to call each tool.
 - `list_modulator_types()`: List the fixed modulator types.
 - `list_modulators()`: List modulator instances in the loaded genome.
 - `get_modulator()`: Read one modulator instance.
-- `create_modulator()`: Create a modulator instance and its 1x1x1 driver area.
+- `create_modulator()`: Create a modulator instance and its 1x1x1 driver area, or adopt an existing area.
 - `update_modulator()`: Update a modulator instance. Type changes are rejected while subscribers exist.
 - `rename_modulator()`: Rename a modulator and rewrite subscriber references.
 - `modulator_usage()`: List areas and mapping rules subscribed to a modulator.
-- `delete_modulator()`: Delete a modulator and its driver. Without force, subscribers reject the delete. **Destructive.**
+- `delete_modulator()`: Delete a modulator and its own driver; subscribers reject it unless forced. **Destructive.**
 - `set_area_modulators()`: Replace the area-level modulator subscriptions (`neuro.*` kinds, and
 - `unsubscribe_area_modulator()`: Remove one neuromodulator subscription from a cortical area.
 - `set_mapping_modulators()`: Replace synaptic modulator subscriptions on the mapping from src to dst.
@@ -142,9 +142,8 @@ with the user first. Use the task references for when and how to call each tool.
 
 - `list_classifiers()`: List first-class genome classifiers.
 - `inspect_classifier()`: Inspect one classifier assembly in a single call.
-- `create_classifier()`: Create a classifier: sample memory, class memory, error area, and the associative edge.
+- `create_classifier()`: Create a classifier with its memories, answer areas, and answer modulators.
 - `update_classifier()`: Update a classifier record.
-- `attach_classifier_field()`: Bind an image field to a classifier and create that field's class output.
 - `wire_value_passthrough()`: Wire a one-layer value plane 1:1 so each voxel's potential arrives exactly.
 - `validate_magnitude_passthrough()`: Check that graded magnitudes in `src_area` reach `dst_area` unchanged.
 - `expand_value_to_bins()`: Create a `W x H x levels` bin area driven by a one-layer value plane.
@@ -193,6 +192,7 @@ with the user first. Use the task references for when and how to call each tool.
 - `get_embodiment_status()`: Get status of connected embodiment controllers (GET /v1/embodiment/status when available).
 - `embodiment_discover_introspection_endpoint()`: Locate a controller's introspection HTTP endpoint via the launcher descriptor.
 - `embodiment_get_physics_state()`: GET ground-truth physics state from an embodiment controller.
+- `embodiment_measure_bodies()`: Read tilt, height and contacts of named bodies from the MuJoCo controller (read-only).
 - `embodiment_set_joint_state()`: Place embodiment joints deterministically (e.g. tilt pendulum, position arm).
 - `embodiment_reset_simulation_time_stats()`: Reset the session max simulation clock (benchmark high-water mark).
 - `measure_balance()`: Balance outcome numbers from the simulator: episodes, upright time, tilt, falls.

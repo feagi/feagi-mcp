@@ -82,5 +82,21 @@ def test_token_never_in_message(tmp_path):
 def test_server_call_path_returns_handoff_error(monkeypatch):
     monkeypatch.setattr(server, "studio_manages_feagi", lambda *_: True)
     with pytest.raises(ToolError) as exc:
-        asyncio.run(server.mcp.call_tool("health_check", {}))
-    assert "neurorobotics-studio" in str(exc.value) and "`health_check`" in str(exc.value)
+        asyncio.run(server.mcp.call_tool("stimulate_area", {}))
+    assert "neurorobotics-studio" in str(exc.value) and "`stimulate_area`" in str(exc.value)
+
+
+def test_read_only_tool_passes_guard(monkeypatch):
+    async def _ran(*_args):
+        return "ran"
+
+    monkeypatch.setattr(server.FastMCP, "call_tool", _ran)
+    monkeypatch.setattr(server, "studio_manages_feagi", lambda *_: True)
+    for name in ("embodiment_measure_bodies", "embodiment_get_physics_state", "health_check"):
+        assert server.mcp._is_read_only(name), name
+        assert asyncio.run(server.mcp.call_tool(name, {})) == "ran", name
+
+
+def test_mutating_tools_not_read_only():
+    for name in ("stimulate_area", "send_motor_command", "upload_genome", "pause_burst_engine"):
+        assert not server.mcp._is_read_only(name), name

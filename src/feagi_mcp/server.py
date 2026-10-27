@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
+from mcp.types import ToolAnnotations
 
 from feagi_mcp.aligned_trace import record_aligned_trace_window
 from feagi_mcp.balance_measurement import measure_balance_window
@@ -70,14 +71,23 @@ composer_sim_packs = ComposerSimulatorPacksClient(
 class _StudioAwareFastMCP(FastMCP):
     """FastMCP that refuses tool calls while Neurorobotics Studio manages this FEAGI.
 
+    Tools marked ``READ_ONLY`` (readOnlyHint) change nothing and pass straight through.
     Studio's in-process upstream sets ``FEAGI_MCP_VIA_STUDIO=1`` so it is unaffected.
     """
 
+    def _is_read_only(self, name: str) -> bool:
+        tool = self._tool_manager.get_tool(name)
+        hint = getattr(getattr(tool, "annotations", None), "readOnlyHint", None)
+        return hint is True
+
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
-        if studio_manages_feagi(config.host, config.port):
+        if not self._is_read_only(name) and studio_manages_feagi(config.host, config.port):
             raise ToolError(handoff_message(name))
         return await super().call_tool(name, arguments)
 
+
+READ_ONLY = ToolAnnotations(readOnlyHint=True)
+"""Marks a tool that changes nothing; such tools pass the Studio hand-off guard."""
 
 mcp = _StudioAwareFastMCP(
     name="feagi",
@@ -104,7 +114,7 @@ def _positive_float_or_none(value: Any) -> float | None:
     return parsed if parsed > 0 else None
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def monitor_activity(
     area_id: str,
     duration_ms: int = 1000,
@@ -151,7 +161,7 @@ async def monitor_activity(
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_connectivity(src_area: str, dst_area: str) -> dict[str, Any]:
     """Get synaptic connectivity between two cortical areas.
 
@@ -220,7 +230,7 @@ def _memory_mp_encoding(
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_memory_area_runtime_config(cortical_id: str, page_size: int = 1) -> dict[str, Any]:
     """Get effective runtime lifecycle config for one memory cortical area.
 
@@ -597,7 +607,7 @@ async def set_memory_mp_encoding(
     return response
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_area_parameters(area_id: str) -> dict[str, Any]:
     """Neuron and geometry parameters for one cortical area.
 
@@ -615,7 +625,7 @@ async def get_area_parameters(area_id: str) -> dict[str, Any]:
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_embodiment_status() -> dict[str, Any]:
     """Get status of connected embodiment controllers (GET /v1/embodiment/status when available).
 
@@ -689,7 +699,7 @@ async def stimulate_area_batch(
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def list_cortical_areas(
     name_contains: str | None = None,
     cortical_id_contains: str | None = None,
@@ -728,7 +738,7 @@ async def list_cortical_areas(
     return [project_cortical_area_catalog_row(area) for area in areas]
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def list_cortical_area_names(
     name_contains: str | None = None,
 ) -> list[str]:
@@ -748,7 +758,7 @@ async def list_cortical_area_names(
     return await feagi.list_cortical_area_names(name_contains=name_contains)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def list_classifiers(
     name_contains: str | None = None,
     classifier_id: str | None = None,
@@ -772,7 +782,7 @@ async def list_classifiers(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def inspect_classifier(
     classifier_id: str | None = None,
     name_contains: str | None = None,
@@ -798,7 +808,7 @@ async def inspect_classifier(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def list_morphologies() -> dict[str, Any]:
     """Get all morphology definitions and connectivity rules.
 
@@ -813,7 +823,7 @@ async def list_morphologies() -> dict[str, Any]:
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_genome_info() -> dict[str, Any]:
     """Get metadata about the currently loaded genome.
 
@@ -827,7 +837,7 @@ async def get_genome_info() -> dict[str, Any]:
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_version_info() -> dict[str, Any]:
     """Get FEAGI runtime and component versions (GET /v1/system/versions).
 
@@ -841,7 +851,7 @@ async def get_version_info() -> dict[str, Any]:
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def download_genome() -> dict[str, Any]:
     """Download the complete genome configuration.
 
@@ -1060,19 +1070,19 @@ async def create_morphology(
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def list_modulator_types() -> dict[str, Any]:
     """List the fixed modulator types."""
     return await feagi.list_modulator_types()
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def list_modulators() -> dict[str, Any]:
     """List modulator instances in the loaded genome."""
     return await feagi.list_modulators()
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_modulator(modulator_id: str) -> dict[str, Any]:
     """Read one modulator instance."""
     return await feagi.get_modulator(modulator_id)
@@ -1080,13 +1090,16 @@ async def get_modulator(modulator_id: str) -> dict[str, Any]:
 
 @mcp.tool()
 async def create_modulator(modulator_id: str, definition: dict[str, Any]) -> dict[str, Any]:
-    """Create a modulator instance and its 1x1x1 driver area.
+    """Create a modulator instance and its 1x1x1 driver area, or adopt an existing area.
 
     ``definition`` fields: ``type`` (see ``list_modulator_types``; includes
     ``memory.formation``, subscribed on memory areas, driver at -100% stops new memory
     neurons forming), ``magnitude_percent`` (>= -100),
     ``effect_duration_bursts`` (>= 1), ``rest_bursts``, ``graded``,
-    and ``full_scale_potential`` when graded.
+    and ``full_scale_potential`` when graded. Optional ``driver_cortical_id`` adopts that
+    existing area as the driver instead of creating one: it keeps its own timing, so
+    ``effect_duration_bursts`` must be 1 and ``rest_bursts`` 0, one modulator per area,
+    and deleting the modulator leaves the area. Deleting the area drops the modulator.
     """
     return await feagi.create_modulator(modulator_id, definition)
 
@@ -1103,7 +1116,7 @@ async def rename_modulator(old_modulator_id: str, new_modulator_id: str) -> dict
     return await feagi.rename_modulator(old_modulator_id, new_modulator_id)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def modulator_usage(modulator_id: str) -> dict[str, Any]:
     """List areas and mapping rules subscribed to a modulator."""
     return await feagi.modulator_usage(modulator_id)
@@ -1111,7 +1124,9 @@ async def modulator_usage(modulator_id: str) -> dict[str, Any]:
 
 @mcp.tool()
 async def delete_modulator(modulator_id: str, force: bool = False) -> dict[str, Any]:
-    """Delete a modulator and its driver. Without force, subscribers reject the delete."""
+    """Delete a modulator and its own driver; subscribers reject it unless forced.
+
+    An adopted driver area stays."""
     return await feagi.delete_modulator(modulator_id, force)
 
 
@@ -1160,7 +1175,7 @@ async def unsubscribe_mapping_modulator(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_morphology(
     morphology_name: str,
     include_parameters: bool = False,
@@ -1232,7 +1247,7 @@ async def rename_morphology(
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_cortical_area_geometry() -> dict[str, Any]:
     """Get full geometry info for all cortical areas including dimensions and positions.
 
@@ -1250,7 +1265,7 @@ async def get_cortical_area_geometry() -> dict[str, Any]:
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def trace_signal_path(from_area: str, to_area: str, max_hops: int = 5) -> dict[str, Any]:
     """Trace signal propagation path between cortical areas.
 
@@ -1311,7 +1326,7 @@ async def trace_signal_path(from_area: str, to_area: str, max_hops: int = 5) -> 
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def validate_genome(genome_json: str) -> dict[str, Any]:
     """Validate a genome structure without uploading it.
 
@@ -1374,7 +1389,7 @@ async def validate_genome(genome_json: str) -> dict[str, Any]:
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def health_check() -> dict[str, Any]:
     """Check FEAGI server connectivity and system health (GET /v1/system/health_check).
 
@@ -1398,7 +1413,7 @@ async def health_check() -> dict[str, Any]:
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_burst_engine_status() -> dict[str, Any]:
     """Get burst engine runtime status.
 
@@ -1412,7 +1427,7 @@ async def get_burst_engine_status() -> dict[str, Any]:
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_fire_queue_detailed() -> dict[str, Any]:
     """Get last-burst fire queue with neuron IDs per cortical area.
 
@@ -1426,7 +1441,7 @@ async def get_fire_queue_detailed() -> dict[str, Any]:
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_agent_connection_endpoints() -> dict[str, Any]:
     """Get the live FEAGI agent connection endpoints (ZMQ/WebSocket) and burst rate.
 
@@ -1484,7 +1499,7 @@ async def get_agent_connection_endpoints() -> dict[str, Any]:
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_runtime_metrics() -> dict[str, Any]:
     """Get comprehensive runtime metrics.
 
@@ -1498,7 +1513,7 @@ async def get_runtime_metrics() -> dict[str, Any]:
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_cortical_synapse_counts(area_id: str) -> dict[str, Any]:
     """Get incoming and outgoing synapse counts for a cortical area.
 
@@ -1518,7 +1533,7 @@ async def get_cortical_synapse_counts(area_id: str) -> dict[str, Any]:
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_total_synapse_count(include_ipu: bool = False) -> dict[str, Any]:
     """Get the brain's total synapse count (sum of incoming synapses over all areas).
 
@@ -1531,7 +1546,7 @@ async def get_total_synapse_count(include_ipu: bool = False) -> dict[str, Any]:
     return await feagi.get_total_synapse_count(include_ipu)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_registered_agents() -> dict[str, Any]:
     """Get list of all registered agents and their subscriptions (agent registry).
 
@@ -1555,7 +1570,7 @@ async def get_registered_agents() -> dict[str, Any]:
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_agent_liveness() -> dict[str, Any]:
     """How close each registered agent is to being deregistered for inactivity.
 
@@ -1584,7 +1599,7 @@ async def get_agent_liveness() -> dict[str, Any]:
     return await feagi.get_agent_liveness()
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_agent_properties(agent_id: str) -> dict[str, Any]:
     """Get detailed properties for a specific registered agent.
 
@@ -1600,7 +1615,7 @@ async def get_agent_properties(agent_id: str) -> dict[str, Any]:
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_agent_device_registrations(agent_id: str) -> dict[str, Any]:
     """Get device registrations for an agent showing motor/sensor structure.
 
@@ -1624,7 +1639,7 @@ async def get_agent_device_registrations(agent_id: str) -> dict[str, Any]:
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_motor_group_summary(agent_id: str | None = None) -> dict[str, Any]:
     """Compact motor bundle titles, unit ids, and channel counts for an agent.
 
@@ -1638,7 +1653,7 @@ async def get_motor_group_summary(agent_id: str | None = None) -> dict[str, Any]
     return await feagi.get_motor_group_summary(agent_id)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def explain_cortical_area_naming(cortical_id: str) -> dict[str, Any]:
     """Explain why a live cortical area has its title (compact, no registration dump).
 
@@ -1653,7 +1668,7 @@ async def explain_cortical_area_naming(cortical_id: str) -> dict[str, Any]:
     return await feagi.explain_cortical_area_naming(cortical_id)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def list_opu_areas() -> list[str]:
     """List all OPU (Output Processing Unit) cortical area IDs.
 
@@ -1666,7 +1681,7 @@ async def list_opu_areas() -> list[str]:
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def list_opu_areas_with_metadata() -> list[dict[str, Any]]:
     """List all OPU areas with detailed semantic information.
 
@@ -1689,7 +1704,7 @@ async def list_opu_areas_with_metadata() -> list[dict[str, Any]]:
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def list_ipu_areas() -> list[str]:
     """List all IPU (Input Processing Unit) cortical area IDs.
 
@@ -1702,7 +1717,7 @@ async def list_ipu_areas() -> list[str]:
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def list_ipu_areas_with_metadata() -> list[dict[str, Any]]:
     """List all IPU areas with detailed semantic information.
 
@@ -1728,7 +1743,7 @@ async def list_ipu_areas_with_metadata() -> list[dict[str, Any]]:
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def list_io_areas_compact(
     io_kind: str = "both",
     subtype: str | None = None,
@@ -1769,7 +1784,7 @@ async def list_io_areas_compact(
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_area_semantic_info(area_id: str) -> dict[str, Any]:
     """Get detailed semantic information about a specific cortical area.
 
@@ -1885,7 +1900,7 @@ async def create_cortical_area(
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def compute_io_cortical_id(
     subtype: str,
     variant: str = "percentage",
@@ -2034,7 +2049,7 @@ async def delete_cortical_area(cortical_id: str) -> dict[str, Any]:
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_cortical_mapping(src_area: str, dst_area: str) -> dict[str, Any]:
     """Get stored mapping rules from the source area properties record.
 
@@ -2118,7 +2133,7 @@ async def wire_value_passthrough(
     return await feagi.wire_value_passthrough(src_area, dst_area, class_count, value_levels)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def expand_value_to_bins(
     src_area: str,
     levels: int,
@@ -2152,7 +2167,7 @@ async def expand_value_to_bins(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def decode_class_map(area_id: str, class_count: int, max_pixels: int = 200) -> dict[str, Any]:
     """Decode the last burst of a one-layer class map into class ids.
 
@@ -2178,14 +2193,19 @@ async def create_classifier(
     brain_region_id: str,
     coordinates_3d: list[int],
 ) -> dict[str, Any]:
-    """Create a classifier: sample memory, class memory, error area, and the associative edge.
+    """Create a classifier with its memories, answer areas, and answer modulators.
+
+    The assembly is a sample memory, a class memory, error and correct areas, the associative
+    edge, and "<name> correct answer" (+) and "<name> error" (-) Reward modulators that adopt
+    the correct and error areas as their drivers.
 
     Sample and class inputs are added later by mapping ``classifier_sample`` onto the
     sample memory or ``classifier_class`` onto the class memory. A class mapping
     creates a class output that matches that class input.
 
     Returns:
-        ``classifier_id``, ``sample_memory_id``, ``class_memory_id``, ``error_area_id``.
+        ``classifier_id``, ``sample_memory_id``, ``class_memory_id``, ``error_area_id``,
+        ``correct_area_id``, ``circuit_region_id``, ``name``.
     """
     return await feagi.create_classifier(name, brain_region_id, coordinates_3d)
 
@@ -2195,23 +2215,13 @@ async def update_classifier(classifier_id: str, updates: dict[str, Any]) -> dict
     """Update a classifier record.
 
     ``updates`` keys: ``name``, ``coordinates_3d``, ``parent_region_id``,
-    ``reward_training``, ``answer_feedback_area_id`` (empty string clears),
-    ``answer_latency_bursts``, ``learn_area_id``, ``confidence_area_id``.
+    ``reward_training``, ``reward_modulator_ids`` (``synaptic.reward`` modulator ids the
+    sample->class memory mapping learns from with R-STDP; turning reward training on with
+    none selects the classifier's "correct answer" (+) and "error" (-) modulators),
+    ``answer_feedback_area_id`` (empty string clears), ``answer_latency_bursts``,
+    ``learn_area_id``, ``confidence_area_id``.
     """
     return await feagi.update_classifier(classifier_id, updates)
-
-
-@mcp.tool()
-async def attach_classifier_field(classifier_id: str, field_area_id: str) -> dict[str, Any]:
-    """Bind an image field to a classifier and create that field's class output.
-
-    Kernel mode requires the field to match the kernel area and creates a ``1x1xn``
-    output named ``{classifier} class output``. Depth ``z`` fires for class ``z``.
-    Scanner mode creates a ``W x H x 1`` output that forwards its class potential
-    (``mp_driven_psp`` on). Route a scanner output to an OPU with
-    ``wire_value_passthrough(output, oseg, class_count=...)``.
-    """
-    return await feagi.attach_classifier_field(classifier_id, field_area_id)
 
 
 @mcp.tool()
@@ -2241,7 +2251,7 @@ async def measure_audio_io_disparity(
     return await feagi.measure_audio_io_disparity(src_area, dst_area, duration_s)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def diagnose_memory_twin_mapping(src_area: str, dst_area: str) -> dict[str, Any]:
     """Diagnose memory twin eligibility/status for one mapping pair.
 
@@ -2263,7 +2273,7 @@ async def diagnose_memory_twin_mapping(src_area: str, dst_area: str) -> dict[str
     return await feagi.get_memory_twin_diagnostic(src_area, dst_area)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def diagnose_mapping_plasticity(
     src_area: str,
     dst_area: str,
@@ -2317,7 +2327,7 @@ async def update_cortical_mapping(
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def describe_connectivity_rules(
     include_classes: list[str] | None = None,
     limit: int = 200,
@@ -2345,7 +2355,7 @@ async def describe_connectivity_rules(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def recommend_connectivity_rules(
     src_area: str,
     dst_area: str,
@@ -2378,7 +2388,7 @@ async def recommend_connectivity_rules(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def propose_connectivity_rule(
     intent: str,
     src_area: str | None = None,
@@ -2491,7 +2501,7 @@ async def delete_cortical_mapping(src_area: str, dst_area: str) -> dict[str, Any
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def resolve_cortical_area_by_name(
     display_name: str,
     match_mode: str = "exact",
@@ -2516,7 +2526,7 @@ async def resolve_cortical_area_by_name(
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_cortical_id_name_mapping() -> dict[str, Any]:
     """Return {cortical_id: cortical_name} for all areas (GET cortical_id_name_mapping).
 
@@ -2526,7 +2536,7 @@ async def get_cortical_id_name_mapping() -> dict[str, Any]:
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_cortical_map_detailed() -> dict[str, Any]:
     """Outgoing connectivity map per area (GET cortical_map_detailed).
 
@@ -2537,7 +2547,7 @@ async def get_cortical_map_detailed() -> dict[str, Any]:
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_brain_regions() -> dict[str, Any]:
     """List brain regions and member cortical areas (GET region/regions_members).
 
@@ -2551,7 +2561,7 @@ async def get_brain_regions() -> dict[str, Any]:
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_region_circuit(region_id: str, include_child_regions: bool = True) -> dict[str, Any]:
     """One brain region as a circuit: members, boundary inputs/outputs, and edges.
 
@@ -2569,7 +2579,7 @@ async def get_region_circuit(region_id: str, include_child_regions: bool = True)
     return await feagi.get_region_circuit(region_id, include_child_regions)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def validate_brain_region_hierarchy() -> dict[str, Any]:
     """Validate FEAGI brain-region hierarchy invariants used by Brain Visualizer.
 
@@ -2729,7 +2739,7 @@ async def create_brain_region(
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def suggest_cortical_anchor_positions(
     count: int = 1,
     parent_region_id: str | None = None,
@@ -2801,7 +2811,7 @@ async def suggest_cortical_anchor_positions(
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_genome_file_name() -> dict[str, Any]:
     """Current genome file label (GET genome/file_name)."""
     result = await feagi.get_genome_file_name()
@@ -2823,7 +2833,7 @@ async def save_genome_to_filesystem(
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def interpret_cortical_id(cortical_id: str) -> dict[str, Any]:
     """Decode an 8-byte FEAGI cortical ID without calling FEAGI (pure client-side).
 
@@ -2838,7 +2848,7 @@ async def interpret_cortical_id(cortical_id: str) -> dict[str, Any]:
     return decode_cortical_id_interpretation(cortical_id)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def inspect_cortical_area(cortical_id: str) -> dict[str, Any]:
     """Full cortical area record from connectome (POST cortical_area/cortical_area_properties).
 
@@ -2855,7 +2865,7 @@ async def inspect_cortical_area(cortical_id: str) -> dict[str, Any]:
     return {"cortical_id_interpretation": interpretation, "raw": result}
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def inspect_cortical_areas_batch(cortical_ids: list[str]) -> dict[str, Any]:
     """Batch cortical area properties (POST multi/cortical_area_properties)."""
     result = await feagi.fetch_multi_cortical_area_properties(cortical_ids)
@@ -2899,14 +2909,14 @@ async def clone_cortical_area(
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_cortical_template() -> dict[str, Any]:
     """IPU/OPU cortical templates (GET genome/cortical_template), as in BV template picker."""
     result = await feagi.get_cortical_template()
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def list_brain_visualizer_operations() -> list[dict[str, str]]:
     """List every Brain Visualizer REST operation (operation_id, method, path, description).
 
@@ -3027,7 +3037,7 @@ async def confirm_amalgamation_destination(
 # ============================================================================
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_motor_snapshot_last(
     agent_id: str | None = None,
     cortical_id: str | None = None,
@@ -3051,7 +3061,7 @@ async def get_motor_snapshot_last(
     return await feagi.get_motor_snapshot_last(agent_id, cortical_id=cortical_id)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_sensor_snapshot_last(
     cortical_id: str | None = None,
     summary_only: bool = True,
@@ -3077,7 +3087,7 @@ async def get_sensor_snapshot_last(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_last_failed_mutation() -> dict[str, Any]:
     """Most recent failed mutating FEAGI API request (`/v1/system/last_failed_mutation`).
 
@@ -3093,7 +3103,7 @@ async def get_last_failed_mutation() -> dict[str, Any]:
     return await feagi.get_last_failed_mutation()
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_log_tail(
     level: str | None = None,
     target_prefix: str | None = None,
@@ -3133,7 +3143,7 @@ async def get_log_tail(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def diagnose_feagi_runtime() -> dict[str, Any]:
     """Diagnose a dead or stalled FEAGI process without dumping logs.
 
@@ -3160,7 +3170,7 @@ async def diagnose_feagi_runtime() -> dict[str, Any]:
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def compare_device_registration_store(
     agent_name: str | None = None,
 ) -> dict[str, Any]:
@@ -3182,7 +3192,7 @@ async def compare_device_registration_store(
     return await feagi.compare_device_registration_store(agent_name)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_burst_counter() -> dict[str, Any]:
     """Current burst counter (`/v1/burst_engine/burst_counter`).
 
@@ -3192,7 +3202,7 @@ async def get_burst_counter() -> dict[str, Any]:
     return await feagi.get_burst_counter()
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_burst_engine_config() -> dict[str, Any]:
     """Burst engine config (`/v1/burst_engine/config`).
 
@@ -3202,7 +3212,7 @@ async def get_burst_engine_config() -> dict[str, Any]:
     return await feagi.get_burst_engine_config()
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_fire_ledger_areas_window_config() -> dict[str, Any]:
     """FireLedger per-area window configuration.
 
@@ -3269,7 +3279,7 @@ async def resume_burst_engine() -> dict[str, Any]:
     return await feagi.resume_burst_engine()
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def inspect_neuron_state_at(
     cortical_id: str,
     x: int,
@@ -3285,13 +3295,13 @@ async def inspect_neuron_state_at(
     return await feagi.inspect_neuron_state_at(cortical_id, x, y, z)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_neuron_state_by_id(neuron_id: str) -> dict[str, Any]:
     """Neuron runtime state by stable id (`/v1/connectome/neuron/{id}/properties`)."""
     return await feagi.get_neuron_state_by_id(neuron_id)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def list_memory_neurons(
     cortical_id: str,
     page: int = 0,
@@ -3311,7 +3321,7 @@ async def list_memory_neurons(
     return await feagi.list_memory_neurons(cortical_id, page, page_size)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def inspect_memory_neuron(neuron_id: int) -> dict[str, Any]:
     """Inspect one memory neuron's lifecycle, identity, and realized synapses.
 
@@ -3325,7 +3335,7 @@ async def inspect_memory_neuron(neuron_id: int) -> dict[str, Any]:
     return await feagi.inspect_memory_neuron(neuron_id)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_voxel_neurons(
     cortical_id: str,
     x: int,
@@ -3344,7 +3354,7 @@ async def get_voxel_neurons(
     return await feagi.get_voxel_neurons(cortical_id, x, y, z, synapse_page, view=view)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def list_area_synapses(
     cortical_area_id: str,
     direction: str = "outgoing",
@@ -3378,7 +3388,7 @@ async def list_area_synapses(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def list_area_neuron_states(
     area_id: str,
     neuron_cap: int = 64,
@@ -3393,7 +3403,7 @@ async def list_area_neuron_states(
     return await feagi.list_area_neuron_states(area_id, neuron_cap=neuron_cap)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def list_agent_capabilities_all(
     include_device_registrations: bool = True,
 ) -> dict[str, Any]:
@@ -3406,7 +3416,7 @@ async def list_agent_capabilities_all(
     return await feagi.list_agent_capabilities_all(include_device_registrations)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def monitor_activity_batch(
     area_ids: list[str],
     duration_ms: int = 1000,
@@ -3508,7 +3518,7 @@ async def restore_genome_snapshot(label: str) -> dict[str, Any]:
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def list_genome_snapshots() -> dict[str, Any]:
     """List all genome snapshots stored on disk."""
     snapshots = snapshot_manager.list_snapshots()
@@ -3537,7 +3547,7 @@ async def delete_genome_snapshot(label: str) -> dict[str, Any]:
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def list_morphologies_summary(
     name_substring: str | None = None,
     type_filter: str | None = None,
@@ -3561,7 +3571,7 @@ async def list_morphologies_summary(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_connectivity_summary(
     src_filter: str | None = None,
     dst_filter: str | None = None,
@@ -3584,7 +3594,7 @@ async def get_connectivity_summary(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def inspect_cortical_areas_minimal(cortical_ids: list[str]) -> dict[str, Any]:
     """Project ``inspect_cortical_areas_batch`` to a fixed, compact field set per area.
 
@@ -3617,8 +3627,7 @@ async def build_reflex_mapping(
     replace_existing: bool = False,
     plasticity_mode: str | None = None,
     eligibility_decay_bursts: int | None = None,
-    reward_source_area: str | None = None,
-    punishment_source_area: str | None = None,
+    modulators: list[str] | None = None,
     max_weight: float | None = None,
     plasticity_eta: float | None = None,
 ) -> dict[str, Any]:
@@ -3651,11 +3660,10 @@ async def build_reflex_mapping(
             * ``"off"`` - no learning (equivalent to ``plasticity_flag=False``);
             * ``"stdp"`` - classic correlation-based Hebbian STDP;
             * ``"rstdp"`` - reward-modulated STDP. Requires
-              ``eligibility_decay_bursts`` (>=1) and at least one of
-              ``reward_source_area`` / ``punishment_source_area`` (base64 IDs of
-              detector cortical areas). The detector areas must be driven by
-              hard-wired (non-plastic) input only; the server's wireheading lint
-              rejects genomes that violate this.
+              ``eligibility_decay_bursts`` (>=1) and ``modulators``: one or more
+              ``synaptic.reward`` modulator ids (positive magnitude rewards, negative
+              punishes). Their driver areas must be driven by non-plastic input only;
+              the server's wireheading lint rejects mappings that violate this.
 
     When ``plasticity_mode`` is omitted, the server falls back to ``"stdp"`` if
     ``plasticity_flag=True``, otherwise ``"off"``.
@@ -3681,8 +3689,7 @@ async def build_reflex_mapping(
         replace_existing=replace_existing,
         plasticity_mode=plasticity_mode,
         eligibility_decay_bursts=eligibility_decay_bursts,
-        reward_source_area=reward_source_area,
-        punishment_source_area=punishment_source_area,
+        modulators=modulators,
         max_weight=max_weight,
         plasticity_eta=plasticity_eta,
     )
@@ -3776,7 +3783,7 @@ async def probe_area_response(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def list_controller_bridges() -> dict[str, Any]:
     """List all active controller bridges (xARM, MuJoCo, ROS2, etc.) discovered on this machine.
 
@@ -3801,7 +3808,7 @@ async def list_controller_bridges() -> dict[str, Any]:
     return annotate_with_experiment_status(await feagi.list_controller_bridges())
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_experiment_status() -> dict[str, Any]:
     """Whether an experiment is running in Neurorobotics Studio.
 
@@ -3813,7 +3820,7 @@ async def get_experiment_status() -> dict[str, Any]:
     return read_experiment_status()
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_feagi_link_health(controller_id: str = "mujoco") -> dict[str, Any]:
     """Get a compact FEAGI connectivity and registration health snapshot.
 
@@ -3828,7 +3835,7 @@ async def get_feagi_link_health(controller_id: str = "mujoco") -> dict[str, Any]
     return await feagi.get_feagi_link_health(controller_id=controller_id)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_controller_lifecycle_events(
     controller_id: str = "mujoco",
     since_ts_ms: int | None = None,
@@ -3856,7 +3863,7 @@ async def get_controller_lifecycle_events(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_experiment_stop_cause(
     controller_id: str = "mujoco",
     since_ts_ms: int | None = None,
@@ -3877,7 +3884,7 @@ async def get_experiment_stop_cause(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_agent_joint_map(agent_id: str) -> dict[str, Any]:
     """Get a focused actuator-to-OPU mapping for a registered agent.
 
@@ -3938,7 +3945,7 @@ async def send_motor_command(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def embodiment_discover_introspection_endpoint(
     controller_id: str = "mujoco",
 ) -> dict[str, Any]:
@@ -3961,7 +3968,7 @@ async def embodiment_discover_introspection_endpoint(
     return await feagi.embodiment_discover_introspection_endpoint(controller_id)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def embodiment_get_physics_state(
     introspection_url: str | None = None,
     timeout_s: float = 2.0,
@@ -3995,6 +4002,35 @@ async def embodiment_get_physics_state(
             controller_id=controller_id,
         )
     )
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def embodiment_measure_bodies(
+    bodies: list[str],
+    contacts: list[dict[str, Any]],
+    controller_id: str = "mujoco",
+    introspection_url: str | None = None,
+) -> dict[str, Any]:
+    """Read tilt, height and contacts of named bodies from the MuJoCo controller (read-only).
+
+    Runs the controller's physics ``measure`` primitive. ``bodies`` are body names from
+    the loaded model; each returns ``tilt_rad``, ``tilt_vec``, ``ang_vel``, ``com``
+    (``com[2]`` is height for z-up gravity) and ``subtree_com``. ``contacts`` is a list
+    of ``{a: [bodies] | a_except: [bodies], b: "world" | [bodies]}`` sets (exactly one of
+    ``a`` or ``a_except``; ``a_except`` means every body except those listed, their
+    descendants and the world body). Each contact result has ``touching``, ``points``,
+    ``bodies`` (a-side bodies in contact) and ``normal_force_n`` (summed contact normal
+    force, newtons). ``springs`` reports per body-spring ``level``, ``wrench_norm_force``
+    and ``gravity_comp_force_n``; plus ``sim_time_s``, ``episode_id`` and ``terminal``.
+
+    The control server is found from the introspection descriptor's ``control_url``.
+    ``introspection_url`` overrides it with a loopback control-server base URL (not the
+    introspection port), since ``measure`` runs on the control server.
+    """
+    outcome = await MujocoSceneControl().measure_bodies(
+        bodies, contacts, controller_id, control_url=introspection_url
+    )
+    return annotate_with_experiment_status(outcome)
 
 
 @mcp.tool()
@@ -4239,7 +4275,7 @@ async def reset_area_incoming_weights(cortical_ids: list[str]) -> dict[str, Any]
     return await feagi.reset_area_incoming_weights(cortical_ids)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_mujoco_scene_config(controller_id: str = "mujoco") -> dict[str, Any]:
     """Read the live MuJoCo settings: safety boundary, objects, cameras, embodiment, feedback, rate.
 
@@ -4363,7 +4399,7 @@ async def set_mujoco_safety_boundary(
     return await MujocoSceneControl().command("set_cartesian_safety_boundary", body, controller_id)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def composer_list_simulator_packs(
     engine: str | None = None,
     kind: str | None = None,
@@ -4380,7 +4416,7 @@ async def composer_list_simulator_packs(
     return await composer_sim_packs.list_simulator_packs(engine=engine, kind=kind, state=state)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def composer_get_simulator_pack_versions(
     pack_id: str,
     engine: str | None = None,
@@ -4392,7 +4428,7 @@ async def composer_get_simulator_pack_versions(
     return await composer_sim_packs.get_pack_version_summary(pack_id, engine=engine)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def composer_get_simulator_pack_resolved(
     pack_id: str,
     semver: str,

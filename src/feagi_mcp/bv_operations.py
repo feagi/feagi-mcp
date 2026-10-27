@@ -438,6 +438,46 @@ BV_OPERATIONS: Final[tuple[BvOperation, ...]] = (
     ),
     BvOperation("get_input_vision", "GET", "/v1/input/vision", "Vision input config/state"),
     BvOperation("post_input_vision", "POST", "/v1/input/vision", "Configure vision input"),
+    # --- Classifiers ---
+    BvOperation("post_classifier", "POST", "/v1/cortical_area/classifier", "Create a classifier"),
+    BvOperation("get_classifiers", "GET", "/v1/cortical_area/classifiers", "List classifiers"),
+    BvOperation(
+        "get_classifier", "GET", "/v1/cortical_area/classifier/{classifier_id}", "One classifier"
+    ),
+    BvOperation(
+        "put_classifier",
+        "PUT",
+        "/v1/cortical_area/classifier/{classifier_id}",
+        "Update name, pose, parent, reward training and reward_modulator_ids",
+    ),
+    BvOperation(
+        "delete_classifier",
+        "DELETE",
+        "/v1/cortical_area/classifier/{classifier_id}",
+        "Delete a classifier and its owned areas",
+    ),
+    BvOperation(
+        "post_classifier_answer_modulators",
+        "POST",
+        "/v1/cortical_area/classifier/{classifier_id}/answer_modulators",
+        "Create missing correct/error areas and their Reward modulators; returns ids",
+    ),
+    # --- Modulators ---
+    BvOperation("get_modulator_modulators", "GET", "/v1/modulator/modulators", "List modulators"),
+    BvOperation(
+        "post_modulator_modulator",
+        "POST",
+        "/v1/modulator/modulator",
+        "Create a modulator (query modulator_id); optional driver_cortical_id adopts an area",
+    ),
+    BvOperation(
+        "put_modulator_modulator",
+        "PUT",
+        "/v1/modulator/modulator",
+        "Update a modulator (query modulator_id)",
+    ),
+    BvOperation("put_modulator_rename", "PUT", "/v1/modulator/rename", "Rename a modulator"),
+    BvOperation("get_modulator_usage", "GET", "/v1/modulator/usage", "Modulator subscribers"),
     # --- Genome download/upload (API) ---
     BvOperation("get_genome_download", "GET", "/v1/genome/download", "Download genome JSON"),
     BvOperation("post_genome_upload", "POST", "/v1/genome/upload", "Upload genome JSON"),

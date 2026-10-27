@@ -377,7 +377,7 @@ class TestBuildReflexMapping:
         mock_client.update_cortical_mapping.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_max_weight_and_plasticity_eta_pass_through(self, mock_client):
+    async def test_modulators_max_weight_and_plasticity_eta_pass_through(self, mock_client):
         mock_client.create_morphology = AsyncMock(return_value={"success": True})
         mock_client.get_cortical_mapping = AsyncMock(return_value={"rules": []})
         mock_client.update_cortical_mapping = AsyncMock(return_value={"success": True})
@@ -390,12 +390,13 @@ class TestBuildReflexMapping:
             plasticity_flag=True,
             plasticity_mode="rstdp",
             eligibility_decay_bursts=10,
-            reward_source_area="aA==",
-            punishment_source_area="aQ==",
+            modulators=["joy", "ouch"],
             max_weight=10.0,
             plasticity_eta=0.01,
         )
         r = out["rule"]
+        assert r["modulators"] == ["joy", "ouch"]
+        assert "reward_source_area" not in r
         assert r["max_weight"] == 10.0
         assert r["plasticity_eta"] == 0.01
         assert mock_client.update_cortical_mapping.await_args.kwargs["mapping_rules"][-1] == r

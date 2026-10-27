@@ -121,6 +121,11 @@ experiment (`_experiment.state` is `running`).
   controller's IPU/OPU dimensions and can revert hand-widened areas. The result names each
   drifted value and the `update_cortical_area()` or `set_burst_engine_frequency()` call
   that restores it.
+- `embodiment_measure_bodies(bodies, contacts)`: one read-only snapshot of named bodies from
+  the controller's `measure` primitive: tilt, `com` (height), per contact set `touching`,
+  `bodies` in contact and `normal_force_n`, and the spring report. A contact set takes `a`
+  or `a_except` (every body except those listed, their descendants and the world), and `b`
+  `"world"` or a list.
 - For joint trajectories over time without brain alignment, the Studio tools
   `record_embodiment_trace` and `run_embodiment_trial` remain the right choice.
 
