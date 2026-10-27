@@ -49,7 +49,8 @@ def test_classifier_and_modulator_routes_match_brain_visualizer():
         pytest.skip("brain-visualizer checkout not present")
     bv = set()
     for method, path in re.findall(
-        r'var (GET|POST|PUT|DELETE)_\w+: StringName = "(/v1/(?:modulator/|cortical_area/classifier)[^"]*)"',
+        r"var (GET|POST|PUT|DELETE)_\w+: StringName = "
+        r'"(/v1/(?:modulator/|cortical_area/classifier)[^"]*)"',
         address_list.read_text("utf-8"),
     ):
         if path.endswith("/field"):  # retired: the server rejects field attach/detach
