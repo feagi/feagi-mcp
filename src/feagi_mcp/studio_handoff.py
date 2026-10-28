@@ -89,6 +89,24 @@ def studio_manages_feagi(host: str, port: int) -> bool:
     return result
 
 
+def studio_present(host: str, port: int) -> bool:
+    """True when running as Studio's in-process upstream or a live Studio manages this FEAGI."""
+    return _truthy(VIA_STUDIO_ENV) or studio_manages_feagi(host, port)
+
+
+def snapshot_handoff(use_tool: str) -> dict[str, str]:
+    """Structured result for local snapshot tools when Studio owns snapshots."""
+    return {
+        "error": "use_studio_snapshot",
+        "message": (
+            "Neurorobotics Studio is present, so brain snapshots are saved through the "
+            "experiment in Composer (genome + connectome, team-aware, synced) instead of "
+            f"local files. Call `{use_tool}` on the `neurorobotics-studio` MCP server."
+        ),
+        "use_tool": use_tool,
+    }
+
+
 def handoff_message(tool: str) -> str:
     """Error text returned instead of running ``tool`` (never includes the token)."""
     return (

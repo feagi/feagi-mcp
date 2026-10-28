@@ -11,6 +11,7 @@ report finds a generic fact; keep host- and vendor-specific advice out of it.
 - Signal and encoding facts
 - Embodiment facts
 - Diagnosing before designing
+- Behavior design facts
 
 ## Work in stages
 
@@ -122,6 +123,11 @@ reverts live area widths and the burst rate silently.
   `block_to_block` and a weak plastic one, guarantee co-activity; if the plastic weights and
   the generation counter do not move in 45 s, nothing will.
 
+- **`monitor_activity` samples about 1 burst in 10.** Take rates and frame counts from Run data spikes.
+- **The leak is applied every burst** (lazy catch-up at input), including bursts with no input.
+- **`rate_modulated_leak` `target_mode: "area"` applies one target to every neuron.** Use `per_neuron` for population codes, where silent neurons would otherwise pin at leak_min. Arm while the brain is driven.
+- **A snapshot proves state only if its decoded genome shows it.** Decode and check the field before saying it was saved.
+
 ## Embodiment facts
 
 - **IMU areas can register narrower than they stream.** A controller may register an
@@ -159,3 +165,25 @@ reverts live area widths and the burst rate silently.
 - A fixed pose never balances a legged robot with weak position servos; it needs a sensed
   correction loop or learning. Measure which direction each joint change tips the body
   before wiring any corrective mapping.
+
+## Behavior design facts
+
+Added 2026-10-27. Full method: [behavior-design.md](behavior-design.md).
+
+- **Support must only help a standing stance (2026-10-27).** A harness that keeps helping
+  while a contact body is off the floor, or re-centres a lean, holds a crouch or lean and
+  scores it as success. Weight support off when a contact body leaves the floor, re-centre a
+  lean, and require standing time for success.
+- **R-STDP rewarded for upright-while-supported collapses or saturates weights
+  (2026-10-27).** The reward pays for the support, not the brain. Fix the credit (reward the
+  brain's own contribution), not the LTD ratio.
+- **A sign-fixed one-to-one reflex cannot learn direction (2026-10-27).** R-STDP can mute a
+  wrong-sign path but never flip it. Wire the correct sign, or wire both directions as
+  candidates with mutual inhibition.
+- **A frozen `plasticity_flag` left from a test run silently stops learning (2026-10-27).**
+  Read it back on every plastic mapping before a training run.
+- **A sign-crossed rewire with initial weights above half the threshold fires both
+  directions at once (2026-10-27).** The opposing commands destabilize the body. Start
+  candidate weights quiet, so several inputs must agree to fire.
+- **Work top-down (2026-10-27).** Synapse-level tuning with no circuit-level check wasted
+  runs. Test each region as a black box (sign, gain, lag) before touching weights.

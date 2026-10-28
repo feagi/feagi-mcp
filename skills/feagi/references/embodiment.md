@@ -3,6 +3,7 @@
 ## Contents
 
 - Agents and device registrations
+- Robots without built-in support
 - Driving joints
 - Matching the genome to the robot
 - Simulator ground truth
@@ -26,6 +27,22 @@ become IPU areas and actuators become OPU areas, grouped by `group_id` (unit ind
 | Joint or actuator to OPU mapping, with ranges | `get_agent_joint_map(agent_id)` |
 | Full sensor and motor structure | `get_agent_device_registrations(agent_id)` (large; prefer the two above) |
 | How agents connect (ZMQ/WebSocket endpoints) | `get_agent_connection_endpoints()` |
+
+## Robots without built-in support
+
+When the user's robot (or sensor, or simulator) has no built-in integration in Neurorobotics
+Studio, suggest writing a controller with the FEAGI Python SDK instead of a workaround:
+
+- SDK: `pip install feagi` (source: https://github.com/feagi/feagi). A controller registers
+  the robot's sensors and actuators as an agent; they then appear as IPU and OPU areas like
+  any built-in embodiment.
+- Sample controllers: https://github.com/feagi/embodiment-controllers. Start from
+  `embodiments/template/`, or from the closest vendor folder under `embodiments/`
+  (micro:bit, ESP32, Arduino, Raspberry Pi, Petoi, and others).
+- Other FEAGI repositories (SDKs for other languages, tools): https://github.com/feagi.
+
+Once the controller connects, check it with `get_registered_agents()` and
+`get_agent_device_registrations(agent_id)` before wiring the brain.
 
 ## Driving joints
 
@@ -61,7 +78,13 @@ When a robot does not respond, check that the genome's OPUs are the ones the age
   simulator.
 - `embodiment_set_joint_state(joint_qpos=..., joint_qvel=...)` places joints directly (for
   example to tilt a pendulum before a test).
+- `embodiment_reset_episode(keyframe=None)` resets to a named keyframe or the model default and
+  starts a new episode (use it before polarity probes when the robot is down).
 - `embodiment_reset_simulation_time_stats()` resets the simulation-speed benchmark.
+
+MuJoCo motor OPU depth (z neurons per channel, default 20) is set by the controller at registration from the mapping JSON's optional `motor_z_resolution` (2 to 1024); an existing genome OPU is only grown to it, never shrunk (FEAGI grows OPUs on re-registration, never shrinks them).
+
+Motor targets on servo OPUs are absolute and hold until the next command; with several active z on a channel the decoder takes the mean.
 
 ## Choosing the burst rate
 
@@ -87,6 +110,7 @@ robot.
   limits. When the required rate exceeds the ceiling, shorten the sensor-to-motor path (a
   direct reflex path) or run the simulator in lock-step (sim time advances a fixed step per
   burst). Never slow the robot's physics as a stand-in.
+- **Also check the sensor frame rate (frames per burst) and the motor step size** against the chosen rate: a burst faster than the frame rate repeats stale frames, and the per-burst motor step must stay inside servo slew.
 - **Burst-counted settings change meaning in seconds when the rate changes:** R-STDP
   windows, modulator holds, memory `temporal_depth`, refractory and leak timing, Trainer
   `holdBursts`, `attemptBurstCap`, `settleBursts`. Rescale them only when the user asks.
@@ -163,7 +187,7 @@ Settings dialog. They are not cortical areas and not asset-pack XML.
   FEAGI creates areas, a stable `device_id`, and a `feagi_group` above the host's limb count)
   or `io_mode=geometry` (mesh only).
 - `configure_mujoco_scene(action="save_mujoco_general", ...)` with `controllerLoopRateHz`
-  sets how often the embodiment reads sensors and applies commands on the **next** launch. It
+  sets how often the embodiment reads sensors and applies commands on the **next** launch (stored on the experiment as `controllerLoopRateHz`). It
   does not change the physics timestep or the FEAGI burst rate.
 - If a tool reports a missing control URL, ask the user to restart the MuJoCo controller.
   Never invent MJCF as a substitute.

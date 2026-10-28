@@ -39,7 +39,7 @@ from feagi_mcp.connectivity_rules import (
     PATTERN_LANGUAGE,
     build_connectivity_proposal,
     dest_kind_from_cortical_id,
-    motor_z_errors_for_patterns,
+    motor_z_warnings_for_patterns,
     validate_morphology_parameters,
 )
 from feagi_mcp.genome_artifact import (
@@ -84,6 +84,7 @@ from feagi_mcp.runtime_diagnostics import (
     log_missing_reason,
     select_local_log_diagnosis,
 )
+from feagi_mcp.stance_mapping import compile_stance_offset_rows
 from feagi_mcp.value_coding import (
     PROJECTOR_MORPHOLOGY,
     bins_geometry,
@@ -381,6 +382,15 @@ def _as_json_dict(data: Any) -> dict[str, Any]:
     if isinstance(data, dict):
         return cast(dict[str, Any], data)
     return {}
+
+
+def _normalize_mapping_rule(rule: Any) -> Any:
+    """Rename the legacy ``psc_multiplier`` key to ``postSynapticCurrent_multiplier``."""
+    if not isinstance(rule, dict) or "psc_multiplier" not in rule:
+        return rule
+    out = {k: v for k, v in rule.items() if k != "psc_multiplier"}
+    out.setdefault("postSynapticCurrent_multiplier", rule["psc_multiplier"])
+    return out
 
 
 _NEURON_PARAMETER_KEYS = frozenset(
@@ -1143,6 +1153,12 @@ def _channel_aliases(channel: dict[str, Any]) -> list[str]:
 
 
 STIMULATION_HOLD_MAX_MS = 30_000
+
+
+def _is_already_exists_error(result: dict[str, Any]) -> bool:
+    """True when a create call failed because the name is already taken (HTTP 409)."""
+    text = f"{result.get('error', '')} {result.get('message', '')}".lower()
+    return "409" in text or "already exists" in text
 
 
 class FeagiClient:
@@ -2600,8 +2616,8 @@ class FeagiClient:
             area_id: Cortical area identifier
 
         Returns:
-            Area id, dimensions, neuron properties, synapse counts, and
-            ``cortical_mapping_dst`` when present.
+            Area id, dimensions, neuron properties, synapse counts, the whole
+            ``rate_modulated_leak`` object when present, and ``cortical_mapping_dst``.
         """
         try:
             cid = area_id.strip() if isinstance(area_id, str) else ""
@@ -3895,25 +3911,53 @@ class FeagiClient:
             logger.error(f"delete_cortical_area failed: {e}")
             return {"error": str(e)}
 
+    async def _resolve_area_refs(self, *refs: str) -> tuple[list[str], str | None]:
+        """Turn area ids or display names into cortical ids.
+
+        A ref that is a known id stays as is; otherwise an exact, unique display-name match
+        becomes its id. An ambiguous name returns an error naming the candidates. When the
+        id/name list cannot be read, or nothing matches, the ref is kept unchanged so FEAGI
+        reports the problem itself.
+        """
+        mapping = await self.get_cortical_id_name_mapping()
+        if not isinstance(mapping, dict) or "error" in mapping:
+            return list(refs), None
+        resolved: list[str] = []
+        for ref in refs:
+            if ref in mapping:
+                resolved.append(ref)
+                continue
+            hits = [cid for cid, name in mapping.items() if isinstance(name, str) and name.strip() == ref]
+            if len(hits) > 1:
+                return list(refs), f"area name '{ref}' matches {len(hits)} areas ({', '.join(hits)}); use an id"
+            resolved.append(hits[0] if hits else ref)
+        return resolved, None
+
     async def get_cortical_mapping(self, src_area: str, dst_area: str) -> dict[str, Any]:
         """Get stored mapping rules from the source area properties record.
 
         Reads ``cortical_mapping_dst`` on the source area. Avoids
         ``POST /v1/cortical_mapping/mapping_properties``, which 400s when a
-        stored non-plastic rule omits ``plasticity_constant``.
+        stored non-plastic rule omits ``plasticity_constant``. ``src_area`` and
+        ``dst_area`` may be cortical ids or display names.
         """
         try:
             src = src_area.strip() if isinstance(src_area, str) else ""
             dst = dst_area.strip() if isinstance(dst_area, str) else ""
             if not src or not dst:
                 return {"error": "src_area and dst_area must be non-empty strings"}
-            area = await self.fetch_cortical_area_properties(src)
+            (src_id, dst_id), problem = await self._resolve_area_refs(src, dst)
+            if problem:
+                return {"error": problem}
+            area = await self.fetch_cortical_area_properties(src_id)
             if not isinstance(area, dict) or area.get("error"):
                 return area if isinstance(area, dict) else {"error": "bad_payload"}
-            rules = mapping_rules_from_area_record(area, dst)
+            rules = mapping_rules_from_area_record(area, dst_id)
             return {
                 "src_area": src,
                 "dst_area": dst,
+                "src_id": src_id,
+                "dst_id": dst_id,
                 "src_name": area.get("cortical_name"),
                 "rule_count": len(rules),
                 "rules": rules,
@@ -4262,8 +4306,13 @@ class FeagiClient:
     async def update_cortical_mapping(
         self, src_area: str, dst_area: str, mapping_rules: list[dict[str, Any]]
     ) -> dict[str, Any]:
-        """Create or update connections between two cortical areas."""
+        """Create or update connections between two cortical areas.
+
+        The rule's multiplier key is ``postSynapticCurrent_multiplier``; the legacy alias
+        ``psc_multiplier`` is rewritten to it before sending.
+        """
         try:
+            mapping_rules = [_normalize_mapping_rule(r) for r in mapping_rules]
             response = await self._client.put(
                 f"{self.base_url}/v1/cortical_mapping/mapping_properties",
                 json={
@@ -6431,29 +6480,10 @@ class FeagiClient:
                     "judgment": judgment,
                     "pattern_language": PATTERN_LANGUAGE,
                 }
-            motor_errors = motor_z_errors_for_patterns(
+            motor_warnings = motor_z_warnings_for_patterns(
                 patterns, dest_kind_from_cortical_id(dst_area_id)
             )
-            if motor_errors:
-                return {
-                    "error": "invalid_positional_servo_z",
-                    "message": "; ".join(motor_errors),
-                    "motor_decode": (
-                        "z=0 is max command on a PositionalServo absolute OPU; "
-                        "do not use ?+N or high exact Z"
-                    ),
-                }
-            morph_create = await self.create_morphology(
-                morphology_name=morphology_name,
-                morphology_type="patterns",
-                morphology_parameters={"patterns": patterns},
-            )
-            if isinstance(morph_create, dict) and "error" in morph_create:
-                return {
-                    "error": "create_morphology_failed",
-                    "morphology_create": morph_create,
-                }
-
+            # Validate before touching FEAGI so a bad argument never leaves an orphan morphology.
             for name, m in (
                 ("ltp_multiplier", ltp_multiplier),
                 ("ltd_multiplier", ltd_multiplier),
@@ -6466,6 +6496,30 @@ class FeagiClient:
                             "use plasticity_eta for sub-unit learning rates"
                         )
                     }
+
+            morph_params = {"patterns": patterns}
+            morph_create = await self.create_morphology(
+                morphology_name=morphology_name,
+                morphology_type="patterns",
+                morphology_parameters=morph_params,
+            )
+            if (
+                replace_existing
+                and isinstance(morph_create, dict)
+                and "error" in morph_create
+                and _is_already_exists_error(morph_create)
+            ):
+                # The name is taken (mapped or not): replace its definition in place.
+                morph_create = await self.update_morphology(
+                    morphology_name=morphology_name,
+                    morphology_type="patterns",
+                    morphology_parameters=morph_params,
+                )
+            if isinstance(morph_create, dict) and "error" in morph_create:
+                return {
+                    "error": "create_morphology_failed",
+                    "morphology_create": morph_create,
+                }
 
             scalar = morphology_scalar if morphology_scalar is not None else [1, 1, 1]
             new_rule: dict[str, Any] = {
@@ -6546,10 +6600,88 @@ class FeagiClient:
                 "mapping_update": mapping_update,
                 "rule": new_rule,
                 "patterns_count": len(patterns),
+                "warnings": motor_warnings,
             }
         except Exception as e:
             logger.error("build_reflex_mapping failed: %s", e)
             return {"error": str(e)}
+
+    async def build_stance_relative_mapping(
+        self,
+        src_area_id: str,
+        dst_area_id: str,
+        morphology_name: str,
+        src_axis: str,
+        src_bins: int,
+        channels: list[dict[str, Any]],
+        gain: float,
+        src_fixed: list[Any] | None = None,
+        deadband: float = 0.0,
+        max_offset: float | None = None,
+        src_center: float | None = None,
+        joint_range: list[float] | None = None,
+        dst_depth: int | None = None,
+        z0_is_max: bool = True,
+        n_stance_voxels: int = 0,
+        dry_run: bool = True,
+        postsynaptic_current_multiplier: int = 1,
+        synaptic_delay_bursts: int = 1,
+        replace_existing: bool = False,
+    ) -> dict[str, Any]:
+        """Compile stance-relative motor targets and (unless ``dry_run``) wire them.
+
+        Joint units in, OPU z bins out (see ``stance_mapping.compile_stance_offset_rows``).
+        ``dst_depth`` defaults to the z size of the destination area from the geometry
+        endpoint when it can be read. Returns ``voxel_mappings``, ``table_text``, ``table``,
+        ``stance`` (the continuous stance voxel per channel) and ``warnings``; with
+        ``dry_run=False`` also the :meth:`build_reflex_mapping` result under ``build``.
+        """
+        try:
+            depth = dst_depth
+            if depth is None:
+                geo = await self.get_cortical_area_geometry()
+                entry = geo.get(dst_area_id) if isinstance(geo, dict) else None
+                dims = None
+                if isinstance(entry, dict):
+                    dims = entry.get("dimensions") or entry.get("dimension") or entry.get("dims")
+                if isinstance(dims, dict):
+                    depth = dims.get("z") or dims.get("depth")
+                elif isinstance(dims, list) and len(dims) == 3:
+                    depth = dims[2]
+                if not isinstance(depth, int):
+                    return {"error": "dst_depth_unavailable", "message": "pass dst_depth"}
+            compiled = compile_stance_offset_rows(
+                src_axis=src_axis,
+                src_bins=int(src_bins),
+                src_fixed=list(src_fixed) if src_fixed else ["*", "*", "*"],
+                channels=channels,
+                depth=int(depth),
+                gain=float(gain),
+                deadband=float(deadband),
+                max_offset=max_offset,
+                src_center=src_center,
+                joint_range=joint_range,
+                z0_is_max=bool(z0_is_max),
+                n_stance_voxels=int(n_stance_voxels),
+            )
+        except (ValueError, KeyError, TypeError) as e:
+            return {"error": "invalid_stance_mapping", "message": str(e)}
+        compiled["dst_depth"] = int(depth)
+        compiled["dry_run"] = bool(dry_run)
+        if dry_run:
+            return compiled
+        if not compiled["voxel_mappings"]:
+            return {**compiled, "error": "no_rows", "message": "every src bin is in the deadband"}
+        compiled["build"] = await self.build_reflex_mapping(
+            src_area_id=src_area_id,
+            dst_area_id=dst_area_id,
+            morphology_name=morphology_name,
+            voxel_mappings=compiled["voxel_mappings"],
+            postsynaptic_current_multiplier=postsynaptic_current_multiplier,
+            synaptic_delay_bursts=synaptic_delay_bursts,
+            replace_existing=replace_existing,
+        )
+        return compiled
 
     async def auto_polarity_probe(
         self,

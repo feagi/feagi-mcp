@@ -170,6 +170,45 @@ class MujocoSceneControl:
             }
         return {"ok": True, "action": "measure", "result": response.get("result")}
 
+    async def reset_episode(
+        self,
+        keyframe: str | None = None,
+        controller_id: str = "mujoco",
+        control_url: str | None = None,
+        timeout_s: float = _APPLY_TIMEOUT_S,
+    ) -> dict[str, Any]:
+        """Run the controller's physics ``reset_episode`` primitive.
+
+        Resets to the named keyframe, or to the model default when ``keyframe`` is
+        ``None`` or blank. Clears body springs and pulses and starts a new episode.
+        """
+        if keyframe is not None and not isinstance(keyframe, str):
+            return {"ok": False, "error": "keyframe must be a name (string) or omitted."}
+        payload: dict[str, Any] = {"action": "reset_episode"}
+        if keyframe is not None and keyframe.strip():
+            payload["keyframe"] = keyframe.strip()
+        if control_url:
+            try:
+                base = loopback_base_url(control_url)
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
+        else:
+            target = resolve_control_target(controller_id)
+            if not target.get("ok"):
+                return target
+            base = str(target["control_url"])
+        try:
+            response = await self._post(base, payload, timeout_s)
+        except (httpx.HTTPError, OSError, TimeoutError) as exc:
+            return {"ok": False, "error": str(exc), "action": "reset_episode"}
+        if response.get("ok") is not True:
+            return {
+                "ok": False,
+                "action": "reset_episode",
+                "error": response.get("error") or "MuJoCo reset_episode failed.",
+            }
+        return {"ok": True, "action": "reset_episode", "result": response.get("result")}
+
     async def read_config(self, controller_id: str = "mujoco") -> dict[str, Any]:
         """Read every live MuJoCo settings section the control server exposes."""
         sections: dict[str, Any] = {}

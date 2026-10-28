@@ -88,8 +88,9 @@ locally with `interpret_cortical_id()`. Details: [references/concepts.md](refere
 7. **Verify what you build.** After wiring, prove signal flows with `probe_area_response()`
    or `stimulate_area()` plus `monitor_activity()`. Report the result, including failures.
 8. **Protect the user's work.** Before anything that replaces or removes structure, take a
-   snapshot with `snapshot_genome()` and confirm with the user. That covers `upload_genome()`,
-   `load_barebones_genome()`, `load_genome_from_file()`, `restore_genome_snapshot()`,
+   snapshot (`save_brain_snapshot(label)`, a Studio tool reachable via `call_studio_tool` if not listed, else `snapshot_genome()`) and confirm with the
+   user. That covers `upload_genome()`, `load_barebones_genome()`, `load_genome_from_file()`,
+   `restore_brain_snapshot()` / `restore_genome_snapshot()`,
    `delete_cortical_area()`, `delete_cortical_mapping()`, `delete_modulator()`, and
    `update_cortical_mapping()` or `build_reflex_mapping()` with `replace_existing`. Edits to
    the running genome are not saved to disk until `save_genome_to_filesystem()` runs
@@ -104,6 +105,8 @@ locally with `interpret_cortical_id()`. Details: [references/concepts.md](refere
    path that does not exist, whose absence cost time or forced a worse circuit. One line
    each, with where and the smallest fix; "None" is fine. A rejection that restates a
    mapping contract is a plan mistake, not a bug or a gap. See [references/lessons.md](references/lessons.md).
+   Offer to send what you found to Neuraville (see
+   [Report bugs and suggestions](#report-bugs-and-suggestions)).
 10. **Stop on a blocking gap.** Before building toward a behavior, confirm the outcome can be
     measured with the tools at hand and take a baseline. When a check cannot be run, a tool
     contradicts its documentation, or the next step would work around a tool, controller or
@@ -131,6 +134,10 @@ locally with `interpret_cortical_id()`. Details: [references/concepts.md](refere
     refs only, never pasted logs or traces. Subagents append their own stage results; the main
     session writes goals, hypotheses and verdicts. Never amend another author's entry except
     to set a hypothesis status.
+12. **Work top-down on behavior goals.** Go behavior, then region, then mapping, then synapse,
+    and descend only when the level above pins the fault. State the region-level hypothesis
+    and the behavior test for it before reading synapses. See
+    [references/behavior-design.md](references/behavior-design.md).
 
 ## Keep responses small
 
@@ -155,21 +162,35 @@ independent calls together in one turn, and never poll physics or logs in a loop
 
 | Goal | Start with | Reference |
 |---|---|---|
+| Teach a robot a behavior (stand, reach, walk), or a behavior goal stalls | `get_brain_regions()`, `measure_balance()` / `run_embodiment_trial` | [behavior-design.md](references/behavior-design.md) |
+| Train a behavior with the Trainer (support, reward, results) | `get_trainer_experiment`, `configure_trainer_run`, `get_trainer_balance_results` | [behavior-design.md](references/behavior-design.md#training-method-fit) |
 | Describe the genome, list circuits or areas | `get_genome_info()`, `get_brain_regions()`, `list_cortical_areas()` | [concepts.md](references/concepts.md) |
 | Explain one circuit's inputs, outputs, and edges | `get_region_circuit()` | [concepts.md](references/concepts.md) |
 | Build a new circuit (gate, CPG, reflex, controller) | `create_brain_region()`, `suggest_cortical_anchor_positions()`, `create_cortical_area()` | [building-circuits.md](references/building-circuits.md) |
 | Connect area A to area B | `recommend_connectivity_rules()`, `apply_connectivity_rule()` | [connectivity.md](references/connectivity.md) |
 | Learning: STDP, R-STDP, memory areas, time series | `get_memory_area_runtime_config()`, `set_memory_mp_encoding()` | [memory-and-plasticity.md](references/memory-and-plasticity.md) |
 | Classifiers (training with reward and punishment), segmentation, depth maps, value planes | `inspect_classifier()`, `wire_value_passthrough()`, `run_stimulus_protocol()` | [value-planes-and-classifiers.md](references/value-planes-and-classifiers.md) |
+| Homeostasis: hold an area's firing rate (`rate_modulated_leak`) | `update_cortical_area()`, `get_area_parameters()` | [memory-and-plasticity.md](references/memory-and-plasticity.md) |
 | Neuromodulators, `memory.formation` (stop new memories forming) | `list_modulator_types()`, `create_modulator()` | [memory-and-plasticity.md](references/memory-and-plasticity.md) |
 | Test or debug signal flow, a silent output, a dead FEAGI | `probe_area_response()`, `trace_signal_path()`, `diagnose_feagi_runtime()` | [debugging.md](references/debugging.md) |
 | Change the burst frequency | `set_burst_engine_frequency(frequency_hz)` once. The return confirms it | [embodiment.md](references/embodiment.md) |
 | Robots, joints, MuJoCo scenes, simulator assets | `get_registered_agents()`, `get_agent_joint_map()`, `get_mujoco_scene_config()` | [embodiment.md](references/embodiment.md) |
 | Measure robot behavior (balance, episodes, brain-to-body timing) | `measure_balance()`, `record_aligned_trace()` | [embodiment.md](references/embodiment.md) |
-| Save, snapshot, load, or merge genomes | `snapshot_genome()`, `save_genome_to_filesystem()`, `queue_amalgamation_by_payload()` | [genome-lifecycle.md](references/genome-lifecycle.md) |
+| Save, snapshot, load, or merge genomes | `save_brain_snapshot()`, `save_genome_to_filesystem()`, `queue_amalgamation_by_payload()` | [genome-lifecycle.md](references/genome-lifecycle.md) |
 | Find a tool for anything else | | [tool-index.md](references/tool-index.md) |
 
 ## Core workflows
+
+### Teach or fix a robot behavior
+
+1. Task analysis: the body's fastest dynamic, whether the start pose is stable, loop delay in
+   bursts, the axes to correct and their direction. Set the burst rate from it.
+2. Name the outcome metric and take a baseline (`measure_balance()`, `run_embodiment_trial`).
+3. Test each region as a black box: full brain, each region muted, pose only, plus a push in
+   each direction. Record sign, gain and lag.
+4. Write the region-level hypothesis, then wire correct-sign reflexes before any learning.
+5. Add plasticity or Trainer runs only if the reward credits the brain's own action.
+6. After 2 failed stages, go back to steps 1 to 3 instead of tuning again.
 
 ### Answer "what's in my brain?"
 
@@ -243,6 +264,36 @@ independent calls together in one turn, and never poll physics or logs in a loop
    burst-engine flag.
 4. `probe_area_response()` hop by hop to find the first silent link.
 5. For OPUs, `get_motor_snapshot_last()` to see whether commands leave FEAGI at all.
+
+## Report bugs and suggestions
+
+When the work turns up a bug (FEAGI, Studio, a controller, an MCP tool, or this skill did the
+wrong thing) or a clear improvement (a missing tool or parameter, a misleading message, skill
+guidance that was missing or wrong), offer to send it to Neuraville. Never send anything
+without the user's yes.
+
+1. **Ask once, in one short line, plain words.** At a natural pause, not mid-stage:
+   "Looks like a bug: <what went wrong>. Want to report it? You'll review it before it's
+   sent." For an improvement: "This could work better: <what>. Want to suggest it?" A no
+   ends it for that item. Several findings in one task go in one offer, one report each.
+2. **Draft.** First line is a title. Then: what happened and what was expected; the shortest
+   steps to reproduce (tool calls with their arguments); the key error text or numbers,
+   quoted short; where (feagi-core, feagi-mcp, Studio, controller, or skill plus section); a
+   suggested fix when known. Kind is `bug_report` (the software did the wrong thing) or
+   `suggestion` (missing capability or improvement). Severity for bugs: 5 crash or lost
+   work, 4 blocks the task, 3 wrong result with a workaround, 2 friction, 1 cosmetic.
+3. **Keep private data out.** No names, emails, keys, tokens, home-folder paths, or genome
+   and experiment details beyond what reproduces the issue, unless the user asks to include
+   them.
+4. **Hand it to the user.** With Studio running (`draft_feedback_report` is a tool), call it:
+   Studio opens its Bug Report or Feedback form filled with the draft, and the user edits it
+   and clicks Submit; Studio attaches app versions and, for signed-in bug reports, the latest
+   session logs. Say that nothing is sent until they submit. Without Studio, show the draft
+   and point to Studio's user menu, **Bug Report** or **Feedback**. Never post to an issue
+   tracker, email, or other service yourself.
+
+Generic lessons still go to [references/lessons.md](references/lessons.md); a report does not
+replace the Bugs and Gaps lists at the end of the task.
 
 ## Product context
 

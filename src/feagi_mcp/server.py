@@ -42,7 +42,12 @@ from feagi_mcp.placement_policy import (
     suggest_anchor_positions,
 )
 from feagi_mcp.snapshots import SnapshotManager, validate_label
-from feagi_mcp.studio_handoff import handoff_message, studio_manages_feagi
+from feagi_mcp.studio_handoff import (
+    handoff_message,
+    snapshot_handoff,
+    studio_manages_feagi,
+    studio_present,
+)
 from feagi_mcp.weight_watch import (
     freeze_mapping,
     reset_mapping_native_first,
@@ -613,7 +618,8 @@ async def get_area_parameters(area_id: str) -> dict[str, Any]:
 
     Uses ``POST /v1/cortical_area/cortical_area_properties`` and returns dimensions,
     leak / fire threshold / PSP, synapse counts, and ``cortical_mapping_dst``.
-    Does not download the genome.
+    ``rate_modulated_leak`` is returned whole (``enabled``, ``target_mode``, ``arm_*`` fields
+    and any others FEAGI reports). Does not download the genome.
 
     Args:
         area_id: Cortical area identifier
@@ -2103,11 +2109,11 @@ async def get_cortical_mapping(src_area: str, dst_area: str) -> dict[str, Any]:
     rule omits ``plasticity_constant``.
 
     Args:
-        src_area: Source cortical area ID
-        dst_area: Destination cortical area ID
+        src_area: Source cortical area ID or display name
+        dst_area: Destination cortical area ID or display name
 
     Returns:
-        ``rules`` list plus ``rule_count`` and ``src_name``
+        ``rules`` list plus ``rule_count``, ``src_name`` and the resolved ``src_id``/``dst_id``
     """
     result = await feagi.get_cortical_mapping(src_area, dst_area)
     return result
@@ -2370,7 +2376,8 @@ async def update_cortical_mapping(
     Args:
         src_area: Source cortical area ID
         dst_area: Destination cortical area ID
-        mapping_rules: List of connection rules with morphology_id, psc_multiplier, etc.
+        mapping_rules: Connection rules with morphology_id, postSynapticCurrent_multiplier
+            (may be fractional), etc.
 
     Returns:
         Update result with synapse count and success status
@@ -3510,7 +3517,11 @@ async def snapshot_genome(
     description: str | None = None,
     overwrite: bool = False,
 ) -> dict[str, Any]:
-    """Save the running genome blueprint to disk under ``label``.
+    """Save the running genome blueprint to disk under ``label`` (dev-only, standalone).
+
+    Dev-only local files: not synced to Composer and not shared with a team. With
+    Studio present this returns ``use_studio_snapshot`` and writes nothing; use
+    ``save_brain_snapshot`` there.
 
     Persists ``GET /v1/genome/download`` as a standard
     ``feagi-mcp/var/snapshots/<label>.genome`` artifact, with annotations in
@@ -3523,6 +3534,8 @@ async def snapshot_genome(
         description: Optional free-form note saved with the snapshot.
         overwrite: When False (default), refuses to clobber an existing label.
     """
+    if studio_present(config.host, config.port):
+        return snapshot_handoff("save_brain_snapshot")
     try:
         clean_label = validate_label(label)
     except ValueError as e:
@@ -3550,6 +3563,9 @@ async def snapshot_genome(
 async def restore_genome_snapshot(label: str) -> dict[str, Any]:
     """Restore a previously saved genome snapshot via ``POST /v1/genome/upload``.
 
+    Dev-only local files: not synced or shared. With Studio present this returns
+    ``use_studio_snapshot``; use ``restore_brain_snapshot`` there.
+
     Reads the labeled file from disk, then re-uploads it to FEAGI. Replaces the
     running genome with the saved blueprint. Live runtime state (synaptic
     weights, membrane potentials) is rebuilt from scratch by FEAGI.
@@ -3557,6 +3573,8 @@ async def restore_genome_snapshot(label: str) -> dict[str, Any]:
     Args:
         label: Snapshot label previously created with ``snapshot_genome``.
     """
+    if studio_present(config.host, config.port):
+        return snapshot_handoff("restore_brain_snapshot")
     try:
         info, genome = snapshot_manager.load(label)
     except FileNotFoundError as e:
@@ -3572,7 +3590,12 @@ async def restore_genome_snapshot(label: str) -> dict[str, Any]:
 
 @mcp.tool(annotations=READ_ONLY)
 async def list_genome_snapshots() -> dict[str, Any]:
-    """List all genome snapshots stored on disk."""
+    """List genome snapshots stored on disk (dev-only, not synced or shared).
+
+    With Studio present this returns ``use_studio_snapshot``; use ``list_brain_snapshots``.
+    """
+    if studio_present(config.host, config.port):
+        return snapshot_handoff("list_brain_snapshots")
     snapshots = snapshot_manager.list_snapshots()
     return {
         "snapshot_directory": str(snapshot_manager.directory),
@@ -3663,6 +3686,74 @@ async def inspect_cortical_areas_minimal(cortical_ids: list[str]) -> dict[str, A
 
 
 @mcp.tool()
+async def build_stance_relative_mapping(
+    src_area_id: str,
+    dst_area_id: str,
+    morphology_name: str,
+    src_axis: str,
+    src_bins: int,
+    channels: list[dict[str, Any]],
+    gain: float,
+    src_fixed: list[Any] | None = None,
+    deadband: float = 0.0,
+    max_offset: float | None = None,
+    src_center: float | None = None,
+    joint_range: list[float] | None = None,
+    dst_depth: int | None = None,
+    z0_is_max: bool = True,
+    n_stance_voxels: int = 0,
+    dry_run: bool = True,
+    postsynaptic_current_multiplier: int = 1,
+    synaptic_delay_bursts: int = 1,
+    replace_existing: bool = False,
+) -> dict[str, Any]:
+    """Compile stance-relative motor targets (joint units) into reflex voxel rows.
+
+    Motor targets on a PositionalServo absolute OPU are absolute and held. This builds a
+    reflex as a small offset around a per-channel stance: source bin ``i`` (along
+    ``src_axis`` of ``src_fixed``) commands ``reference + gain * (i - src_center)`` joint
+    units, bins within ``deadband`` of the center map to nothing, and the offset is clamped
+    to ``max_offset``. Joint units become dst z bins using the joint range, ``dst_depth``
+    and direction (``z0_is_max``: z=0 decodes to the range maximum).
+
+    ``channels``: ``[{"channel": int, "reference": float, "range": [min, max]?,
+    "src_fixed": [x, y, z]?, "gain": float?, "max_offset": float?, "deadband": float?}]``.
+    A channel's ``gain``, ``max_offset`` and ``deadband`` override the top-level values for
+    that channel; unknown channel keys are rejected. A warning is returned when a channel's
+    ``abs(gain)`` is below one dst z bin in joint units (``(max - min) / (dst_depth - 1)``),
+    since the offsets then quantize. ``reference`` is in joint units; read it from the model
+    (keyframe) yourself. ``n_stance_voxels``: stance voxels active on the same channel at
+    once; the decoder averages all active z, so the reflex z is mean-compensated.
+
+    Default ``dry_run=True`` returns ``voxel_mappings``, a ``table_text`` (src bin -> target
+    value), ``stance`` (the stance voxel to drive continuously) and ``warnings`` without
+    writing. ``dry_run=False`` then calls ``build_reflex_mapping``. Verify the sign with a
+    probe afterward.
+    """
+    return await feagi.build_stance_relative_mapping(
+        src_area_id=src_area_id,
+        dst_area_id=dst_area_id,
+        morphology_name=morphology_name,
+        src_axis=src_axis,
+        src_bins=src_bins,
+        channels=channels,
+        gain=gain,
+        src_fixed=src_fixed,
+        deadband=deadband,
+        max_offset=max_offset,
+        src_center=src_center,
+        joint_range=joint_range,
+        dst_depth=dst_depth,
+        z0_is_max=z0_is_max,
+        n_stance_voxels=n_stance_voxels,
+        dry_run=dry_run,
+        postsynaptic_current_multiplier=postsynaptic_current_multiplier,
+        synaptic_delay_bursts=synaptic_delay_bursts,
+        replace_existing=replace_existing,
+    )
+
+
+@mcp.tool()
 async def build_reflex_mapping(
     src_area_id: str,
     dst_area_id: str,
@@ -3697,7 +3788,9 @@ async def build_reflex_mapping(
 
     Tokens: ``*``, ``?``, ``!``, ``?+N``, ``?-A:?+B``, exact ints. Enumerated
     exact dumps that share one offset are rejected. On a PositionalServo
-    absolute OPU, dest z=0 is max command.
+    absolute OPU, dest z=0 is max command; nonzero dst z is allowed (the decoder takes
+    the mean of active z, so it mixes with other commands on the channel) and returns
+    ``warnings``. For stance-relative offsets see ``build_stance_relative_mapping``.
 
     By default the new mapping is appended; pass ``replace_existing=True`` to
     wipe existing rules first.
@@ -4111,6 +4204,32 @@ async def embodiment_set_joint_state(
             controller_id=controller_id,
         )
     )
+
+
+@mcp.tool()
+async def embodiment_reset_episode(
+    keyframe: str | None = None,
+    introspection_url: str | None = None,
+    controller_id: str = "mujoco",
+    timeout_s: float = 15.0,
+) -> dict[str, Any]:
+    """Reset the simulated embodiment to a named keyframe, or to the model default.
+
+    Runs the controller's physics ``reset_episode`` primitive: the pose, velocities and
+    motor targets return to the keyframe (``keyframe`` omitted = the model's default
+    state), body springs and pulses are cleared and a new episode starts. Returns the
+    new ``episode_id``; read the resulting poses with ``embodiment_measure_bodies``.
+    Useful before polarity probes when the robot is down. Unknown keyframe names are
+    rejected by the controller.
+
+    The control server is found from the introspection descriptor's ``control_url``.
+    ``introspection_url`` overrides it with a loopback control-server base URL (not the
+    introspection port), since ``reset_episode`` runs on the control server.
+    """
+    outcome = await MujocoSceneControl().reset_episode(
+        keyframe, controller_id, control_url=introspection_url, timeout_s=timeout_s
+    )
+    return annotate_with_experiment_status(outcome)
 
 
 @mcp.tool()

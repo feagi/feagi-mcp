@@ -69,9 +69,9 @@ Confirm availability with `describe_connectivity_rules()`; these are the usual c
 | `first_to_last`, `last_to_first` | Route the first unit to the end, or the last to the start | No |
 | `randomizer` | Random connectivity for decorrelation or exploration | No |
 | `bitmask_encoder_x/y/z`, `bitmask_decoder_x/y/z` | Pack or unpack bitmask values along an axis | No |
-| `episodic_memory` | Feed a memory area so it forms memory neurons | No |
-| `associative_memory` | STDP association from a memory area | No |
-| `memory_replay` | Only onto that memory area's own twin. Any other memory-to-ordinary link is `associative_memory` | No |
+| `episodic_memory` | Feed a memory area so it forms memory neurons. FEAGI also writes it, non-plastic, as the generated memory-to-twin recall edge | No |
+| `associative_memory` | STDP association from a memory area to any ordinary area other than its own twin | No |
+| `memory_replay` | Legacy. FEAGI replaces it with `episodic_memory` on the memory-to-twin pair; do not wire it | No |
 
 ## Mapping rule fields
 
@@ -91,7 +91,7 @@ Used by `update_cortical_mapping(src_area, dst_area, mapping_rules)`:
 }
 ```
 
-- `postSynapticCurrent_multiplier`: synapse gain, an integer. Negative values inhibit.
+- `postSynapticCurrent_multiplier`: synapse gain. The input a neuron receives is source PSP x multiplier, and the multiplier can be fractional. Negative values inhibit. The alias `psc_multiplier` was dropped on save before the feagi-core fix; it is now normalized, but write the full key.
   `apply_connectivity_rule()` and `build_reflex_mapping()` truncate fractions (0.5 becomes 0,
   which silences the edge), so balance excitation with destination thresholds instead.
 - `morphology_scalar`: stretches the pattern per axis.

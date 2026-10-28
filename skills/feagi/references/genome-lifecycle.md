@@ -12,7 +12,7 @@
 
 | Artifact | Holds | Tools |
 |---|---|---|
-| Genome | Blueprint: regions, areas, parameters, mapping rules, morphologies, modulators | `save_genome_to_filesystem()`, `download_genome()`, `snapshot_genome()` |
+| Genome | Blueprint: regions, areas, parameters, mapping rules, morphologies, modulators | `save_genome_to_filesystem()`, `download_genome()`, `save_brain_snapshot()` |
 | Region genome | One region subtree as a standalone genome | `download_region_genome(region_id)` |
 | Connectome | The grown network, including learned weights | `download_connectome()`, `upload_connectome(file_path)` |
 
@@ -25,15 +25,20 @@ connectome when learning matters.
 Take a snapshot before any change that is hard to undo: replacing the genome, deleting areas
 or mappings, or replacing mapping rules.
 
-- `snapshot_genome(label, description)` saves the blueprint under a filename-safe label
-  (letters, digits, `_`, `.`, `-`). It refuses to overwrite an existing label unless
-  `overwrite=True`.
-- `list_genome_snapshots()` lists them; `delete_genome_snapshot(label)` removes one.
-- `restore_genome_snapshot(label)` replaces the running genome with the snapshot. FEAGI
-  rebuilds runtime state from scratch, so learned weights are lost. Confirm first.
-
-Snapshots live on the MCP server's machine (`FEAGI_MCP_SNAPSHOTS_DIR`, or the server's
-`var/snapshots`), so they survive server restarts.
+- In Studio (always preferred): `save_brain_snapshot(label, note?)` (a Studio tool; if it is not listed, call it through `call_studio_tool`) pins a named snapshot of the
+  experiment, genome and connectome. The genome goes to the experiment in Composer (team-aware,
+  same revision rules as autosave); the full connectome stays on this machine and its lite form
+  uploads asynchronously, so check `list_brain_snapshots()` `sync` before relying on it
+  elsewhere. Labels are `[A-Za-z0-9_.-]{1,128}`, unique per experiment (team-wide for teams).
+- `list_brain_snapshots()` lists them; `restore_brain_snapshot(label)` reverts the genome and
+  reloads the connectome. Confirm first; for a team experiment it changes the shared brain and
+  notifies the team.
+- Cite labels in notebook entries as `refs.snapshots` (e.g. before a risky `change`).
+- Standalone without Studio (dev-only, local files, not synced or shared):
+  `snapshot_genome(label, description)`, `list_genome_snapshots()`, `restore_genome_snapshot(label)`,
+  `delete_genome_snapshot(label)`; `overwrite=True` replaces a label. With Studio present these
+  return `use_studio_snapshot` naming the Studio tool to call. FEAGI rebuilds runtime state on
+  a genome-only restore, so learned weights are lost.
 
 ## Saving and exporting
 

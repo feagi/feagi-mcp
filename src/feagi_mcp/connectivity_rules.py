@@ -484,31 +484,32 @@ def validate_morphology_parameters(morphology_type: str, parameters: Any) -> dic
     return {"ok": True, "reject": False, "errors": [], "warnings": [], "compact_form": None}
 
 
-def motor_z_errors_for_patterns(patterns: Any, dest_kind: str) -> list[str]:
-    """Reject high-Z exact / offset dest tokens on a PositionalServo absolute OPU."""
-    if not is_positional_servo_absolute(dest_kind):
+def motor_z_warnings_for_patterns(patterns: Any, dest_kind: str) -> list[str]:
+    """Warn (never reject) about nonzero dst z on a PositionalServo absolute OPU.
+
+    The decoder maps the mean of the active z voxels linearly to a target, so exact or
+    ``?+N`` dst z is a legitimate way to command a mid-range or stance-relative target.
+    The warning only states the decode so it is chosen deliberately.
+    """
+    if not is_positional_servo_absolute(dest_kind) or not isinstance(patterns, list):
         return []
-    errors: list[str] = []
-    if not isinstance(patterns, list):
-        return errors
+    warnings: list[str] = []
     for idx, row in enumerate(patterns):
         pair = _pattern_pair(row)
         if pair is None:
             continue
-        _src, dst = pair
-        dest_z = dst[2]
-        dest_z_int = _as_int(dest_z)
-        if dest_z_int is not None and dest_z_int > 0:
-            errors.append(
-                f"patterns[{idx}].dst.z={dest_z_int} on a PositionalServo absolute OPU "
-                "decodes as a weak command (z=0 is max). Use dest z=0."
+        dest_z = pair[1][2]
+        z_int = _as_int(dest_z)
+        shifted = (
+            isinstance(dest_z, str) and dest_z.strip().startswith("?+") and dest_z.strip() != "?+"
+        )
+        if (z_int is not None and z_int > 0) or shifted:
+            warnings.append(
+                f"patterns[{idx}].dst.z={dest_z!r} on a PositionalServo absolute OPU: target is "
+                "the mean of all active z voxels on the channel (z=0 is max), so it mixes "
+                "with any other command on that channel in the same burst."
             )
-        if isinstance(dest_z, str) and dest_z.strip().startswith("?+") and dest_z.strip() != "?+":
-            errors.append(
-                f"patterns[{idx}].dst.z={dest_z!r} shifts command away from z=0 "
-                "on a PositionalServo absolute OPU. Use 0, not ?+N."
-            )
-    return errors
+    return warnings
 
 
 def build_connectivity_proposal(

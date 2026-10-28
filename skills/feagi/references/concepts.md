@@ -105,7 +105,7 @@ for several. Change them with `update_cortical_area(cortical_id, updates)`.
 | `neuron_consecutive_fire_count` | Limit on back-to-back firing (0 = no limit). |
 | `neuron_mp_charge_accumulation` | Whether potential carries over between bursts. |
 | `neuron_burst_engine_active` | Whether the area is processed at all. An area with it off never fires. |
-| `rate_modulated_leak` | Homeostatic leak that tunes itself toward a target firing rate (dense custom areas). |
+| `rate_modulated_leak` | Homeostatic leak that tunes itself toward a target firing rate (dense custom areas). `target_mode` is `area` (one target for all neurons) or `per_neuron`; `arm_bursts`, `arm_tau_bursts`, `min_target_firing_per_burst` and `arm_epoch` control per-neuron arming. Partial updates merge into the stored object (given keys override, absent keys are kept, a null key deletes it; a top-level null clears it), so `{"arm_epoch": n}` alone re-arms and keeps `target_mode`/`gain`. When to use it, sizing, arming and checks: [memory-and-plasticity.md](memory-and-plasticity.md#homeostatic-plasticity-rate_modulated_leak). Scheduled mapping PSC multipliers in the Trainer may be negative. |
 
 `list_cortical_areas()` rows name their shape `cortical_dimensions` and their anchor
 `coordinates_3d`.

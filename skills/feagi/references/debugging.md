@@ -99,6 +99,7 @@ so before you do it.
 | Output saturates or loses magnitude | `mp_driven_psp` off, fan-out, threshold, or accumulation | `validate_magnitude_passthrough()` |
 | Activity dies after one hop | Refractory or leak too strong, or single-burst stimulus | Lengthen `duration_ms`, adjust leak |
 | Runaway firing | Excitatory loop without inhibition, excitability too high | Add inhibition (negative PSC), raise threshold, add leak |
+| Hidden area drifts to runaway or silence while weights learn | No rate regulation | `rate_modulated_leak` (memory-and-plasticity.md); it cannot stop single-burst threshold crossings |
 | CPG does not oscillate | Leak or PSC too low | Raise leak or self-mapping PSC |
 | CPG oscillates too fast | Leak too high | Lower leak |
 | Servo barely moves | Drive mapped to high Z on a positional servo | Map to `z=0` side (see [connectivity.md](connectivity.md)) |

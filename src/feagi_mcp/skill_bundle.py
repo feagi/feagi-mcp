@@ -123,6 +123,7 @@ TOOL_CATEGORIES: dict[str, tuple[str, ...]] = {
         "apply_connectivity_rule",
         "propose_connectivity_rule",
         "build_reflex_mapping",
+        "build_stance_relative_mapping",
         "update_cortical_mapping",
         "delete_cortical_mapping",
         "list_morphologies_summary",
@@ -211,6 +212,7 @@ TOOL_CATEGORIES: dict[str, tuple[str, ...]] = {
         "embodiment_get_physics_state",
         "embodiment_measure_bodies",
         "embodiment_set_joint_state",
+        "embodiment_reset_episode",
         "embodiment_reset_simulation_time_stats",
         "measure_balance",
         "record_aligned_trace",
@@ -247,6 +249,23 @@ STUDIO_ONLY_TOOLS: dict[str, str] = {
         "`append_design_note(kind, title, body?, metrics?, status?, refs?, amends?, tags?)`: adds "
         "one entry (goal, constraint, baseline, hypothesis, change, measurement, verdict, "
         "dead_end, idea, gap)."
+    ),
+    "save_brain_snapshot": (
+        "`save_brain_snapshot(label, note?)`: pins a named snapshot of the running experiment: "
+        "genome saved to the experiment in Composer (team-aware), connectome kept locally and "
+        "uploaded in lite form asynchronously."
+    ),
+    "export_run_data": (
+        "`export_run_data(run_id, destination?)`: exports a recorded run's data after "
+        "re-hashing every file against its manifest."
+    ),
+    "list_brain_snapshots": (
+        "`list_brain_snapshots(experiment_id?)`: the experiment's named snapshots with "
+        "saved-by, counts and sync state."
+    ),
+    "restore_brain_snapshot": (
+        "`restore_brain_snapshot(label | checkpoint_id, experiment_id?)`: reverts the genome "
+        "and reloads the connectome. Destructive; changes the shared brain for a team."
     ),
 }
 

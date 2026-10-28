@@ -1116,6 +1116,34 @@ class TestConnectionManagement:
         assert result["source"] == "cortical_area_properties"
 
     @pytest.mark.asyncio
+    async def test_get_cortical_mapping_resolves_area_names_to_ids(self, mock_client):
+        """Names resolve to ids before the properties read and the destination lookup."""
+        mock_client.get_cortical_id_name_mapping = AsyncMock(
+            return_value={"idSRC": "Source", "idDST": "Target", "idDUP": "Dup", "idDUP2": "Dup"}
+        )
+        mock_client.fetch_cortical_area_properties = AsyncMock(
+            return_value={
+                "cortical_name": "Source",
+                "properties": {
+                    "cortical_mapping_dst": {"idDST": [{"morphology_id": "all_to_all"}]}
+                },
+            }
+        )
+
+        result = await mock_client.get_cortical_mapping("Source", "Target")
+
+        mock_client.fetch_cortical_area_properties.assert_awaited_once_with("idSRC")
+        assert result["src_id"] == "idSRC" and result["dst_id"] == "idDST"
+        assert result["rule_count"] == 1
+        assert result["rules"][0]["morphology_id"] == "all_to_all"
+        # An id passes through untouched.
+        again = await mock_client.get_cortical_mapping("idSRC", "idDST")
+        assert again["rule_count"] == 1
+        # An ambiguous name is an error naming the candidates, not a guess.
+        dup = await mock_client.get_cortical_mapping("Source", "Dup")
+        assert "matches 2 areas" in dup["error"]
+
+    @pytest.mark.asyncio
     async def test_update_cortical_mapping(self, mock_client):
         """Test updating cortical mapping."""
         mock_response = MagicMock()
@@ -2808,3 +2836,59 @@ class TestResetWeightsRoutes:
         mock_client._client.put.return_value = _put_response(404, text="no route")
         result = await mock_client.reset_area_incoming_weights(["A"])
         assert "HTTP 404" in result["error"]
+
+
+class TestReflexMappingExistingMorphology:
+    """replace_existing updates a morphology whose name is already taken instead of 409."""
+
+    @staticmethod
+    def _call(client, **kw):
+        return client.build_reflex_mapping(
+            src_area_id="aWNudAEAAAA=",
+            dst_area_id="b2NudAEAAAA=",
+            morphology_name="reflex",
+            voxel_mappings=[{"src": [0, 0, 0], "dst": [0, 0, 0]}],
+            postsynaptic_current_multiplier=1,
+            **kw,
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("mapped", [False, True])
+    async def test_existing_name_is_updated_in_place(self, mock_client, mapped):
+        mock_client.create_morphology = AsyncMock(
+            return_value={"error": "HTTP 409", "message": "morphology already exists"}
+        )
+        mock_client.update_morphology = AsyncMock(return_value={"success": True})
+        mock_client.get_cortical_mapping = AsyncMock(
+            return_value={"rules": [{"morphology_id": "reflex"}] if mapped else []}
+        )
+        mock_client.update_cortical_mapping = AsyncMock(return_value={"message": "ok"})
+
+        result = await self._call(mock_client, replace_existing=True)
+
+        assert "error" not in result
+        mock_client.update_morphology.assert_awaited_once()
+        mock_client.update_cortical_mapping.assert_awaited_once()
+        sent = mock_client.update_cortical_mapping.await_args.kwargs["mapping_rules"]
+        assert [r["morphology_id"] for r in sent] == ["reflex"]
+
+    @pytest.mark.asyncio
+    async def test_conflict_without_replace_existing_still_errors(self, mock_client):
+        mock_client.create_morphology = AsyncMock(
+            return_value={"error": "HTTP 409", "message": "already exists"}
+        )
+        mock_client.update_morphology = AsyncMock()
+        mock_client.update_cortical_mapping = AsyncMock()
+
+        result = await self._call(mock_client)
+
+        assert result["error"] == "create_morphology_failed"
+        mock_client.update_morphology.assert_not_awaited()
+        mock_client.update_cortical_mapping.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_bad_ltp_creates_no_orphan_morphology(self, mock_client):
+        mock_client.create_morphology = AsyncMock()
+        result = await self._call(mock_client, ltp_multiplier=500)
+        assert "ltp_multiplier" in result["error"]
+        mock_client.create_morphology.assert_not_awaited()

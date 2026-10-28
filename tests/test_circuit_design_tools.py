@@ -248,6 +248,35 @@ class TestInspectCorticalAreasMinimal:
         assert out["id_b"]["rate_modulated_leak"] == rml
 
     @pytest.mark.asyncio
+    async def test_get_area_parameters_returns_whole_rate_modulated_leak(self, mock_client):
+        rml = {
+            "enabled": True,
+            "target_mode": "per_neuron",
+            "arm_bursts": 20,
+            "arm_tau_bursts": 5.0,
+            "min_target_firing_per_burst": 0.01,
+            "arm_epoch": 3,
+        }
+        mock_client._client.post.return_value = _ok(
+            {
+                "cortical_name": "c",
+                "area_type": "CUSTOM",
+                "properties": {"rate_modulated_leak": rml},
+            }
+        )
+        out = await mock_client.get_area_parameters("id_p")
+        assert out["rate_modulated_leak"] == rml
+
+    @pytest.mark.asyncio
+    async def test_update_cortical_mapping_sends_postsynaptic_current_key(self, mock_client):
+        mock_client._client.put.return_value = _ok({"message": "ok"})
+        rules = [{"morphology_id": "m", "psc_multiplier": 0.5}]
+        await mock_client.update_cortical_mapping("a", "b", rules)
+        sent = mock_client._client.put.call_args.kwargs["json"]["mapping_string"]
+        assert sent == [{"morphology_id": "m", "postSynapticCurrent_multiplier": 0.5}]
+        assert rules[0] == {"morphology_id": "m", "psc_multiplier": 0.5}
+
+    @pytest.mark.asyncio
     async def test_prefers_top_level_rate_modulated_leak(self, mock_client):
         top: dict = {"enabled": True}
         nested: dict = {"enabled": False}
@@ -604,17 +633,24 @@ class TestConnectivityRuleIntelligence:
         mock_client._client.put.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_build_reflex_rejects_high_z_on_positional_servo(self, mock_client):
-        mock_client.create_morphology = AsyncMock()
+    async def test_build_reflex_accepts_nonzero_z_in_src_and_dst(self, mock_client):
+        mock_client.create_morphology = AsyncMock(return_value={"success": True})
+        mock_client.get_cortical_mapping = AsyncMock(return_value={"rules": []})
+        mock_client.update_cortical_mapping = AsyncMock(return_value={"success": True})
         out = await mock_client.build_reflex_mapping(
             src_area_id="src",
             dst_area_id="b3BzZQEAAAA=",
-            morphology_name="bad_sit",
-            voxel_mappings=[{"src": [382, "*", "*"], "dst": ["?", "?", 17]}],
+            morphology_name="offset_reflex",
+            voxel_mappings=[
+                {"src": [3, 0, 2], "dst": [1, 0, 7]},
+                {"src": [4, 0, 5], "dst": [1, 0, 11]},
+            ],
             postsynaptic_current_multiplier=1,
         )
-        assert out["error"] == "invalid_positional_servo_z"
-        mock_client.create_morphology.assert_not_awaited()
+        assert "error" not in out
+        sent = mock_client.create_morphology.await_args.kwargs["morphology_parameters"]
+        assert sent["patterns"] == [[[3, 0, 2], [1, 0, 7]], [[4, 0, 5], [1, 0, 11]]]
+        assert out["warnings"]
 
     @pytest.mark.asyncio
     async def test_propose_connectivity_rule_is_local_for_explicit_dims(self, mock_client):
@@ -732,3 +768,122 @@ class TestEmbodimentProxies:
         inner.post.assert_awaited_once_with(
             "http://localhost:9876/v1/reset_simulation_time_stats", json={}
         )
+
+
+class TestStanceRelative:
+    """Neutral fixture: 20-bin channel, joint range +-90, z=0 is the maximum."""
+
+    ARGS = {
+        "src_axis": "z",
+        "src_bins": 11,
+        "src_fixed": [2, 0, 0],
+        "channels": [{"channel": 3, "reference": 0.0}],
+        "depth": 20,
+        "joint_range": [-90.0, 90.0],
+    }
+
+    @staticmethod
+    def _z_by_bin(out):
+        return {r["src"][2]: r["dst"][2] for r in out["voxel_mappings"]}
+
+    def test_conversion_follows_opu_direction(self):
+        from feagi_mcp.stance_mapping import value_to_z_bin
+
+        assert value_to_z_bin(90, -90, 90, 20) == 0
+        assert value_to_z_bin(-90, -90, 90, 20) == 19
+        assert value_to_z_bin(90, -90, 90, 20, z0_is_max=False) == 19
+        assert value_to_z_bin(-90, -90, 90, 20, z0_is_max=False) == 0
+
+    def test_positive_gain_moves_toward_lower_z(self):
+        from feagi_mcp.stance_mapping import compile_stance_offset_rows
+
+        out = compile_stance_offset_rows(gain=10.0, **self.ARGS)
+        z = self._z_by_bin(out)
+        assert out["stance"][0]["stance_dst"] == [3, 0, 10]
+        assert 5 not in z  # center bin: zero offset, left to the stance command
+        assert z[10] < 10 < z[0]
+
+    def test_sign_flip_mirrors(self):
+        from feagi_mcp.stance_mapping import compile_stance_offset_rows
+
+        pos = self._z_by_bin(compile_stance_offset_rows(gain=10.0, **self.ARGS))
+        neg = self._z_by_bin(compile_stance_offset_rows(gain=-10.0, **self.ARGS))
+        assert all(abs((pos[i] - 10) + (neg[i] - 10)) <= 1 for i in pos)
+        assert neg[10] > 10 > neg[0]
+
+    def test_deadband_maps_nothing(self):
+        from feagi_mcp.stance_mapping import compile_stance_offset_rows
+
+        out = compile_stance_offset_rows(gain=10.0, deadband=2, **self.ARGS)
+        assert sorted(self._z_by_bin(out)) == [0, 1, 2, 8, 9, 10] or 5 not in self._z_by_bin(out)
+        assert not {3, 4, 5, 6, 7} & set(self._z_by_bin(out))
+        assert all(t["dst_z"] is None for t in out["table"] if 3 <= t["src_bin"] <= 7)
+
+    def test_max_offset_clamps(self):
+        from feagi_mcp.stance_mapping import compile_stance_offset_rows
+
+        out = compile_stance_offset_rows(gain=10.0, max_offset=20.0, **self.ARGS)
+        offsets = [t["offset"] for t in out["table"] if t.get("offset") is not None]
+        assert max(offsets) == 20.0 and min(offsets) == -20.0
+
+    def test_mean_compensation_with_one_stance_voxel(self):
+        from feagi_mcp.stance_mapping import compile_stance_offset_rows
+
+        out = compile_stance_offset_rows(gain=2.0, n_stance_voxels=1, **self.ARGS)
+        row = next(t for t in out["table"] if t["src_bin"] == 7)
+        # bin 7 offset +4 -> target between z=10 and z=9; mean of stance and reflex matches
+        assert abs((10 + row["dst_z"]) / 2 - 9.5) <= 1.0
+
+    def test_per_channel_overrides_win(self):
+        from feagi_mcp.stance_mapping import compile_stance_offset_rows
+
+        args = dict(self.ARGS)
+        args["channels"] = [
+            {"channel": 1, "reference": 0.0},
+            {"channel": 2, "reference": 0.0, "gain": 20.0, "max_offset": 30.0, "deadband": 1},
+        ]
+        out = compile_stance_offset_rows(gain=10.0, **args)
+        by_ch = {}
+        for t in out["table"]:
+            by_ch.setdefault(t["channel"], []).append(t)
+        assert max(t["offset"] for t in by_ch[1] if t.get("offset") is not None) == 50.0
+        assert max(t["offset"] for t in by_ch[2] if t.get("offset") is not None) == 30.0
+        assert [t["src_bin"] for t in by_ch[2] if t["dst_z"] is None] == [4, 5, 6]
+        assert [t["src_bin"] for t in by_ch[1] if t["dst_z"] is None] == [5]
+
+    def test_unknown_channel_key_rejected(self):
+        from feagi_mcp.stance_mapping import compile_stance_offset_rows
+
+        args = dict(self.ARGS)
+        args["channels"] = [{"channel": 1, "reference": 0.0, "gian": 5.0}]
+        with pytest.raises(ValueError, match="gian"):
+            compile_stance_offset_rows(gain=10.0, **args)
+
+    def test_sub_bin_gain_warns(self):
+        from feagi_mcp.stance_mapping import compile_stance_offset_rows
+
+        args = dict(self.ARGS)
+        args["channels"] = [{"channel": 1, "reference": 0.0, "gain": 2.0}]
+        out = compile_stance_offset_rows(gain=10.0, **args)
+        assert any("smaller than one dst z bin" in w for w in out["warnings"])
+        assert not compile_stance_offset_rows(gain=10.0, **self.ARGS)["warnings"]
+
+    @pytest.mark.asyncio
+    async def test_dry_run_does_not_write_and_live_calls_build(self, mock_client):
+        mock_client.build_reflex_mapping = AsyncMock(return_value={"ok": True})
+        kw = dict(
+            src_area_id="s",
+            dst_area_id="d",
+            morphology_name="m",
+            gain=10.0,
+            dst_depth=20,
+            joint_range=[-90.0, 90.0],
+            **{k: v for k, v in self.ARGS.items() if k not in ("depth", "joint_range")},
+        )
+        dry = await mock_client.build_stance_relative_mapping(**kw)
+        assert dry["dry_run"] and "table_text" in dry
+        mock_client.build_reflex_mapping.assert_not_awaited()
+        live = await mock_client.build_stance_relative_mapping(dry_run=False, **kw)
+        assert live["build"] == {"ok": True}
+        sent = mock_client.build_reflex_mapping.await_args.kwargs["voxel_mappings"]
+        assert sent == live["voxel_mappings"]

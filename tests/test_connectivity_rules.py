@@ -8,7 +8,7 @@ from feagi_mcp.connectivity_rules import (
     build_connectivity_proposal,
     compact_source_x_filter_patterns,
     dest_kind_from_cortical_id,
-    motor_z_errors_for_patterns,
+    motor_z_warnings_for_patterns,
     validate_morphology_parameters,
     validate_pattern_element,
 )
@@ -107,20 +107,20 @@ class TestMotorZ:
     def test_opse_incremental_detected_from_flag_subunit(self):
         assert dest_kind_from_cortical_id(_OPSE_INC) == "positional_servo_incremental"
 
-    def test_rejects_high_z_on_absolute_servo(self):
-        errors = motor_z_errors_for_patterns(
+    def test_warns_not_rejects_high_z_on_absolute_servo(self):
+        warnings = motor_z_warnings_for_patterns(
             [[[382, "*", "*"], ["?", "?", 17]]],
             dest_kind_from_cortical_id(_OPSE_ABS),
         )
-        assert errors
-        assert "z=0 is max" in errors[0]
+        assert warnings
+        assert "mean of all active z" in warnings[0]
 
     def test_allows_dest_z_zero_on_absolute_servo(self):
-        errors = motor_z_errors_for_patterns(
+        warnings = motor_z_warnings_for_patterns(
             [[[382, "*", "*"], ["?", "?", 0]]],
             dest_kind_from_cortical_id(_OPSE_ABS),
         )
-        assert errors == []
+        assert warnings == []
 
 
 class TestPropose:

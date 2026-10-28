@@ -237,3 +237,52 @@ async def test_measure_bodies_posts_the_measure_action(monkeypatch: pytest.Monke
         [], [], control_url="http://example.com:9"
     )
     assert result["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_reset_episode_posts_keyframe_or_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "feagi_mcp.mujoco_scene_control.discover_endpoint",
+        lambda _controller_id: _endpoint(),
+    )
+    seen: list[dict[str, Any]] = []
+
+    async def poster(url: str, payload: dict[str, Any], _timeout: float) -> dict[str, Any]:
+        seen.append({"url": url, "payload": payload})
+        return {"ok": True, "result": {"episode_id": 3}}
+
+    control = MujocoSceneControl(poster=poster)
+    result = await control.reset_episode("stand")
+    assert result == {"ok": True, "action": "reset_episode", "result": {"episode_id": 3}}
+    assert seen[0]["url"] == "http://127.0.0.1:44000"
+    assert seen[0]["payload"] == {"action": "reset_episode", "keyframe": "stand"}
+
+    await control.reset_episode(None)
+    await control.reset_episode("  ")
+    assert seen[1]["payload"] == {"action": "reset_episode"}
+    assert seen[2]["payload"] == {"action": "reset_episode"}
+
+    bad = await control.reset_episode("home", control_url="http://example.com:9")
+    assert bad["ok"] is False and len(seen) == 3
+
+
+@pytest.mark.asyncio
+async def test_reset_episode_reports_controller_errors_and_missing_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "feagi_mcp.mujoco_scene_control.discover_endpoint",
+        lambda _controller_id: _endpoint(),
+    )
+
+    async def rejecting(_url: str, _payload: dict[str, Any], _t: float) -> dict[str, Any]:
+        return {"ok": False, "error": "Unknown keyframe 'nope'."}
+
+    result = await MujocoSceneControl(poster=rejecting).reset_episode("nope")
+    assert result["ok"] is False and "Unknown keyframe" in result["error"]
+
+    monkeypatch.setattr(
+        "feagi_mcp.mujoco_scene_control.discover_endpoint", lambda _controller_id: None
+    )
+    result = await MujocoSceneControl(poster=rejecting).reset_episode("home")
+    assert result["ok"] is False and result["error"] == "control_url_unavailable"

@@ -100,3 +100,22 @@ def test_read_only_tool_passes_guard(monkeypatch):
 def test_mutating_tools_not_read_only():
     for name in ("stimulate_area", "send_motor_command", "upload_genome", "pause_burst_engine"):
         assert not server.mcp._is_read_only(name), name
+
+
+def test_snapshot_tools_hand_off_via_studio(monkeypatch, tmp_path):
+    monkeypatch.setenv(sh.VIA_STUDIO_ENV, "1")
+    monkeypatch.setattr(server.snapshot_manager, "_directory", tmp_path / "snaps")
+    out = asyncio.run(server.snapshot_genome("x"))
+    assert out["error"] == "use_studio_snapshot" and out["use_tool"] == "save_brain_snapshot"
+    out = asyncio.run(server.restore_genome_snapshot("x"))
+    assert out["use_tool"] == "restore_brain_snapshot"
+    out = asyncio.run(server.list_genome_snapshots())
+    assert out["use_tool"] == "list_brain_snapshots"
+    assert not (tmp_path / "snaps").exists()
+
+
+def test_snapshot_standalone_keeps_local_behavior(monkeypatch):
+    out = asyncio.run(server.snapshot_genome("bad label!"))
+    assert out.get("error") != "use_studio_snapshot"
+    out = asyncio.run(server.list_genome_snapshots())
+    assert "count" in out
