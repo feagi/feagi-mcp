@@ -311,7 +311,7 @@ When reporting bugs or requesting features:
 
 ## Questions?
 
-- GitHub Discussions: https://github.com/Neuraville/feagi-mcp/discussions
+- GitHub Issues: https://github.com/feagi/feagi-mcp/issues
 - Discord: https://discord.gg/feagi
 - Email: feagi@neuraville.com
 

@@ -11,13 +11,30 @@
   "repository": "https://github.com/feagi/feagi-mcp",
   "license": "Apache-2.0",
   "keywords": ["feagi", "neuroscience", "spiking-neural-network", "robotics", "neurorobotics", "mujoco", "mcp"],
+  "icon": "./.claude-plugin/icon.png",
+  "userConfig": {
+    "feagi_host": {
+      "type": "string",
+      "title": "FEAGI host",
+      "description": "Host name or IP address of the FEAGI API the server connects to.",
+      "default": "localhost"
+    },
+    "feagi_port": {
+      "type": "number",
+      "title": "FEAGI port",
+      "description": "TCP port of the FEAGI API.",
+      "default": 8000,
+      "min": 1,
+      "max": 65535
+    }
+  },
   "mcpServers": {
     "feagi": {
       "command": "uvx",
       "args": ["feagi-mcp@0.1.4"],
       "env": {
-        "FEAGI_HOST": "${FEAGI_HOST:-localhost}",
-        "FEAGI_PORT": "${FEAGI_PORT:-8000}"
+        "FEAGI_HOST": "${user_config.feagi_host}",
+        "FEAGI_PORT": "${user_config.feagi_port}"
       }
     }
   }
