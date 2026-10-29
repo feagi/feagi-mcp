@@ -1,5 +1,13 @@
-# Ruff version must stay aligned with [project.optional-dependencies].dev in pyproject.toml
-# and with .github/workflows/ci.yml (pip install -e ".[dev]" then ruff check / ruff format --check).
+# Mirrors .github/workflows/ci.yml so failures show up before push, not in CI.
+# Ruff and mypy versions must stay aligned with [project.optional-dependencies].dev in
+# pyproject.toml (CI runs pip install -e ".[dev]").
+#
+# Install both hook types once per clone:  pre-commit install
+#   commit: ruff check + format --check, mypy src/
+#   push:   pytest
+# mypy and pytest import the package, so they run in the project venv (venv/, or the active
+# python when there is none).
+default_install_hook_types: [pre-commit, pre-push]
 repos:
   - repo: local
     hooks:
@@ -10,3 +18,18 @@ repos:
         additional_dependencies: [ruff==0.16.10]
         pass_filenames: false
         always_run: true
+        stages: [pre-commit]
+      - id: mypy-ci
+        name: mypy src/ (CI parity)
+        entry: bash -c 'PY=venv/bin/python; [ -x "$PY" ] || PY=python; "$PY" -m mypy src/'
+        language: system
+        pass_filenames: false
+        types: [python]
+        stages: [pre-commit]
+      - id: pytest-ci
+        name: pytest (CI parity)
+        entry: bash -c 'PY=venv/bin/python; [ -x "$PY" ] || PY=python; "$PY" -m pytest -q'
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

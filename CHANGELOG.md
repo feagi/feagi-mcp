@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Development**: pre-commit now runs `mypy src/` on commit and `pytest` on push, matching CI; `mypy` pinned to `2.4.1` in the `dev` extra.
+
 ## [0.1.4] - 2026-10-28
 
 ### Changed
