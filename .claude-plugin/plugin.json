@@ -1,5 +1,6 @@
 {
   "name": "feagi",
+  "displayName": "FEAGI",
   "version": "0.1.4",
   "description": "Inspect, build, wire, test, and debug brains in a running FEAGI instance. Bundles the feagi MCP server and a skill covering FEAGI concepts, circuit-building policy, connectivity, memory and plasticity, embodiment, and diagnostics.",
   "author": {
@@ -12,6 +13,7 @@
   "license": "Apache-2.0",
   "keywords": ["feagi", "neuroscience", "spiking-neural-network", "robotics", "neurorobotics", "mujoco", "mcp"],
   "icon": "./.claude-plugin/icon.png",
+  "supportUrl": "mailto:feagi@neuraville.com",
   "userConfig": {
     "feagi_host": {
       "type": "string",
