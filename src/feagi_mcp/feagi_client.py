@@ -3927,9 +3927,15 @@ class FeagiClient:
             if ref in mapping:
                 resolved.append(ref)
                 continue
-            hits = [cid for cid, name in mapping.items() if isinstance(name, str) and name.strip() == ref]
+            hits = [
+                cid
+                for cid, name in mapping.items()
+                if isinstance(name, str) and name.strip() == ref
+            ]
             if len(hits) > 1:
-                return list(refs), f"area name '{ref}' matches {len(hits)} areas ({', '.join(hits)}); use an id"
+                matches = ", ".join(hits)
+                error = f"area name '{ref}' matches {len(hits)} areas ({matches}); use an id"
+                return list(refs), error
             resolved.append(hits[0] if hits else ref)
         return resolved, None
 

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-10-28
+
+### Changed
+- **Dependencies**: pin `feagi-core==2.6.12` (Python SDK; pins `feagi-rust-py-libs==0.0.120` and Brain Visualizer `2.9.0`).
+
 ## [0.1.3] - 2026-10-27
 
 ### Changed

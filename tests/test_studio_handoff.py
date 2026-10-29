@@ -114,7 +114,7 @@ def test_snapshot_tools_hand_off_via_studio(monkeypatch, tmp_path):
     assert not (tmp_path / "snaps").exists()
 
 
-def test_snapshot_standalone_keeps_local_behavior(monkeypatch):
+def test_snapshot_standalone_keeps_local_behavior():
     out = asyncio.run(server.snapshot_genome("bad label!"))
     assert out.get("error") != "use_studio_snapshot"
     out = asyncio.run(server.list_genome_snapshots())
