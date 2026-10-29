@@ -30,9 +30,12 @@ def value_to_z_bin(
 
 
 def z_bin_to_value(
-    z: int, range_min: float, range_max: float, depth: int, z0_is_max: bool = True
+    z: float, range_min: float, range_max: float, depth: int, z0_is_max: bool = True
 ) -> float:
-    """Inverse of :func:`value_to_z_bin` (the target the decoder yields for one active z)."""
+    """Inverse of :func:`value_to_z_bin` (the target the decoder yields for one active z).
+
+    ``z`` may be fractional, e.g. the mean z of several active voxels.
+    """
     frac = z / (depth - 1)
     pos01 = 1.0 - frac if z0_is_max else frac
     return range_min + (range_max - range_min) * pos01
