@@ -312,7 +312,7 @@ When reporting bugs or requesting features:
 ## Questions?
 
 - GitHub Issues: https://github.com/feagi/feagi-mcp/issues
-- Discord: https://discord.gg/feagi
+- Discord: https://discord.BrainsForRobots.com
 - Email: feagi@neuraville.com
 
 ## License

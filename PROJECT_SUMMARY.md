@@ -302,7 +302,7 @@ feagi-mcp/
 - **Repository:** https://github.com/Neuraville/feagi-mcp
 - **Documentation:** See `docs/` folder
 - **FEAGI Website:** https://feagi.org
-- **Discord:** https://discord.gg/feagi
+- **Discord:** https://discord.BrainsForRobots.com
 - **MCP Protocol:** https://modelcontextprotocol.io
 
 ## License

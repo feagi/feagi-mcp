@@ -259,4 +259,4 @@ Apache-2.0 - Copyright 2026 Neuraville Inc.
 ## Support
 
 - Issues: https://github.com/Neuraville/feagi-mcp/issues
-- Discord: https://discord.gg/PTVC8fyGN8
+- Discord: https://discord.BrainsForRobots.com

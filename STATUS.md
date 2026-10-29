@@ -250,7 +250,7 @@ pip install -e . --upgrade
 
 ### For v0.1.0 Users
 - 📝 GitHub Issues: Bug reports and feature requests
-- 💬 Discord: https://discord.gg/feagi
+- 💬 Discord: https://discord.BrainsForRobots.com
 - 📧 Email: feagi@neuraville.com
 - 📖 Docs: See `docs/` folder
 

@@ -133,7 +133,7 @@ Once working:
 - **Quick questions:** See `docs/FAQ.md`
 - **Tool reference:** See `docs/API_REFERENCE.md`
 - **Issues:** https://github.com/Neuraville/feagi-mcp/issues
-- **Discord:** https://discord.gg/feagi
+- **Discord:** https://discord.BrainsForRobots.com
 
 ---
 

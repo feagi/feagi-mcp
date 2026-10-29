@@ -221,4 +221,4 @@ python -m twine check --strict dist/*
 
 - GitHub Issues: https://github.com/Neuraville/feagi-mcp/issues
 - FEAGI Docs: https://feagi.org
-- Discord: https://discord.gg/feagi
+- Discord: https://discord.BrainsForRobots.com
