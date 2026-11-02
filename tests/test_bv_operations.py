@@ -1,5 +1,8 @@
 """Tests for Brain Visualizer operation registry and path resolution."""
 
+import json
+
+import httpx
 import pytest
 
 from feagi_mcp.bv_operations import (
@@ -8,6 +11,25 @@ from feagi_mcp.bv_operations import (
     list_operation_summaries,
     resolve_path,
 )
+from feagi_mcp.feagi_client import FeagiClient
+
+REGION_BODY_OPS = (
+    "put_region_region",
+    "delete_region_region",
+    "delete_region_region_and_members",
+)
+
+
+def _client_with_transport(requests: list[httpx.Request]) -> FeagiClient:
+    """FeagiClient whose HTTP transport records requests and returns an empty JSON object."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={})
+
+    client = FeagiClient()
+    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return client
 
 
 def test_all_operation_ids_unique():
@@ -59,3 +81,62 @@ def test_classifier_and_modulator_routes_match_brain_visualizer():
     mcp = {(op.method, op.path_template) for op in BV_OPERATIONS}
     assert bv, "no classifier/modulator paths parsed from FEAGIHTTPAddressList.gd"
     assert bv <= mcp, f"missing from bv_operations: {sorted(bv - mcp)}"
+
+
+def test_region_ops_declare_region_id_body():
+    for op_id in REGION_BODY_OPS:
+        assert BV_OPERATION_BY_ID[op_id].required_body_fields == ("region_id",)
+
+
+def test_only_verified_ops_declare_required_body_fields():
+    declared = {op.operation_id for op in BV_OPERATIONS if op.required_body_fields}
+    assert declared == set(REGION_BODY_OPS)
+
+
+@pytest.mark.parametrize("op_id", REGION_BODY_OPS)
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {},
+        {"query": {"region_id": "x"}},
+        {"json_body": {}},
+        {"json_body": ["x"]},
+    ],
+)
+async def test_missing_required_body_returns_invalid_body_without_http(op_id, kwargs):
+    requests: list[httpx.Request] = []
+    client = _client_with_transport(requests)
+    try:
+        result = await client.brain_visualizer_operation(op_id, **kwargs)
+    finally:
+        await client.close()
+    assert result["error"] == "invalid_body"
+    assert result["operation_id"] == op_id
+    assert result["required_body_fields"] == ["region_id"]
+    assert result["message"] == f"{op_id} needs a JSON body with: region_id"
+    assert requests == []
+
+
+async def test_delete_region_sends_json_body():
+    requests: list[httpx.Request] = []
+    client = _client_with_transport(requests)
+    try:
+        result = await client.brain_visualizer_operation(
+            "delete_region_region", json_body={"region_id": "x"}
+        )
+    finally:
+        await client.close()
+    assert result == {}
+    assert len(requests) == 1
+    req = requests[0]
+    assert req.method == "DELETE"
+    assert req.url.path == "/v1/region/region"
+    assert req.headers["content-type"] == "application/json"
+    assert json.loads(req.content) == {"region_id": "x"}
+
+
+def test_list_operation_summaries_exposes_required_body_fields():
+    rows = {r["operation_id"]: r for r in list_operation_summaries()}
+    for op_id in REGION_BODY_OPS:
+        assert rows[op_id]["required_body_fields"] == ["region_id"]
+    assert "required_body_fields" not in rows["get_genome_file_name"]

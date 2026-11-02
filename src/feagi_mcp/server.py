@@ -5,7 +5,7 @@ import json
 import logging
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from mcp.server.fastmcp import FastMCP
@@ -13,6 +13,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
 from feagi_mcp.aligned_trace import record_aligned_trace_window
+from feagi_mcp.area_refs import resolve_area_arguments
 from feagi_mcp.balance_measurement import measure_balance_window
 from feagi_mcp.bv_operations import list_operation_summaries
 from feagi_mcp.composer_simulator_packs import ComposerSimulatorPacksClient
@@ -31,6 +32,7 @@ from feagi_mcp.genome_artifact import (
     decode_genome_artifact,
     is_genome_artifact_file_name,
 )
+from feagi_mcp.genome_tools import read_genome_file
 from feagi_mcp.io_cortical_id_encode import encode_io_cortical_id
 from feagi_mcp.live_state_drift import gather_live_state_drift
 from feagi_mcp.memory_diagnostics import CODE_CREATION_FAILED, memory_area_diagnostics
@@ -41,6 +43,7 @@ from feagi_mcp.placement_policy import (
     parse_region_coordinate_3d,
     suggest_anchor_positions,
 )
+from feagi_mcp.run_analysis import analyze_spikes_csv
 from feagi_mcp.snapshots import SnapshotManager, validate_label
 from feagi_mcp.studio_handoff import (
     handoff_message,
@@ -88,6 +91,9 @@ class _StudioAwareFastMCP(FastMCP):
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
         if not self._is_read_only(name) and studio_manages_feagi(config.host, config.port):
             raise ToolError(handoff_message(name))
+        arguments = await resolve_area_arguments(
+            name, arguments, feagi.get_cortical_id_name_mapping
+        )
         return await super().call_tool(name, arguments)
 
 
@@ -750,6 +756,226 @@ async def run_stimulus_protocol(
     return await feagi.run_stimulus_protocol(steps, record_areas, tail_bursts, mode)
 
 
+@mcp.tool()
+async def hold_stimulus(
+    area: str,
+    voxels: list[list[int]],
+    duration_s: float,
+    start_delay_s: float = 0.0,
+    background: bool = False,
+    verify: bool = True,
+) -> dict[str, Any]:
+    """Hold voxels of one area firing on every burst for ``duration_s`` seconds.
+
+    Posts the stimulus on a wall-clock schedule at twice the burst rate and never reads the
+    burst counter or fire queue per burst, so no burst is skipped at 200 Hz (unlike a
+    ``run_stimulus_protocol`` hold, which also reads the ~100 KB fire queue per burst). With
+    ``verify`` the area's Fire Ledger frames are read back and every burst in
+    ``(first_post_burst, last_post_burst + 1]`` is checked for all held voxels: ``landed``
+    reports checked/landed/missed bursts. The result is under 2 KB. Max 30 s.
+
+    ``background=True`` returns at once with a ``hold_id`` and keeps holding, so a trace or
+    ``record_spikes`` can run beside it; read the outcome with ``get_stimulus_hold``.
+    ``start_delay_s`` delays the first post (a trace-relative start).
+
+    Args:
+        area: Area id or name
+        voxels: ``[[x, y, z], ...]`` to force-fire every burst
+        duration_s: Hold length in seconds (0 < d <= 30)
+        start_delay_s: Seconds to wait before the first post (default 0)
+        background: Return immediately and hold in the background (default False)
+        verify: Read back the ledger and report which bursts landed (default True)
+    """
+    return await feagi.hold_stimulus(area, voxels, duration_s, start_delay_s, background, verify)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def get_stimulus_hold(hold_id: str | None = None, cancel: bool = False) -> dict[str, Any]:
+    """Outcome of a ``hold_stimulus`` hold (state, posts, ``landed`` check), or list holds.
+
+    Args:
+        hold_id: Id returned by ``hold_stimulus``; omit to list recent holds
+        cancel: Stop a running hold first (it then reports what it posted)
+    """
+    return await feagi.get_stimulus_hold(hold_id, cancel)
+
+
+@mcp.tool()
+async def schedule_stimulus(
+    entries: list[dict[str, Any]], repeat_period_bursts: int | None = None
+) -> dict[str, Any]:
+    """Force-fire voxels at exact burst offsets, inside the burst loop (no wall-clock jitter).
+
+    ``entries`` is ``[{"burst_offset": 0, "stimuli": [{"area_id": <id or name>,
+    "coordinates": [[x, y, z], ...]}]}]``. Offset 0 is the next burst; FEAGI turns offsets into
+    absolute burst numbers when it accepts the request, fires all areas of one entry on the same
+    burst, and fires an entry that is already late on the next burst. Returns ``schedule_id``,
+    ``start_burst`` and ``end_burst`` (``end_burst`` is null for a repeating schedule). Stop a
+    schedule with ``cancel_stimulus``; list active ones with ``get_stimulus_schedule``.
+    To hold an area on, use one entry at offset 0 with ``repeat_period_bursts=1`` and cancel it
+    with ``cancel_stimulus``.
+
+    Args:
+        entries: Burst-offset entries (each needs a non-empty ``stimuli`` list)
+        repeat_period_bursts: Optional. Replay the entries at ``offset + k * period`` until
+            cancelled; must be greater than the largest ``burst_offset``
+    """
+    return await feagi.schedule_stimulus(entries, repeat_period_bursts)
+
+
+@mcp.tool()
+async def cancel_stimulus(schedule_id: int) -> dict[str, Any]:
+    """Cancel the entries of a ``schedule_stimulus`` schedule that have not fired yet.
+
+    Args:
+        schedule_id: Id returned by ``schedule_stimulus`` (404 once the schedule has finished)
+    """
+    return await feagi.cancel_stimulus(schedule_id)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def get_stimulus_schedule() -> dict[str, Any]:
+    """Active ``schedule_stimulus`` schedules: ids, burst range, remaining entries, next burst.
+
+    A repeating schedule has ``end_burst`` null and ``repeat: {period_bursts}``; it stays listed
+    until ``cancel_stimulus``.
+    """
+    return await feagi.get_stimulus_schedule()
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def record_spikes(
+    areas: list[str], bursts: int = 200, csv_path: str | None = None, max_runs: int = 20
+) -> dict[str, Any]:
+    """Burst-exact firing of up to 64 areas over the next ``bursts`` bursts.
+
+    Reads FEAGI's Fire Ledger (``/v1/burst_engine/fire_history``): one frame per burst per
+    area, silent bursts included, so no burst is sampled away (``monitor_activity`` and
+    ``get_fire_queue_detailed`` see about one burst in five). The areas are subscribed for
+    the recording and released after it. Starts now and returns when ``bursts`` bursts have
+    passed (max 20000); start a ``hold_stimulus(background=True)`` first to drive the areas.
+
+    Returns a compact summary, never rows: per area ``fired_bursts``, ``fire_fraction``,
+    ``total_spikes`` (memory neurons included), ``memory_spikes`` and ``top_memory_neurons``
+    (dynamic memory neurons have no voxel, so they never appear in ``top_voxels``),
+    ``first_fire_burst``/``last_fire_burst``, fire ``runs`` (capped) and the ``top_voxels``; plus
+    ``first_burst``, ``last_burst``, ``bursts_observed`` and ``gaps``
+    (bursts with no ledger frame). Pass ``csv_path`` to write every spike as
+    ``burst,area_id,area_name,x,y,z,memory_neuron_id``.
+
+    Args:
+        areas: Area ids, names or region ids (1-64 after region expansion)
+        bursts: Bursts to record (1-20000, default 200)
+        csv_path: Optional CSV file for the spike rows
+        max_runs: Fire runs listed per area (default 20; ``runs_truncated`` says if more exist;
+            ``run_count`` is always the full count)
+    """
+    return await feagi.record_spikes(areas, bursts, csv_path, max_runs)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def analyze_run(
+    csv_path: str,
+    ring: dict[str, Any] | None = None,
+    port_in_window: list[dict[str, Any]] | None = None,
+    window_counts: list[dict[str, Any]] | None = None,
+    duty: dict[str, Any] | None = None,
+    first_burst: int | None = None,
+    last_burst: int | None = None,
+) -> dict[str, Any]:
+    """Acceptance metrics from a spikes CSV, as compact JSON (never rows).
+
+    ``csv_path`` is a Trainer run's ``neural/spikes.csv`` (the ``dir`` from ``list_run_data``;
+    columns ``burst,area,x,y,z``) or a ``record_spikes`` ``csv_path``
+    (``burst,area_id,area_name,x,y,z,memory_neuron_id``). Areas are named as in the file.
+    A phase area's phase at a burst is the ``z`` bins it fires in; while silent, the last
+    phase is carried forward. Metrics (each optional):
+
+    - ``ring``: ``{area, anchor_bin=0, bins?}`` period in bursts between entries into
+      ``anchor_bin`` (``period_mean``, ``period_sd``, ``cycles``) and ``bins_visited``.
+    - ``port_in_window``: list of ``{port, phase_area, bins, lag=0}``: ``pct_inside`` of the
+      port's spikes whose phase ``lag`` bursts earlier is in ``bins`` (a list, or ``"3..7"``).
+    - ``window_counts``: list of ``{area, phase_area, bins, lag=0}``: the area's spikes in and
+      out of the phase window (e.g. resets in/out of window).
+    - ``duty``: ``{area, phase_area, bins, half_bins?}`` fire fraction and silent episodes
+      (``off_episodes``) per half-cycle of the phase area (lower half of ``0..bins-1`` unless
+      ``half_bins`` is given).
+
+    Args:
+        csv_path: Spikes CSV file
+        ring: Ring period request
+        port_in_window: Port-versus-phase-window requests
+        window_counts: Spikes-in/out-of-window requests
+        duty: Duty / off-episode request
+        first_burst: Ignore bursts before this one
+        last_burst: Ignore bursts after this one
+    """
+    return analyze_spikes_csv(
+        csv_path,
+        ring=ring,
+        port_in_window=port_in_window,
+        window_counts=window_counts,
+        duty=duty,
+        first_burst=first_burst,
+        last_burst=last_burst,
+    )
+
+
+@mcp.tool()
+async def build_circuit_from_spec(spec_json: str, dry_run: bool = True) -> dict[str, Any]:
+    """Create a region, its areas, morphologies and mappings from one JSON spec.
+
+    Spec keys: ``region`` ({title, coordinates_2d, coordinates_3d, parent_region_id?} or
+    {region_id}), ``areas`` ([{name, dimensions, position?, properties?}]), ``morphologies``,
+    ``mappings`` ([{src, dst, rules, replace?}]) and ``templates`` (expanded in the spec):
+
+    - ``port``: [1,1,N] leaky integrator; ``threshold``, ``psp``, ``input`` (and ``leak``,
+      ``refractory``); self-hold mapping sized by threshold - input <= s < threshold.
+    - ``onset_pulse``: ``gate`` -> ``<name>_Onset`` (one burst) via ``<name>_Delay`` inhibition.
+    - ``ring_cpg``: N-bin ring with self-hold, ``lateral_psc`` excitation + wrap, inhibition,
+      ``drive`` area, optional ``seed`` and shifted ``readouts``; returns ``predicted_step_bursts``
+      flagged uncalibrated: check the period with ``record_spikes``.
+    - ``servo_channel_two_rest``: two rest voxels per OPU channel (stance z+1 / z-1) from a
+      ``tonic`` area, per-source offset rows with coactive-z compensation, sources inhibiting
+      their own rest neuron.
+    - ``phase_window_gate``: gate area passing ``pulse`` to ``target`` only while the ``phase``
+      area (``phase_bins`` z bins) is inside ``window`` (list or ``"a..b"``); optional tonic
+      ``enable``; out-of-window phase bins inhibit. ``threshold``, ``leak``, ``accumulate``,
+      ``*_psc``/``*_psp`` and ``inhibit_psc`` (default sized) are checked: enable alone < T,
+      pulse alone < T (>= T without enable), enable + pulse >= T, enable + pulse - inhibition < T
+      (``V <- V (1 - leak) + I``, steady state); a violation fails the dry run.
+
+    Memory and plasticity: an area may set ``cortical_type: "MEMORY"`` (id must come back with
+    prefix ``m``), memory ``properties`` (``temporal_depth``, ``neuron_init_lifespan``,
+    ``neuron_lifespan_growth_rate``, ``neuron_longterm_mem_threshold``, ``memory_neuron_cap``,
+    ``ltm_eviction``), ``mp_encoding`` (mode or {mode, delta_quantization?,
+    ratio_quantization?}) and ``modulators`` ([ids], area-level, e.g. ``memory.formation``).
+    Rules take ``morphology: episodic_memory`` (must end in a MEMORY area) or
+    ``associative_memory`` (must start in one), and ``plasticity_mode`` stdp/rstdp with
+    ``plasticity_window``, ``plasticity_eta`` (0..1], ``max_weight``, ``plasticity_constant``,
+    ``ltp_multiplier``/``ltd_multiplier``, ``eligibility_decay_bursts`` (rstdp only; rstdp needs
+    ``modulators``) and ``delay`` >= 1. A mapping may carry ``modulators`` (applied to rules
+    without their own) and ``frozen: true`` (frozen through FEAGI's ``plasticity_frozen`` route
+    after its rules are written and read back; flag and mode kept; needs a plastic rule).
+    Illegal mixes fail the dry run.
+
+    Also: ``delete`` ([{src, dst}]: remove those mappings before the new ones are written) and
+    ``edit_areas`` ([{name, properties}] on live areas of ``region.region_id``, which must be an
+    existing region; add areas to it with ordinary ``areas`` entries that carry a ``position``).
+
+    ``dry_run`` (default) validates and returns the full ``calls`` list, ``sizing`` numbers and
+    ``external`` area names it would resolve, without any request. A real run (``dry_run=false``)
+    aborts before any create on a name conflict, stops at the first failure (no rollback: take
+    ``snapshot_genome`` first) and returns ``created`` ids plus a ``verification`` read (areas
+    found, rules and synapse count per mapping, mappings with zero synapses).
+
+    Args:
+        spec_json: The spec as a JSON string
+        dry_run: Only validate and list the calls (default True)
+    """
+    return await feagi.build_circuit_from_spec(spec_json, dry_run)
+
+
 @mcp.tool(annotations=READ_ONLY)
 async def list_cortical_areas(
     name_contains: str | None = None,
@@ -937,7 +1163,9 @@ async def upload_connectome(file_path: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def download_region_genome(region_id: str) -> dict[str, Any]:
+async def download_region_genome(
+    region_id: str, prune_morphologies: bool = True, file_path: str | None = None
+) -> dict[str, Any]:
     """Download a brain-region subtree as a standalone genome JSON.
 
     Exports only the cortical areas, morphologies, brain regions, and
@@ -951,14 +1179,26 @@ async def download_region_genome(region_id: str) -> dict[str, Any]:
     Natural language: "export brain region", "save neural circuit",
     "download region as genome".
 
+    FEAGI lists every morphology of the brain in the export; by default only the
+    morphologies that a mapping rule of the exported areas, or of a mapping entering
+    the branch from outside, names are kept. Mappings entering the branch are cut by the
+    core export (they live in their source areas): they are listed in
+    ``export_notes.entering_mappings`` (inline) or ``entering_mappings`` (``file_path``) and
+    must be re-created when the region is merged.
+
     Args:
         region_id: UUID of the root brain region to export
             (e.g. from get_brain_regions output).
+        prune_morphologies: Drop morphologies no exported mapping references
+            (default True); False returns the raw export.
+        file_path: Write the export to this file and return ``{file_path, bytes, summary}``
+            instead of the inline JSON (about 25 KB for a small region); pass the path to
+            ``validate_genome(file_path=...)``.
 
     Returns:
         Region genome JSON (same shape as a full genome download).
     """
-    result = await feagi.download_region_genome(region_id)
+    result = await feagi.download_region_genome(region_id, prune_morphologies, file_path)
     return result
 
 
@@ -1378,26 +1618,42 @@ async def trace_signal_path(from_area: str, to_area: str, max_hops: int = 5) -> 
 
 
 @mcp.tool(annotations=READ_ONLY)
-async def validate_genome(genome_json: str) -> dict[str, Any]:
+async def validate_genome(genome_json: str = "", file_path: str | None = None) -> dict[str, Any]:
     """Validate a genome structure without uploading it.
 
     Checks for common issues: missing required fields, invalid cortical IDs,
     malformed connections, parameter ranges, and structural problems.
 
+    Pass exactly one of ``genome_json`` (inline JSON) or ``file_path`` (a genome file on
+    disk, e.g. a region export saved by a tool; ``~`` is expanded).
+
     Args:
         genome_json: Genome JSON string to validate
+        file_path: Path of a genome JSON file to validate
 
     Returns:
         Validation results with issues, warnings, and suggestions
     """
-    try:
-        genome = json.loads(genome_json)
-    except json.JSONDecodeError as e:
+    if bool(genome_json) == bool(file_path):
         return {
             "valid": False,
-            "issues": [f"Invalid JSON: {e}"],
+            "issues": ["pass exactly one of genome_json or file_path"],
             "warnings": [],
         }
+    if file_path:
+        try:
+            genome = read_genome_file(file_path)
+        except ValueError as e:
+            return {"valid": False, "issues": [str(e)], "warnings": []}
+    else:
+        try:
+            genome = json.loads(genome_json)
+        except json.JSONDecodeError as e:
+            return {
+                "valid": False,
+                "issues": [f"Invalid JSON: {e}"],
+                "warnings": [],
+            }
 
     issues = []
     warnings = []
@@ -1551,16 +1807,25 @@ async def get_agent_connection_endpoints() -> dict[str, Any]:
 
 
 @mcp.tool(annotations=READ_ONLY)
-async def get_runtime_metrics() -> dict[str, Any]:
+async def get_runtime_metrics(measure_s: float = 0.0) -> dict[str, Any]:
     """Get comprehensive runtime metrics.
 
     Returns neuron counts, cortical area counts, burst statistics, and brain readiness.
     Use this to understand overall system state and resource usage.
 
+    ``burst_timing`` states what FEAGI cannot report: burst duration (mean, max) and missed
+    bursts are not tracked by feagi-core, so ``burst_timing.available`` is false and the exact
+    endpoint gap is named. With ``measure_s`` > 0 (max 10 s) the burst counter is compared
+    with the wall clock: ``measured`` holds the achieved rate, mean period and shortfall in
+    bursts (a period measurement, not a duration).
+
+    Args:
+        measure_s: Seconds to measure the achieved burst rate (default 0 = skip)
+
     Returns:
         Runtime metrics including neuron_count, cortical_area_count, burst_count, frequency
     """
-    result = await feagi.get_runtime_metrics()
+    result = await feagi.get_runtime_metrics(measure_s)
     return result
 
 
@@ -2391,6 +2656,8 @@ async def describe_connectivity_rules(
     include_classes: list[str] | None = None,
     limit: int = 200,
     offset: int = 0,
+    detail: Literal["names", "full"] = "names",
+    include_pattern_language: bool = False,
 ) -> dict[str, Any]:
     """Return morphology catalog with explicit use-case guidance per rule.
 
@@ -2401,16 +2668,23 @@ async def describe_connectivity_rules(
         include_classes: Optional class filter list (e.g. ["core"], ["custom"]).
         limit: Max rows to return (default 200, hard cap 500).
         offset: Skip first N rows after filtering.
+        detail: ``"names"`` (default) returns name, class and a one-line
+            description per rule. ``"full"`` returns full use-case metadata plus
+            the ``pattern_language`` catalog and authoring note.
+        include_pattern_language: Add ``pattern_language`` and ``authoring_note``
+            to a ``"names"`` response.
 
     Returns:
-        Morphology rows with use-case metadata, plus a top-level
-        ``pattern_language`` catalog. Call ``propose_connectivity_rule`` before
-        creating a custom rule.
+        Compact rows by default; full rows and pattern language with
+        ``detail="full"``. Call ``propose_connectivity_rule`` before creating a
+        custom rule.
     """
     return await feagi.describe_connectivity_rules(
         include_classes=include_classes,
         limit=limit,
         offset=offset,
+        detail=detail,
+        include_pattern_language=include_pattern_language,
     )
 
 
@@ -2550,11 +2824,11 @@ async def delete_cortical_mapping(src_area: str, dst_area: str) -> dict[str, Any
     """Delete all connections between two cortical areas.
 
     Args:
-        src_area: Source cortical area ID
-        dst_area: Destination cortical area ID
+        src_area: Source cortical area ID or exact display name
+        dst_area: Destination cortical area ID or exact display name
 
     Returns:
-        Deletion result with success status
+        Deletion result with success status. An unknown or ambiguous name is an error.
     """
     result = await feagi.delete_cortical_mapping(src_area, dst_area)
     return result
@@ -2596,13 +2870,25 @@ async def get_cortical_id_name_mapping() -> dict[str, Any]:
 
 
 @mcp.tool(annotations=READ_ONLY)
-async def get_cortical_map_detailed() -> dict[str, Any]:
+async def get_cortical_map_detailed(
+    compact: bool = False, synapse_counts: bool = True, cortical_id: str | None = None
+) -> dict[str, Any]:
     """Outgoing connectivity map per area (GET cortical_map_detailed).
 
     Same data Brain Visualizer loads when refreshing mappings. Natural language: use for
     \"what connects to what\" at the mapping-destination level.
+
+    ``compact=True`` returns area names and dimensions and, per edge, the rules (rule, psc,
+    delay, plastic) and the realized synapse count only. Synapse counts need the synapse
+    lists of every edge endpoint; pass ``synapse_counts=False`` to skip them.
+
+    Args:
+        compact: Names, dimensions, rules and synapse counts only (default False)
+        synapse_counts: With compact, include per-edge synapse counts (default True)
+        cortical_id: Area id or exact name: keep only the mappings where it is source or
+            destination (default: the whole map)
     """
-    result = await feagi.get_cortical_map_detailed()
+    result = await feagi.get_cortical_map_detailed(compact, synapse_counts, cortical_id)
     return result
 
 
@@ -2621,7 +2907,12 @@ async def get_brain_regions() -> dict[str, Any]:
 
 
 @mcp.tool(annotations=READ_ONLY)
-async def get_region_circuit(region_id: str, include_child_regions: bool = True) -> dict[str, Any]:
+async def get_region_circuit(
+    region_id: str,
+    include_child_regions: bool = True,
+    compact: bool = False,
+    synapse_counts: bool = True,
+) -> dict[str, Any]:
     """One brain region as a circuit: members, boundary inputs/outputs, and edges.
 
     Use instead of ``get_cortical_map_detailed`` + ``get_brain_regions`` when you need a
@@ -2631,11 +2922,16 @@ async def get_region_circuit(region_id: str, include_child_regions: bool = True)
     outside. ``designated`` echoes the region's own inputs/outputs lists, which cover
     direct member areas only. ``isolated_area_ids`` have no mappings at all.
 
+    ``compact=True`` returns names instead of ids: members (name, dimensions) and edges
+    (src, dst, scope, rules, synapse count) only, without roles or boundary lists.
+
     Args:
         region_id: Brain region id (UUID from ``get_brain_regions``).
         include_child_regions: Include areas of nested regions (default True).
+        compact: Names, dimensions, rules and synapse counts only (default False).
+        synapse_counts: With compact, include per-edge synapse counts (default True).
     """
-    return await feagi.get_region_circuit(region_id, include_child_regions)
+    return await feagi.get_region_circuit(region_id, include_child_regions, compact, synapse_counts)
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -2976,8 +3272,10 @@ async def get_cortical_template() -> dict[str, Any]:
 
 
 @mcp.tool(annotations=READ_ONLY)
-async def list_brain_visualizer_operations() -> list[dict[str, str]]:
+async def list_brain_visualizer_operations() -> list[dict[str, Any]]:
     """List every Brain Visualizer REST operation (operation_id, method, path, description).
+
+    Operations with a verified JSON body contract also list ``required_body_fields``.
 
     Brain Visualizer routes are defined in FEAGIHTTPAddressList.gd; this is the MCP index used
     to call the same endpoints via brain_visualizer_api. Call this first when you need an
@@ -3021,7 +3319,9 @@ async def brain_visualizer_api(
         query: URL query params (amalgamation_id, circuit_origin_*, cortical_id/x/y/z for voxel
             neurons, etc.).
         json_body: JSON body. For post_genome_amalgamation_by_upload_multipart pass
-            {\"genome_json\": \"<full genome json string>\"}.
+            {\"genome_json\": \"<full genome json string>\"}. Region update/delete operations
+            (put_region_region, delete_region_region, delete_region_region_and_members) take
+            ``region_id`` in json_body, not in query.
 
     Returns:
         Parsed JSON response, or an error object with HTTP status details.
@@ -3702,6 +4002,7 @@ async def build_stance_relative_mapping(
     dst_depth: int | None = None,
     z0_is_max: bool = True,
     n_stance_voxels: int = 0,
+    coactive_z: int | dict[str, int] | str | None = None,
     dry_run: bool = True,
     postsynaptic_current_multiplier: int = 1,
     synaptic_delay_bursts: int = 1,
@@ -3724,6 +4025,10 @@ async def build_stance_relative_mapping(
     since the offsets then quantize. ``reference`` is in joint units; read it from the model
     (keyframe) yourself. ``n_stance_voxels``: stance voxels active on the same channel at
     once; the decoder averages all active z, so the reflex z is mean-compensated.
+    ``coactive_z``: z of another source's rest voxel active on the same channel while this
+    source fires (one integer for every channel, or ``{"<channel>": z}`` as an object or JSON
+    string); the reflex z becomes ``2*z_target - coactive_z``. Mutually exclusive with
+    ``n_stance_voxels``.
 
     Default ``dry_run=True`` returns ``voxel_mappings``, a ``table_text`` (src bin -> target
     value), ``stance`` (the stance voxel to drive continuously) and ``warnings`` without
@@ -3746,6 +4051,7 @@ async def build_stance_relative_mapping(
         dst_depth=dst_depth,
         z0_is_max=z0_is_max,
         n_stance_voxels=n_stance_voxels,
+        coactive_z=coactive_z,
         dry_run=dry_run,
         postsynaptic_current_multiplier=postsynaptic_current_multiplier,
         synaptic_delay_bursts=synaptic_delay_bursts,
@@ -4317,7 +4623,7 @@ async def record_aligned_trace(
 
     Polls ``/v1/burst_engine/fire_queue/detailed`` (burst number in ``timestep``,
     filtered to ``areas``) together with the controller's ``GET /v1/state`` for up to
-    20 s and at most 16 areas. The full trace is written to
+    20 s and at most 64 areas. The full trace is written to
     ``<feagi-mcp>/var/traces/<trace_id>.jsonl`` (absolute ``trace_path`` in the result; override
     the directory with ``FEAGI_MCP_TRACES_DIR``) (one row per burst: fired voxels per area, clock,
     pitch, roll, tilt, trunk z, actuator ``ctrl`` targets for ``signals``, all
@@ -4410,11 +4716,13 @@ async def freeze_mapping_plasticity(
 ) -> dict[str, Any]:
     """Stop (or resume) learning on one mapping while keeping its synapses and weights.
 
-    FEAGI has no per-mapping freeze route (``/v1/neuroplasticity/disable`` only logs),
-    so this rewrites the stored rules with ``plasticity_flag`` off (``frozen=True``)
-    or on (``frozen=False``) through ``update_cortical_mapping()``. Reports weight
-    statistics before and after and ``weights_preserved``; if that is false the
-    rewrite regrew synapses and the learned weights are gone.
+    Calls FEAGI's ``PUT /v1/cortical_mapping/plasticity_frozen`` (``frozen=True`` freezes,
+    ``False`` resumes) and reads the state back with the GET route. FEAGI sets
+    ``plasticity_frozen`` on the mapping's plastic rules: no weight commits, eligibility
+    updates or associative synapse synthesis while frozen; the rules (``plasticity_flag``
+    and mode), synapses and weights are untouched. The mapping must hold a plastic rule
+    (``freeze_failed`` otherwise). Returns ``frozen`` as read back, ``requested``, weight
+    statistics before and after and ``weights_preserved``.
     """
     return await freeze_mapping(feagi, src_area.strip(), dst_area.strip(), bool(frozen))
 

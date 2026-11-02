@@ -107,6 +107,24 @@ def test_agent_finding_states() -> None:
     assert "cannot verify" in agent_finding({"found": True}, [])["message"]
 
 
+REGISTERED = "wOIAmbpgyzJf2gP5mLbg1Hf4pQ9JmaORozUKAdcoDsB6ZhYycwMj0fRnkp2DM5i4"
+
+
+def test_agent_finding_matches_registry_by_decoded_agent_name() -> None:
+    """The descriptor file and the registry encode the same agent under different ids."""
+    descriptor = {"found": True, "agent_id": AGENT, "controller_id": "mujoco"}
+    registered = [
+        {"agent_id": "bv-id", "agent_name": "brain-visualizer"},
+        {"agent_id": REGISTERED, "agent_name": "scene"},
+    ]
+    assert agent_finding(descriptor, ["bv-id", REGISTERED], registered) is None
+    other = [{"agent_id": "bv-id", "agent_name": "brain-visualizer"}]
+    finding = agent_finding(descriptor, ["bv-id"], other)
+    assert finding is not None and finding["descriptor_agent_id"] == AGENT
+    # without registry records only the exact id counts, as before
+    assert agent_finding(descriptor, [REGISTERED]) is not None
+
+
 def test_compare_live_state_reports_all_checks() -> None:
     result = compare_live_state(
         live_areas=_live({IMU: [6, 1, 10], MOTOR: [5, 1, 2]}),
@@ -129,7 +147,10 @@ async def test_gather_live_state_drift_uses_client_and_reports_fetch_errors() ->
     client.list_cortical_areas_detailed.return_value = _live({IMU: [8, 1, 10]})
     client.get_burst_engine_config.return_value = {"burst_frequency_hz": 20.0}
     client.health_check.return_value = {"simulation_timestep": 0.025}
-    client.get_registered_agents.return_value = {"agent_ids": ["other"]}
+    client.get_registered_agents.return_value = {
+        "agent_ids": ["other"],
+        "agents": [{"agent_id": "other", "agent_name": "brain-visualizer"}],
+    }
     client.embodiment_discover_introspection_endpoint.return_value = {
         "found": True,
         "controller_id": "mujoco",
@@ -142,3 +163,23 @@ async def test_gather_live_state_drift_uses_client_and_reports_fetch_errors() ->
     assert result["fetch_errors"] == {"sensor_snapshot": {"error": "HTTP 500"}}
     client.embodiment_discover_introspection_endpoint.assert_awaited_once_with("mujoco")
     client.get_sensor_snapshot_last.assert_awaited_once_with(summary_only=False)
+
+
+async def test_gather_live_state_drift_registered_under_another_id_is_not_a_finding() -> None:
+    client = AsyncMock()
+    client.download_genome.return_value = {"blueprint": _blueprint({IMU: [6, 1, 10]})}
+    client.list_cortical_areas_detailed.return_value = _live({IMU: [6, 1, 10]})
+    client.get_burst_engine_config.return_value = {"burst_frequency_hz": 40.0}
+    client.health_check.return_value = {"simulation_timestep": 0.025}
+    client.get_registered_agents.return_value = {
+        "agent_ids": [REGISTERED],
+        "agents": [{"agent_id": REGISTERED, "agent_name": "scene"}],
+    }
+    client.embodiment_discover_introspection_endpoint.return_value = {
+        "found": True,
+        "controller_id": "mujoco",
+        "agent_id": AGENT,
+    }
+    client.get_sensor_snapshot_last.return_value = _snapshot({IMU: 6})
+    result = await gather_live_state_drift(client)
+    assert [f["check"] for f in result["findings"]] == []

@@ -12,6 +12,7 @@ import pytest
 from feagi_mcp.feagi_client import FeagiClient, _summarize_registered_agents
 from feagi_mcp.introspection_discovery import (
     INTROSPECTION_SUBDIR,
+    descriptor_agent_name,
     discover_all_endpoints,
     match_descriptor_to_registered_agents,
 )
@@ -102,6 +103,28 @@ class TestMatchDescriptorToRegisteredAgents:
             )
             == []
         )
+
+
+class TestDescriptorAgentName:
+    ID = "6Lz4qm5ldXJhdmlsbGUAAAAAAAAAAAAAc2NlbmUAAAAAAAAAAAAAAAAAAAABAAAA"
+
+    def test_decodes_the_agent_name_from_the_descriptor_id(self) -> None:
+        assert descriptor_agent_name(self.ID) == "scene"
+
+    def test_undecodable_ids_have_no_name(self) -> None:
+        assert descriptor_agent_name(None) is None
+        assert descriptor_agent_name("not-registered") is None
+        assert descriptor_agent_name("!!!") is None
+
+    def test_matches_registry_records_by_name_when_ids_differ(self) -> None:
+        records = [
+            {"agent_id": "bv", "agent_name": "brain-visualizer"},
+            {"agent_id": "opaque", "agent_name": "scene"},
+        ]
+        assert match_descriptor_to_registered_agents(self.ID, ["bv", "opaque"], records) == [
+            "opaque"
+        ]
+        assert match_descriptor_to_registered_agents(self.ID, ["bv"], records[:1]) == []
 
 
 class TestSummarizeRegisteredAgents:

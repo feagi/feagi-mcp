@@ -1,5 +1,7 @@
 # Lessons from live builds
 
+Part 1 of 3: staging, measuring, sizing, signals, layout, behavior design, tools. Learning facts: [lessons-learning.md](lessons-learning.md). Embodiment facts: [lessons-embodiment.md](lessons-embodiment.md).
+
 Facts about FEAGI, its MCP tools and embodiments that cost real time to learn. Each entry
 says what happened, how to recognize it, and what to do. Add to this file when a task's gap
 report finds a generic fact; keep host- and vendor-specific advice out of it.
@@ -8,10 +10,12 @@ report finds a generic fact; keep host- and vendor-specific advice out of it.
 
 - Work in stages
 - Measure before you build
+- Sizing facts
 - Signal and encoding facts
-- Embodiment facts
 - Diagnosing before designing
+- Layout facts
 - Behavior design facts
+- Recording and building tools (2026-10-31)
 
 ## Work in stages
 
@@ -47,6 +51,30 @@ length and compare numbers; and after every controller restart run
 `check_live_state_drift()` before trusting the next measurement, because re-registration
 reverts live area widths and the burst rate silently.
 
+## Sizing facts
+
+Used by the design method ([genome-design-budget.md](genome-design-budget.md#efficiency-budget)). Measured on
+an Apple M4 Pro (14 cores), read 2026-11-01; they move with the host and the release, so
+re-measure with `get_runtime_metrics(measure_s=10)` before sizing a real run.
+
+- **Synapses per rule** (N = positions, D = depth): `block_to_block` one per voxel;
+  `projector` about N_src (one per source in the block); `all_to_all` N_src x N_dst; a k x k
+  local kernel k^2 x N; the `!` token (every coordinate except the source's) along depth for
+  winner-take-all N x D x (D - 1); one pooled-inhibition area (class to pool and back) 2 x N x D;
+  a plastic fan-in of F feature planes onto D classes F x D x N.
+- **Events per burst** = active fraction x synapses. One synaptic event cost 0.37 us in the CI
+  microbench (`feagi-core/perf/ci_microbench_baseline.json`). A brain of about 270k neurons and
+  924k synapses at about 40% activity (about 114k fired, about 578k injections per burst) took
+  278 to 333 ms per burst against a 66.67 ms budget at 15 Hz
+  (`feagi-core/crates/feagi-npu/SCALABILITY_BOTTLENECK_ANALYSIS.md`). The plasticity pass also
+  visits every plastic synapse each burst.
+- **Capacity** is read from `feagi_configuration.toml` (`neuron_space` 10M, `synapse_space`
+  25M when read on 2026-11-01), allocated at startup. Read it; do not hard-code it.
+- **Value planes are cheap, one-hot Z is not.** A 512x256 mask as `W x H x 19` one-hot needs
+  about 2.49M neurons; as a value plane 131k.
+- FEAGI does not report burst duration or missed bursts: a rate above what the engine sustains
+  silently shortens every Trainer hold, which counts wall-clock time.
+
 ## Signal and encoding facts
 
 - **PSP is divided across fan-out.** A source neuron with `neuron_psp_uniform_distribution`
@@ -70,93 +98,6 @@ reverts live area widths and the burst rate silently.
   same burst almost never opens when one of them is intermittent. Drive from one source and
   use the other as inhibition.
 
-## Learning facts
-
-- **Plastic synapses start at the rule's multiplier, not random.** A synapse created from a
-  mapping rule (plastic or not) gets weight `abs(postSynapticCurrent_multiplier)` as f32 (default
-  1.0 when absent; a negative multiplier makes it inhibitory), in `resolve_synapse_params_for_rule`
-  (`feagi-core/crates/feagi-brain-development/src/connectome_manager.rs`). The effective PSP is
-  that weight times the source area's `postsynaptic_current`. `max_weight` does not clamp the
-  initial value: it is only applied to positive plasticity commits,
-  `(old + delta_w).min(max_weight)` (`feagi-core/crates/feagi-npu/burst-engine/src/npu.rs`), so a
-  start weight above `max_weight` stays until the first potentiating commit snaps it down.
-  `diagnose_mapping_plasticity` reports this as `expected_initial_weight`.
-- **Exact-pattern memory needs a tiny source.** A memory area fed by multi-column bins minted
-  1,475 state patterns in 60 s and never levelled. Feed memory from a source with at most a
-  few dozen possible patterns (for example pitch direction x magnitude), `temporal_depth` 1,
-  and confirm with two reads of `get_memory_area_runtime_config()` 45 s apart that
-  `neuron_count` has stopped growing.
-- **An associative link starts with no synapses.** A mapping from a memory area onto an
-  ordinary area is accepted only as `associative_memory`. A live build recorded zero
-  synapses on that link and treated it as a dead mechanism. The observation did not check
-  whether a neuron in each area fired inside the rule's `plasticity_window`, so it is not
-  evidence that the link cannot drive an action. Zero synapses right after wiring is the
-  starting state. A synapse is created only when a neuron in the memory area and a neuron
-  in the destination area both fire inside that window. If the rule subscribes to a
-  `synaptic.reward` modulator, the reward must also be positive in the window. The memory
-  neuron firing alone does not create the synapse; the destination neuron has to fire in
-  the same window, driven by babble, a reflex, or a teacher. Confirm that co-firing, then
-  read `diagnose_mapping_plasticity()` and `inspect_memory_neuron()`. An empty synapse
-  list before the co-firing is not a reason to replace the link with a hand-wired ordinary
-  mapping. Detail: [memory-and-plasticity.md](memory-and-plasticity.md).
-- **Reward-modulated plasticity commits through modulators.** An `rstdp` rule with
-  `reward_source_area` / `punishment_source_area` was accepted but never changed a weight,
-  while the same mapping subscribed to `synaptic.reward` modulators (one at +100 driven by
-  the reward detector, one at -100 driven by the fall detector) changed weights within 20 s.
-  Check with `diagnose_mapping_plasticity()` and the `synaptic_plasticity_generation`
-  counter in `health_check()`.
-- **Base plasticity potentiates without reward.** Co-active pairs on a plastic rule drift
-  upward even when no reward fires. Make the reward detector reachable (it must fire in
-  normal operation) and keep the Hebbian step small, or the actor self-reinforces.
-- **Learned classifier links died with short-term memories.** Interleaved training formed
-  links but every pattern's memory neuron expired (9-burst lifespan) before the pattern
-  returned, deleting its links, so tests read 0 links and no output. Reward consolidation now
-  promotes rewarded memory neurons to long-term. If links still vanish, check that reward
-  reached them. Detail: [value-planes-and-classifiers.md](value-planes-and-classifiers.md).
-- **Present sample and label in one protocol step.** Separate stimulate calls run one after
-  another, and two protocol calls in parallel share bursts and double-post. Both corrupted
-  classifier training runs.
-- **`diagnose_mapping_plasticity` once read 0 on memory-to-memory mappings** while links
-  existed. It now counts them; if numbers disagree with `list_area_synapses()` on the
-  destination (incoming), trust the realized synapses and report it.
-- **Prove plasticity is alive with a probe.** Two rules on one pair, a strong non-plastic
-  `block_to_block` and a weak plastic one, guarantee co-activity; if the plastic weights and
-  the generation counter do not move in 45 s, nothing will.
-
-- **`monitor_activity` samples about 1 burst in 10.** Take rates and frame counts from Run data spikes.
-- **The leak is applied every burst** (lazy catch-up at input), including bursts with no input.
-- **`rate_modulated_leak` `target_mode: "area"` applies one target to every neuron.** Use `per_neuron` for population codes, where silent neurons would otherwise pin at leak_min. Arm while the brain is driven.
-- **A snapshot proves state only if its decoded genome shows it.** Decode and check the field before saying it was saved.
-
-## Embodiment facts
-
-- **IMU areas can register narrower than they stream.** A controller may register an
-  orientation IPU 4 wide and stream 8 columns (plus and minus per axis); the dropped columns
-  carry the pitch sign. Check `list_io_areas_compact()` against
-  `get_sensor_snapshot_last()` column indices, widen with `update_cortical_area()`, and
-  expect to redo it after every controller restart until the registration is fixed.
-  `check_live_state_drift()` lists such reverts with the restoring call.
-- **Gyro auto-scaling hides small rates.** Without a declared cutoff, a controller may scale
-  the gyro to the largest rate seen; one fall makes balance-sized rates read as zero.
-  Declare a cutoff in the controller's mapping file. That is embodiment configuration, not a
-  brain shortcut.
-- **Servo speed sub-channels may be ignored.** Some controllers consume only the absolute
-  position sub-channel and slew at a fixed rate; firing the speed or incremental areas has
-  no effect. Confirm with `get_motor_snapshot_last()` and the controller log before relying
-  on them.
-- **Changing the burst rate is one call.** `set_burst_engine_frequency(frequency_hz)` sets
-  the running engine, and the returned `burst_frequency_hz` is the confirmation. Searching
-  for a physiology or `simulation_timestep` write, or sampling `get_burst_counter`, is how
-  that change turns into a source hunt. A later genome reload can restore the stored
-  timestep; that is one sentence in the report, not another call. Sample the counter only
-  when the user asks whether the loop is keeping the period.
-- **The default burst rate can make balance impossible.** Howard ran at 10 Hz: a 3-hop path
-  plus transport was 0.30 s of loop latency, equal to the median fall time (tau about
-  0.1 s). Derive the rate from tau and hops (`embodiment.md`, "Choosing the burst rate")
-  before wiring anything.
-- **Wiring falls into Death kills learning.** The robot never gets to recover or learn to
-  get up. Let the Trainer end attempts; see `embodiment.md`, "Death and falls".
-
 ## Diagnosing before designing
 
 - A simulator whose clock stops is usually a stopped experiment, not a frozen physics
@@ -165,6 +106,18 @@ reverts live area widths and the burst rate silently.
 - A fixed pose never balances a legged robot with weak position servos; it needs a sensed
   correction loop or learning. Measure which direction each joint change tips the body
   before wiring any corrective mapping.
+
+## Layout facts
+
+Added 2026-11-01, after a walking-genome layout stacked circuit titles.
+
+- **Do not outrun fixed-size titles (2026-11-01).** Region titles stay the same size on
+  screen, so no world pitch keeps them apart when the camera frames the whole brain.
+  Spreading circuits by 40 voxels times the title length (720 and up) only empties the
+  scene. Use one map step, about 120 voxels, between rows. If the next circuit on that Y
+  would land within one map step of another title, a core area, or an I/O area, put it on
+  the next Y. Zoom in to read a title. Full rule:
+  [building-circuits-placement.md](building-circuits-placement.md) "Placement".
 
 ## Behavior design facts
 
@@ -181,9 +134,33 @@ Added 2026-10-27. Full method: [behavior-design.md](behavior-design.md).
   wrong-sign path but never flip it. Wire the correct sign, or wire both directions as
   candidates with mutual inhibition.
 - **A frozen `plasticity_flag` left from a test run silently stops learning (2026-10-27).**
-  Read it back on every plastic mapping before a training run.
+  Read it back on every plastic mapping before a training run. (`freeze_mapping_plasticity()`
+  no longer clears the flag; it sets FEAGI's `plasticity_frozen`, which also survives save/load.)
 - **A sign-crossed rewire with initial weights above half the threshold fires both
   directions at once (2026-10-27).** The opposing commands destabilize the body. Start
   candidate weights quiet, so several inputs must agree to fire.
 - **Work top-down (2026-10-27).** Synapse-level tuning with no circuit-level check wasted
   runs. Test each region as a black box (sign, gain, lag) before touching weights.
+
+## Recording and building tools (2026-10-31)
+
+- **Per-burst data comes from the Fire Ledger, not the samplers.** `monitor_activity` and
+  `get_fire_queue_detailed` see about one burst in five at 200 Hz (the fire queue holds only
+  the latest burst). `record_spikes` reads `/v1/burst_engine/fire_history`: a frame per burst
+  per area, silent bursts included, subscribed on first read (window = `bursts` asked for,
+  max 2000 per read), released after. FEAGI keeps one subscription per area and DELETE removes
+  it outright; two recorders on one area in separate processes can drop each other's.
+- **A held stimulus is a post loop, not a counter-gated loop.** A post merges into the next
+  burst's fire queue and the pending queue dedupes and drains every burst, so
+  `hold_stimulus` posts twice per burst on a wall-clock schedule and trusts the ledger
+  (`landed`) instead of counting posts. A counter poll plus post per burst loses bursts at 200 Hz.
+- **FEAGI does not report burst duration or missed bursts.** `avg_burst_time_ms` is hard-coded
+  0.0 and `actual_frequency_hz` echoes the target. `get_runtime_metrics(measure_s=...)` compares
+  the burst counter with the wall clock; one 1 s sample on a live 200 Hz run read 183 bursts
+  (shortfall 18). Repeat with a longer window before concluding the engine overruns.
+- **Ring step time is not given by a simple formula yet.** The design formula
+  `p = (threshold - d) / k` and the leak-aware sum `V <- V (1 - leak) + (p + d)` both disagree
+  with a measured 6-burst step at `p = 0.565`. `ring_cpg` returns `predicted_step_bursts`
+  flagged uncalibrated: measure the period with `record_spikes` and set `lateral_psc` from it.
+- **Region exports carry every morphology of the brain.** `download_region_genome` now keeps
+  only the morphologies the exported mappings name.

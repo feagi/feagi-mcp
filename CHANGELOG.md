@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **record_spikes**: burst-exact firing of up to 16 areas from the Fire Ledger (`/v1/burst_engine/fire_history`); compact per-area summary, optional CSV.
+- **hold_stimulus** / **get_stimulus_hold**: hold voxels firing on every burst (background option) with a ledger landing check.
+- **build_circuit_from_spec**: region, areas, morphologies and mappings from one JSON spec with `port`, `onset_pulse`, `ring_cpg` and `servo_channel_two_rest` templates; dry run by default.
+- **get_runtime_metrics(measure_s)**: `burst_timing` block naming the feagi-core gap (no burst duration or missed-burst counters) and a counter-vs-wall-clock rate measurement.
+- **get_region_circuit(compact)** / **get_cortical_map_detailed(compact)**: names, dimensions, rules and synapse counts only.
+- **validate_genome(file_path)**; **download_region_genome** keeps only referenced morphologies (`prune_morphologies`), including those of mappings entering the region, which are listed as `entering_mappings` because the core export cuts them.
+
 ### Changed
 - **Development**: pre-commit now runs `mypy src/` on commit and `pytest` on push, matching CI; `mypy` pinned to `2.4.1` in the `dev` extra.
 

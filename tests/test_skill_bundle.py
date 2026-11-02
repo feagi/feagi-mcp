@@ -17,6 +17,7 @@ from feagi_mcp.skill_bundle import (
     category_problems,
     is_known_tool,
     render_tool_index,
+    render_tool_index_parts,
     repository_root,
     skill_dir,
     tool_parameters,
@@ -69,10 +70,14 @@ def test_destructive_tools_are_registered() -> None:
 
 
 def test_tool_index_is_current() -> None:
-    index = (SKILL_DIR / TOOL_INDEX_RELATIVE_PATH).read_text("utf-8")
-    assert index == render_tool_index(tool_summaries(SERVER_SOURCE)), (
-        "run: python scripts/generate_skill_tool_index.py"
-    )
+    parts = render_tool_index_parts(tool_summaries(SERVER_SOURCE))
+    ref_dir = (SKILL_DIR / TOOL_INDEX_RELATIVE_PATH).parent
+    for name, text in parts.items():
+        assert (ref_dir / name).read_text("utf-8") == text, (
+            "run: python scripts/generate_skill_tool_index.py"
+        )
+    on_disk = {p.name for p in ref_dir.glob("tool-index*.md")}
+    assert on_disk == set(parts), "run: python scripts/generate_skill_tool_index.py"
 
 
 def test_skill_frontmatter_follows_agent_skills_spec() -> None:
@@ -114,6 +119,20 @@ def test_relative_links_resolve(path: Path) -> None:
 def test_skill_text_is_host_neutral(path: Path) -> None:
     """The same skill serves every MCP host, so it must not address one model vendor."""
     assert not re.search(r"\b(Claude|Anthropic|OpenAI|Gemini|GPT)\b", path.read_text("utf-8"))
+
+
+# read_skill truncates a reference silently at 12,000 characters (checked 2026-11-01), so a
+# longer file loses its tail. Split a long reference into topic files instead.
+MAX_REFERENCE_CHARS = 12_000
+
+
+def test_reference_files_fit_read_skill_limit() -> None:
+    oversize = {
+        p.name: len(p.read_text("utf-8"))
+        for p in (SKILL_DIR / "references").glob("*.md")
+        if len(p.read_text("utf-8")) > MAX_REFERENCE_CHARS
+    }
+    assert oversize == {}, f"over {MAX_REFERENCE_CHARS} characters: read_skill truncates them"
 
 
 def test_reference_files_are_reachable_from_skill() -> None:

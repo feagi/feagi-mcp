@@ -18,7 +18,7 @@ from feagi_mcp.skill_bundle import (
 
 ROOT = repository_root()
 SERVER_SOURCE = (ROOT / "src" / "feagi_mcp" / "server.py").read_text("utf-8")
-INDEX = ROOT / "skills" / SKILL_NAME / TOOL_INDEX_RELATIVE_PATH
+INDEX_DIR = (ROOT / "skills" / SKILL_NAME / TOOL_INDEX_RELATIVE_PATH).parent
 
 
 def _decorated_tool_names() -> list[str]:
@@ -51,7 +51,13 @@ def test_registry_matches_decorated_functions_and_tool_index() -> None:
     decorated = set(_decorated_tool_names())
     # The index also lists Studio's native tools in their own section; those are not
     # served by this server.
-    indexed = set(re.findall(r"^- `(\w+)\(", INDEX.read_text("utf-8"), flags=re.M))
+    indexed = set(
+        re.findall(
+            r"^- `(\w+)\(",
+            "\n".join(p.read_text("utf-8") for p in sorted(INDEX_DIR.glob("tool-index*.md"))),
+            flags=re.M,
+        )
+    )
     indexed -= set(STUDIO_ONLY_TOOLS)
     assert not registered & set(STUDIO_ONLY_TOOLS), (
         f"names both registered here and listed as Studio-only: "

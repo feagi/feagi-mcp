@@ -1184,6 +1184,29 @@ class TestConnectionManagement:
         assert "message" in result
 
     @pytest.mark.asyncio
+    async def test_delete_cortical_mapping_resolves_names_to_ids(self, mock_client):
+        src_id, dst_id = "AAAAAAAAAAAA", "BBBBBBBBBBBB"
+        mock_client.get_cortical_id_name_mapping = AsyncMock(
+            return_value={src_id: "Gate", dst_id: "Target"}
+        )
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"message": "ok"}
+        mock_client._client.delete.return_value = mock_response
+
+        await mock_client.delete_cortical_mapping("Gate", dst_id)
+
+        params = mock_client._client.delete.call_args.kwargs["params"]
+        assert params == {"src_cortical_area": src_id, "dst_cortical_area": dst_id}
+
+    @pytest.mark.asyncio
+    async def test_delete_cortical_mapping_unknown_name_is_an_error(self, mock_client):
+        mock_client.get_cortical_id_name_mapping = AsyncMock(return_value={"AAAAAAAAAAAA": "Gate"})
+        result = await mock_client.delete_cortical_mapping("Gate", "Nope")
+        assert "unknown cortical area" in result["error"]
+        mock_client._client.delete.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_get_memory_twin_diagnostic(self, mock_client):
         """Test fetching memory twin diagnostic."""
         mock_response = MagicMock()
@@ -1759,7 +1782,7 @@ class TestStimulationHold:
     @pytest.mark.asyncio
     async def test_default_is_one_post_without_config_reads(self, mock_client):
         self._wire(mock_client, [1])
-        result = await mock_client.stimulate_area("a", [0, 0, 0], 1.0)
+        result = await mock_client.stimulate_area("YWJjZGVmZ2g=", [0, 0, 0], 1.0)
         assert result["success"] is True
         assert "bursts_held" not in result
         assert mock_client._client.post.await_count == 1
@@ -1769,7 +1792,7 @@ class TestStimulationHold:
     async def test_duration_posts_once_per_new_burst(self, mock_client):
         # repeated counter values (same burst) must not cause double posts
         self._wire(mock_client, [10, 10, 11, 11, 11, 12])
-        result = await mock_client.stimulate_area("a", [0, 0, 0], None, duration_ms=30)
+        result = await mock_client.stimulate_area("YWJjZGVmZ2g=", [0, 0, 0], None, duration_ms=30)
         assert mock_client._client.post.await_count == 3
         assert result["bursts_held"] == 3
         assert (result["first_burst"], result["last_burst"]) == (10, 12)
@@ -1777,14 +1800,14 @@ class TestStimulationHold:
     @pytest.mark.asyncio
     async def test_duration_is_capped(self, mock_client):
         self._wire(mock_client, list(range(1, 5000)), interval=1.0)
-        result = await mock_client.stimulate_area("a", [0, 0, 0], None, bursts=1000)
+        result = await mock_client.stimulate_area("YWJjZGVmZ2g=", [0, 0, 0], None, bursts=1000)
         assert result["bursts_held"] == 30
         assert result["capped_at_ms"] == 30_000
 
     @pytest.mark.asyncio
     async def test_batch_passes_hold_through(self, mock_client):
         self._wire(mock_client, [5, 6])
-        result = await mock_client.stimulate_area_batch("a", [[0, 0, 0]], bursts=2)
+        result = await mock_client.stimulate_area_batch("YWJjZGVmZ2g=", [[0, 0, 0]], bursts=2)
         assert result["bursts_held"] == 2
         assert mock_client._client.post.await_count == 2
 
@@ -2820,6 +2843,39 @@ class TestResetWeightsRoutes:
         result = await mock_client.reset_mapping_weights_native("A", "B")
         assert "route_missing" not in result
         assert "HTTP 404" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_set_plasticity_frozen_puts_request_body(self, mock_client):
+        body = {"src_cortical_area": "A", "dst_cortical_area": "B", "frozen": True}
+        mock_client._client.put.return_value = _put_response(200, body)
+        result = await mock_client.set_mapping_plasticity_frozen("A", "B", True)
+        assert result["frozen"] is True
+        call = mock_client._client.put.await_args
+        assert call.args[0].endswith("/v1/cortical_mapping/plasticity_frozen")
+        assert call.kwargs["json"] == {
+            "src_cortical_area": "A",
+            "dst_cortical_area": "B",
+            "frozen": True,
+        }
+
+    @pytest.mark.asyncio
+    async def test_set_plasticity_frozen_reports_http_error_without_fallback(self, mock_client):
+        mock_client._client.put.return_value = _put_response(404, text="not found")
+        result = await mock_client.set_mapping_plasticity_frozen("A", "B", True)
+        assert result["error"] == "HTTP 404"
+        mock_client._client.put.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_get_plasticity_frozen_reads_query(self, mock_client):
+        body = {"src_cortical_area": "A", "dst_cortical_area": "B", "frozen": None}
+        mock_client._client.get.return_value = _put_response(200, body)
+        result = await mock_client.get_mapping_plasticity_frozen("A", "B")
+        assert result["frozen"] is None
+        call = mock_client._client.get.await_args
+        assert call.args[0].endswith("/v1/cortical_mapping/plasticity_frozen")
+        assert call.kwargs["params"] == {"src_cortical_area": "A", "dst_cortical_area": "B"}
+        mock_client._client.get.return_value = _put_response(400, text="bad")
+        assert (await mock_client.get_mapping_plasticity_frozen("A", "B"))["error"] == "HTTP 400"
 
     @pytest.mark.asyncio
     async def test_area_incoming_weights(self, mock_client):

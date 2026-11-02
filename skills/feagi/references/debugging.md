@@ -1,16 +1,15 @@
 # Testing and debugging
 
+Part 1 of 2: verifying connections, watching activity, finding silence. Live state drift, learning, FEAGI failures, silent-versus-active runs, gotchas: [debugging-runtime.md](debugging-runtime.md).
+
 ## Contents
 
 - Verify a new connection
 - Watch activity
+- Record every burst and hold a stimulus
 - Look inside areas and neurons
 - Find a broken path
 - Common causes of silence
-- Live state drift
-- Watch learning
-- FEAGI itself is failing
-- Known gotchas
 
 ## Verify a new connection
 
@@ -26,8 +25,11 @@ For manual tests:
   run one after another, never together.
 - To present several areas together (sample + label, two inputs of a gate), or a timed
   sequence with rests, use `run_stimulus_protocol(steps, record_areas)`: one request per burst
-  carries all stimuli, and it records per-burst firing of `record_areas` with no missed bursts.
-  Run one protocol call at a time.
+  carries all stimuli. It also reads the fire queue every burst, so at 200 Hz it skips about a
+  fifth of the bursts and returns a large payload (it records from the sampled fire queue, so
+it sees one burst in five too). Stimulus and record areas may be names or ids; an unknown name or
+a stimulus that matches no voxel is an error; for a long hold or per-burst data use
+  `hold_stimulus()` and `record_spikes()` below. Run one protocol call at a time.
 - `monitor_activity(area_id, duration_ms)` or `monitor_activity_batch(area_ids, ...)` then
   shows counts and rates.
 
@@ -44,12 +46,14 @@ The burst engine must be running for anything to propagate: check
 | What motors received last burst | `get_motor_snapshot_last(cortical_id=...)` |
 | Burst rate, counter, run state | `get_burst_engine_config()`, `get_burst_counter()`, `get_burst_engine_status()` |
 | System-wide counters | `get_runtime_metrics()`, `health_check()` |
-| Per-burst firing during a stimulus sequence | `run_stimulus_protocol()` |
+| Every burst of up to 64 areas, summarized (fire fraction, runs, gaps) | `record_spikes()` |
+| A stimulus held on every burst, with a landing check | `hold_stimulus()` |
+| Per-burst firing during a short stimulus sequence | `run_stimulus_protocol()` |
 
 `get_fire_queue_detailed()` returns `timestep` (the burst the sample belongs to) and
 `current_burst`. `monitor_activity()` polls about every 50 ms, counts each burst once and
-reports `bursts_unsampled`; above 20 Hz it misses bursts, so use `run_stimulus_protocol()`
-when every burst matters.
+reports `bursts_unsampled`; above 20 Hz it misses bursts (about one burst in five is seen at
+200 Hz, as with `get_fire_queue_detailed()`), so use `record_spikes()` when every burst matters.
 
 `monitor_activity()` rates are sampled over the window, not counted per burst. A rate near
 half the burst frequency on a one-neuron loop does not mean the neuron fires every other
@@ -62,6 +66,38 @@ Burst control: `control_burst_engine(action)` with `start`, `resume`, `pause`, o
 the setpoint. Do not open the source tree or sample the burst counter unless the user asks
 whether the engine is keeping that period. Pausing affects every connected robot, so say
 so before you do it.
+
+## Record every burst and hold a stimulus
+
+`record_spikes(areas, bursts=200, csv_path=None)` reads FEAGI's Fire Ledger
+(`/v1/burst_engine/fire_history`): one frame per burst per area, silent bursts included. It
+returns a summary, never rows: per area `fire_fraction`, `fired_bursts`, `first_fire_burst` /
+`last_fire_burst`, fire `runs` (the first 20 per area; `max_runs` raises the limit, `run_count` is
+the full count, `runs_truncated` says if more exist), `top_voxels`, and for the window `gaps` (bursts with no frame;
+`success` is false if any). Rows go to `csv_path` as `burst,area_id,area_name,x,y,z,
+memory_neuron_id`. Up to 64 areas and 20000 bursts; it returns after `bursts` bursts have passed.
+
+`hold_stimulus(area, voxels, duration_s, background=False)` posts the stimulus on a wall-clock
+schedule (twice per burst; the pending queue dedupes) and reads nothing per burst. With
+`verify` (default) it reads the area's ledger afterwards and reports `landed`: of the bursts in
+`(first_post_burst, last_post_burst + 1]`, how many fired every held voxel, which did not, and
+which have no ledger frame. A hold is only trusted with that line: `landed == checked`.
+`background=True` returns a `hold_id` and keeps holding while you trace or record; read the
+outcome with `get_stimulus_hold(hold_id)`, and stop it early with
+`get_stimulus_hold(hold_id, cancel=true)`. For pulses on exact bursts use
+`schedule_stimulus(entries=[{burst_offset, stimuli}])` (`cancel_stimulus(schedule_id)` stops it,
+`get_stimulus_schedule()` lists active ones). Summarize a recorded CSV with `analyze_run`.
+
+Recipe, a held stimulus and its response in one window:
+
+1. `hold_stimulus(area, voxels, duration_s=10, start_delay_s=1, background=True)`.
+2. `record_spikes([stimulated_area, response_areas...], bursts=<covers 12 s>)` in the same turn.
+3. Read `fire_fraction` and `first_fire_burst` of the response areas against the hold's
+   `first_post_burst`; then `get_stimulus_hold(hold_id)` for the `landed` check.
+
+Both use the same per-area ledger subscription; they release it when done (a second user in the
+same server process keeps it alive). A subscription also lapses on its own after five minutes
+without a read.
 
 ## Look inside areas and neurons
 
@@ -106,64 +142,3 @@ so before you do it.
 | Memory area stays empty | No `episodic_memory` upstream, or area is CUSTOM (`c` ID) | `get_memory_area_runtime_config()` |
 | Learning does nothing | Plasticity off, window too short, or no co-activation | `diagnose_mapping_plasticity()` |
 | Classifier does not stamp output | Scan blockers | `inspect_classifier()` |
-
-## Live state drift
-
-Live state reverts without any error: an agent re-registration re-applies the controller's
-IPU/OPU dimensions, a genome reload resets the burst rate, a controller restart registers
-a new agent id. `check_live_state_drift()` compares the live brain with the genome
-blueprint and the controller descriptor and lists every mismatch with both values and the
-restoring call (`update_cortical_area(cortical_id=..., updates=...)` or
-`set_burst_engine_frequency(frequency_hz=...)`; an unregistered agent needs a controller
-restart). Run it after `health_check()` at the start of a session, after every controller
-restart, and before blaming a circuit for going silent. Checks: cortical area dimensions,
-burst frequency vs `simulation_timestep`, descriptor `agent_id` vs registered agents, and
-IPU width vs the columns present in the last sensor snapshot.
-
-## Watch learning
-
-- `watch_mapping_weights(src_area, dst_area, duration_s, interval_s)` samples one
-  mapping's weight statistics over time (min, max, avg, count at 0, count at the
-  destination's PSP cap, the five largest and five smallest synapses) and reports
-  `avg_delta` and `max_delta`. A flat series while the pair co-fires means no learning:
-  check reward modulators and `plasticity_flag` with `diagnose_mapping_plasticity()`.
-- For memory-to-memory mappings `diagnose_mapping_plasticity()` splits
-  `memory_neuron_synapse_count` (learned links) from `placeholder_synapse_count`.
-- `freeze_mapping_plasticity(src_area, dst_area, frozen=True)` stops learning on one
-  mapping by rewriting its rules with `plasticity_flag` off (FEAGI has no per-mapping
-  freeze route). It reports weights before and after; `weights_preserved` false means the
-  rewrite regrew the synapses.
-- `reset_mapping_weights(src_area, dst_area)` resets weights in place via FEAGI's native route
-  (`method: native`, `synapses_reset`, `weight`). On older FEAGI it deletes and recreates the
-  mapping (`method: recreate_fallback`); FEAGI keeps the weight of a neuron pair that already
-  existed there, so read `weights_reset`; take `snapshot_genome()` first. For every incoming
-  mapping of an area use `reset_area_incoming_weights(cortical_ids)`.
-- `inspect_cortical_areas_minimal()` now falls back to the incoming synapse listing when
-  the properties record reports `incoming_synapse_count` 0 (`incoming_synapse_count_source`
-  says so); the counter in the properties record stays 0 after a restart.
-
-## FEAGI itself is failing
-
-- Calls fail intermittently: `get_feagi_link_health()` checks FEAGI, the agent registries,
-  the burst endpoint, and controller registration in one call.
-- FEAGI does not answer HTTP: `diagnose_feagi_runtime()` reads local logs and returns a
-  `likely_cause` (`feagi_unreachable`, `health_check_timeout`, `npu_watchdog_stall`,
-  `npu_lock_during_structural_rebuild`, `npu_missing_cortical_registration`,
-  `outstanding_control_reply_then_client_stop`) with evidence.
-- Health is fine but an upload, genome change, or experiment launch failed:
-  `get_last_failed_mutation()`.
-- Logs: `get_log_tail(message_contains=..., level=..., limit=...)`. Always filter.
-- An experiment stopped unexpectedly: `get_experiment_stop_cause()` and
-  `get_controller_lifecycle_events()`.
-- Version questions: `get_version_info()`.
-
-## Known gotchas
-
-- `health_check()` may report 0 connected agents while a simulation works. It counts a
-  stricter transport state. If `get_registered_agents()` lists the agent and motor snapshots
-  update, the link is live.
-- `list_area_synapses()` defaults to outgoing synapses. OPUs are driven by incoming ones:
-  pass `direction="incoming"`.
-- Deleted vision (`isvi`) areas that keep coming back are recreated from the descriptor
-  registration store. Compare stores with `compare_device_registration_store()`.
-- `get_cortical_mapping()` reads stored rules safely; prefer it to raw mapping endpoints.

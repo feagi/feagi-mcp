@@ -8,6 +8,7 @@ that target, using the caller's joint range and the OPU depth and direction.
 
 from __future__ import annotations
 
+import json
 import math
 from typing import Any
 
@@ -41,6 +42,30 @@ def z_bin_to_value(
     return range_min + (range_max - range_min) * pos01
 
 
+def _coactive_z_by_channel(
+    coactive_z: int | dict[Any, Any] | str | None,
+) -> tuple[int | None, dict[int, int]]:
+    """Normalize ``coactive_z`` to ``(default for every channel, per-channel overrides)``."""
+    if coactive_z is None:
+        return None, {}
+    if isinstance(coactive_z, str):
+        text = coactive_z.strip()
+        try:
+            coactive_z = json.loads(text)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"coactive_z must be an integer or a JSON object: {e}") from e
+    if isinstance(coactive_z, bool) or not isinstance(coactive_z, (int, dict)):
+        raise ValueError("coactive_z must be an integer or a mapping of channel -> integer")
+    if isinstance(coactive_z, int):
+        return coactive_z, {}
+    per: dict[int, int] = {}
+    for key, val in coactive_z.items():
+        if isinstance(val, bool) or not isinstance(val, int):
+            raise ValueError(f"coactive_z for channel {key} must be an integer")
+        per[int(key)] = val
+    return None, per
+
+
 def compile_stance_offset_rows(
     *,
     src_axis: str,
@@ -55,6 +80,7 @@ def compile_stance_offset_rows(
     joint_range: list[float] | None = None,
     z0_is_max: bool = True,
     n_stance_voxels: int = 0,
+    coactive_z: int | dict[Any, Any] | str | None = None,
 ) -> dict[str, Any]:
     """Compile ``voxel_mappings`` rows for stance-relative offsets.
 
@@ -74,6 +100,13 @@ def compile_stance_offset_rows(
     ``n_stance_voxels`` is how many stance voxels are active on the same channel in the
     same burst; the decoder averages all active z, so the reflex voxel is placed at
     ``(n+1)*z_target - n*z_stance`` to land the mean on the target (clamped to the strip).
+
+    ``coactive_z`` is the z of the one other voxel active on the channel while this source
+    fires (e.g. a second source's rest voxel), as one integer for every channel or a mapping
+    ``channel -> int`` (a JSON object string is also accepted). For a channel it replaces the
+    ``n_stance_voxels * z_ref`` term: the reflex voxel is ``2*z_target - coactive_z`` and the
+    decoded mean is ``(coactive_z + z_w) / 2``. Passing it together with ``n_stance_voxels``
+    is an error; channels missing from a mapping keep the ``n_stance_voxels`` behaviour.
     """
     axis = {"x": 0, "y": 1, "z": 2}.get(str(src_axis).lower())
     if axis is None:
@@ -84,6 +117,12 @@ def compile_stance_offset_rows(
         raise ValueError("channels must be non-empty")
     if n_stance_voxels < 0:
         raise ValueError("n_stance_voxels must be >= 0")
+    co_default, co_per_channel = _coactive_z_by_channel(coactive_z)
+    if n_stance_voxels and coactive_z is not None:
+        raise ValueError(
+            "pass either n_stance_voxels or coactive_z, not both (coactive_z replaces "
+            "the n_stance_voxels * stance term)"
+        )
     if not all(math.isfinite(float(r)) for r in (gain, deadband)):
         raise ValueError("gain and deadband must be finite")
     center = (src_bins - 1) / 2.0 if src_center is None else float(src_center)
@@ -141,15 +180,27 @@ def compile_stance_offset_rows(
             tgt = min(max(ref + off, lo), hi)
             z_t = value_to_z_bin(tgt, lo, hi, depth, z0_is_max)
             z_w = z_t
-            if n_stance_voxels:
-                z_w = (n_stance_voxels + 1) * z_t - n_stance_voxels * z_ref
+            co_z = co_per_channel.get(channel, co_default)
+            if co_z is not None:
+                z_w = 2 * z_t - co_z
                 if z_w < 0 or z_w > depth - 1:
                     warnings.append(
-                        f"channel {channel} src {i}: mean-compensated z={z_w} outside "
-                        f"0..{depth - 1}; clamped (offset is smaller than requested)"
+                        f"channel {channel} src {i}: mean-compensated z={z_w} (against coactive "
+                        f"voxel z={co_z}) outside 0..{depth - 1}; clamped (offset is smaller "
+                        "than requested)"
                     )
                     z_w = min(max(z_w, 0), depth - 1)
-            mean_z = (n_stance_voxels * z_ref + z_w) / (n_stance_voxels + 1)
+                mean_z = (co_z + z_w) / 2
+            else:
+                if n_stance_voxels:
+                    z_w = (n_stance_voxels + 1) * z_t - n_stance_voxels * z_ref
+                    if z_w < 0 or z_w > depth - 1:
+                        warnings.append(
+                            f"channel {channel} src {i}: mean-compensated z={z_w} outside "
+                            f"0..{depth - 1}; clamped (offset is smaller than requested)"
+                        )
+                        z_w = min(max(z_w, 0), depth - 1)
+                mean_z = (n_stance_voxels * z_ref + z_w) / (n_stance_voxels + 1)
             achieved = z_bin_to_value(mean_z, lo, hi, depth, z0_is_max)
             src = list(fixed)
             src[axis] = i

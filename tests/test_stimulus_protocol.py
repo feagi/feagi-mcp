@@ -201,3 +201,71 @@ async def test_timeout_guard_reports_failure(monkeypatch: Any) -> None:
     out = await _client(http).run_stimulus_protocol(STEPS, [AREA_A])
     assert out["success"] is False
     assert "timed out" in out["error"]
+
+
+CUSTOM_ID = "Y0NtZF9MX2s="
+
+
+class NamedHttp(FakeHttp):
+    """FEAGI answers only to cortical ids; the id/name list maps one CUSTOM area."""
+
+    async def get(self, url: str) -> FakeResponse:
+        if url.endswith("/cortical_area/cortical_id_name_mapping"):
+            return FakeResponse({CUSTOM_ID: "Cmd_Area", AREA_A: "Other"})
+        return await super().get(url)
+
+    async def post(self, _url: str, json: dict[str, Any]) -> FakeResponse:
+        self.posts.append(json)
+        hit = all(key in (CUSTOM_ID, AREA_A) for key in json["stimulation_payload"])
+        return FakeResponse(
+            {"success": True, "unique_neuron_ids": 1, "matched_coordinates": 1 if hit else 0}
+        )
+
+
+async def test_area_names_are_resolved_to_ids_for_posts_and_recording() -> None:
+    samples = {100 + i: _sample(100 + i, {CUSTOM_ID: [[0, 0, 0]]}) for i in range(4)}
+    http = NamedHttp(samples)
+    result = await _client(http).run_stimulus_protocol(
+        [{"bursts": 2, "stimuli": [{"area_id": "Cmd_Area", "coordinates": [[0, 0, 0]]}]}],
+        record_areas=["Cmd_Area"],
+        tail_bursts=1,
+    )
+    assert result["success"] is True, result
+    assert all(list(p["stimulation_payload"]) == [CUSTOM_ID] for p in http.posts)
+    assert CUSTOM_ID in result["areas"] and result["areas"][CUSTOM_ID]["firing_bursts"] > 0
+
+
+async def test_unknown_area_name_is_an_error_not_silence() -> None:
+    http = NamedHttp({})
+    result = await _client(http).run_stimulus_protocol(
+        [{"bursts": 1, "stimuli": [{"area_id": "No_Such_Area", "coordinates": [[0, 0, 0]]}]}],
+        record_areas=[CUSTOM_ID],
+    )
+    assert result["success"] is False and "No_Such_Area" in result["error"]
+    assert http.posts == []
+
+
+async def test_stimulus_that_matches_no_voxel_stops_the_protocol() -> None:
+    class Unmatched(NamedHttp):
+        async def post(self, _url: str, json: dict[str, Any]) -> FakeResponse:
+            self.posts.append(json)
+            return FakeResponse({"success": True, "unique_neuron_ids": 0, "matched_coordinates": 0})
+
+    http = Unmatched({})
+    result = await _client(http).run_stimulus_protocol(
+        [{"bursts": 3, "stimuli": [{"area_id": CUSTOM_ID, "coordinates": [[9, 9, 9]]}]}],
+        record_areas=[CUSTOM_ID],
+    )
+    assert result["success"] is False and "matched no voxel" in result["error"]
+    assert len(http.posts) == 1
+
+
+async def test_stimulate_area_resolves_a_name_but_not_an_id() -> None:
+    http = NamedHttp({})
+    client = _client(http)
+    http.counter = 100
+    by_name = await client.stimulate_area("Cmd_Area", [0, 0, 0])
+    assert by_name["success"] is True
+    assert list(http.posts[-1]["stimulation_payload"]) == [CUSTOM_ID]
+    missing = await client.stimulate_area("Nope", [0, 0, 0])
+    assert missing["success"] is False and "Nope" in missing["error"]

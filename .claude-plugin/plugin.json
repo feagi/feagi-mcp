@@ -13,7 +13,8 @@
   "license": "Apache-2.0",
   "keywords": ["feagi", "neuroscience", "spiking-neural-network", "robotics", "neurorobotics", "mujoco", "mcp"],
   "icon": "./.claude-plugin/icon.png",
-  "supportUrl": "mailto:feagi@neuraville.com",
+  "supportUrl": "https://github.com/feagi/feagi-mcp/issues",
+  "documentationUrl": "https://github.com/feagi/feagi-mcp#readme",
   "userConfig": {
     "feagi_host": {
       "type": "string",

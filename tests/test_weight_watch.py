@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock
 from feagi_mcp.weight_watch import (
     MAX_WATCH_S,
     freeze_mapping,
-    frozen_rules,
     reset_mapping,
     reset_mapping_native_first,
     watch_weights,
@@ -104,47 +103,52 @@ async def test_watch_weights_caps_duration_and_interval() -> None:
     assert result["interval_s"] == 0.5
 
 
-def test_frozen_rules_toggle_flag_only() -> None:
-    rules = [
-        {"morphology_id": "projector", "plasticity_flag": True, "plasticity_mode": "rstdp"},
-        {"morphology_id": "block_to_block"},
-    ]
-    frozen = frozen_rules(rules, True)
-    assert frozen[0]["plasticity_flag"] is False
-    assert frozen[0]["plasticity_mode"] == "rstdp"
-    assert frozen[1]["plasticity_flag"] is False
-    thawed = frozen_rules(frozen, False)
-    assert thawed[0]["plasticity_flag"] is True
-    assert thawed[1]["plasticity_flag"] is False
-    assert rules[0]["plasticity_flag"] is True  # input untouched
-
-
-async def test_freeze_mapping_rewrites_rules_and_reports_weights() -> None:
+async def test_freeze_mapping_uses_freeze_route_and_reports_read_back() -> None:
     client = AsyncMock()
-    rule = {"morphology_id": "projector", "plasticity_flag": True, "plasticity_mode": "rstdp"}
-    client.get_cortical_mapping.return_value = {"rules": [rule]}
-    client.get_mapping_plasticity_diagnostics.side_effect = [
-        _diag([1.0, 4.0]),
-        _diag([1.0, 4.0], 0),
-    ]
-    client.update_cortical_mapping.return_value = {"success": True}
+    client.get_mapping_plasticity_diagnostics.side_effect = [_diag([1.0, 4.0]), _diag([1.0, 4.0])]
+    client.set_mapping_plasticity_frozen.return_value = {"frozen": True}
+    client.get_mapping_plasticity_frozen.return_value = {"frozen": True}
     result = await freeze_mapping(client, SRC, DST, True)
-    written = client.update_cortical_mapping.await_args.args[2]
-    assert written[0]["plasticity_flag"] is False
+    client.set_mapping_plasticity_frozen.assert_awaited_once_with(SRC, DST, True)
+    client.get_mapping_plasticity_frozen.assert_awaited_once_with(SRC, DST)
+    client.update_cortical_mapping.assert_not_awaited()  # rules are never rewritten
+    assert result["requested"] is True
     assert result["frozen"] is True
     assert result["weights_preserved"] is True
     assert result["weights_before"]["count"] == 2
-    assert result["plastic_rules_after"] == 0
+
+
+async def test_freeze_mapping_reports_frozen_as_read_back() -> None:
+    client = AsyncMock()
+    client.get_mapping_plasticity_diagnostics.return_value = _diag([1.0])
+    client.set_mapping_plasticity_frozen.return_value = {"frozen": False}
+    client.get_mapping_plasticity_frozen.return_value = {"frozen": True}
+    result = await freeze_mapping(client, SRC, DST, False)
+    assert result["requested"] is False
+    assert result["frozen"] is True
+
+
+async def test_freeze_mapping_flags_changed_weights() -> None:
+    client = AsyncMock()
+    client.get_mapping_plasticity_diagnostics.side_effect = [_diag([1.0, 4.0]), _diag([1.0, 1.0])]
+    client.set_mapping_plasticity_frozen.return_value = {"frozen": True}
+    client.get_mapping_plasticity_frozen.return_value = {"frozen": True}
+    assert (await freeze_mapping(client, SRC, DST, True))["weights_preserved"] is False
 
 
 async def test_freeze_mapping_errors() -> None:
     client = AsyncMock()
-    client.get_cortical_mapping.return_value = {"rules": []}
-    client.get_mapping_plasticity_diagnostics.return_value = _diag([])
+    client.get_mapping_plasticity_diagnostics.return_value = {"mapping_exists": False}
     assert (await freeze_mapping(client, SRC, DST, True))["error"] == "mapping_not_found"
-    client.get_cortical_mapping.return_value = {"rules": [{"morphology_id": "p"}]}
-    client.update_cortical_mapping.return_value = {"error": "HTTP 400"}
-    assert (await freeze_mapping(client, SRC, DST, True))["error"] == "update_failed"
+    client.set_mapping_plasticity_frozen.assert_not_awaited()
+    client.get_mapping_plasticity_diagnostics.return_value = _diag([1.0])
+    client.set_mapping_plasticity_frozen.return_value = {"error": "HTTP 400"}
+    assert (await freeze_mapping(client, SRC, DST, True))["error"] == "freeze_failed"
+    client.get_mapping_plasticity_frozen.assert_not_awaited()
+    client.set_mapping_plasticity_frozen.return_value = {"frozen": True}
+    client.get_mapping_plasticity_frozen.return_value = {"error": "HTTP 500"}
+    assert (await freeze_mapping(client, SRC, DST, True))["error"] == "readback_failed"
+    client.update_cortical_mapping.assert_not_awaited()
 
 
 async def test_reset_mapping_reports_whether_weights_went_uniform() -> None:

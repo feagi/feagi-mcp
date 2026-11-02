@@ -1,5 +1,7 @@
 # Value planes, segmentation, depth, and classifiers
 
+Part 1 of 2: value planes, class maps, pass-through, bins, classifiers. Checking and debugging: [value-planes-debugging.md](value-planes-debugging.md).
+
 ## Contents
 
 - Value planes
@@ -7,10 +9,6 @@
 - Passing values through exactly
 - Expanding a plane into bins
 - Classifiers
-- What learning does, link by link
-- Memory lifetime and reward consolidation
-- Train and test a classifier
-- Checking and debugging
 
 ## Value planes
 
@@ -112,7 +110,7 @@ class memory rule changes, so do not hand-edit it. `answer_feedback_area_id`,
 `POST /v1/cortical_area/classifier/{id}/answer_modulators` creates missing answer areas and
 modulators (classifiers made before they existed, or after one was deleted) and returns
 their ids. To deliver reward or punishment by hand, see
-[memory-and-plasticity.md](memory-and-plasticity.md) (Modulators).
+[modulators.md](modulators.md).
 
 **Routing to an output**: wire a class output with
 `wire_value_passthrough(output, oseg, class_count=N)`, then confirm with
@@ -176,25 +174,3 @@ bursts and double-post), and never present sample and label as two separate stim
    presentations, kept after a 400-burst rest.
 7. Reset for a clean rerun: `reset_cortical_neural_state([sample_memory, class_memory])`
    removes memory neurons and links (and the placeholder edge).
-
-## Checking and debugging
-
-- `inspect_classifier()` resolves every slot and the required mappings and reports
-  `missing_slots`, `missing_mappings`, `blockers`, `ready`, memory counts,
-  `memory_findings`, and `value_findings`. Use it instead of walking areas and mappings by
-  hand.
-- `decode_class_map(area, class_count)` decodes the last burst of a mask, twin, or segmentation
-  output into a class histogram, an `undecodable` count (a sign of scaling or a non-value
-  area), and up to `max_pixels` pixel rows.
-- Trainer scoring writes ground truth to `iseg` (ignore-label pixels are not written) and
-  decodes `oseg` the same way. A pixel the brain leaves silent counts as a miss for its true
-  class, never as class 0.
-
-Classifier symptoms:
-
-| Symptom | Cause | Check |
-|---|---|---|
-| 0 links after training | Reward training off, label not presented with the sample, or answer never matched | Mapping read; training trace shows correct-area bursts |
-| Output silent at test after training | Memories expired (no reward reached them) | `list_memory_neurons()` long-term counts |
-| Error on the first answer of every presentation | Stale answer delay / eligibility | `get_cortical_mapping()`; reload or `update_classifier()` |
-| A sample answers two classes | A link to the wrong class was rewarded (labels mixed in one step, or parallel protocol calls) | `list_area_synapses(class_memory, "incoming", view="edges")` |

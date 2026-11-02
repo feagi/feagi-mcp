@@ -6,7 +6,7 @@ Every path here matches what Brain Visualizer can call. Used to validate MCP req
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Final
+from typing import Any, Final
 from urllib.parse import quote
 
 
@@ -18,6 +18,8 @@ class BvOperation:
     method: str
     path_template: str
     description: str = ""
+    # Keys the FEAGI contract requires in the JSON body; empty when not verified or not needed.
+    required_body_fields: tuple[str, ...] = ()
 
 
 # Path templates use {name} for substitution (e.g. {agent_id}).
@@ -300,13 +302,26 @@ BV_OPERATIONS: Final[tuple[BvOperation, ...]] = (
         "Region detail (path param region_id)",
     ),
     BvOperation("post_region_region", "POST", "/v1/region/region", "Create region"),
-    BvOperation("put_region_region", "PUT", "/v1/region/region", "Update region"),
-    BvOperation("delete_region_region", "DELETE", "/v1/region/region", "Delete region"),
+    BvOperation(
+        "put_region_region",
+        "PUT",
+        "/v1/region/region",
+        "Update region (region_id in json_body)",
+        required_body_fields=("region_id",),
+    ),
+    BvOperation(
+        "delete_region_region",
+        "DELETE",
+        "/v1/region/region",
+        "Delete region (region_id in json_body)",
+        required_body_fields=("region_id",),
+    ),
     BvOperation(
         "delete_region_region_and_members",
         "DELETE",
         "/v1/region/region_and_members",
-        "Delete region and members",
+        "Delete region and members (region_id in json_body)",
+        required_body_fields=("region_id",),
     ),
     BvOperation(
         "put_region_relocate_members",
@@ -487,17 +502,23 @@ BV_OPERATIONS: Final[tuple[BvOperation, ...]] = (
 BV_OPERATION_BY_ID: Final[dict[str, BvOperation]] = {op.operation_id: op for op in BV_OPERATIONS}
 
 
-def list_operation_summaries() -> list[dict[str, str]]:
-    """Return all operations for MCP discovery."""
-    return [
-        {
+def list_operation_summaries() -> list[dict[str, Any]]:
+    """Return all operations for MCP discovery.
+
+    Operations that declare required JSON body fields also carry ``required_body_fields``.
+    """
+    rows: list[dict[str, Any]] = []
+    for op in BV_OPERATIONS:
+        row: dict[str, Any] = {
             "operation_id": op.operation_id,
             "method": op.method,
             "path": op.path_template,
             "description": op.description,
         }
-        for op in BV_OPERATIONS
-    ]
+        if op.required_body_fields:
+            row["required_body_fields"] = list(op.required_body_fields)
+        rows.append(row)
+    return rows
 
 
 def resolve_path(path_template: str, path_params: dict[str, str] | None) -> str:

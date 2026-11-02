@@ -28,7 +28,7 @@ from typing import Any
 from feagi_mcp.balance_measurement import actuator_targets, physics_sample
 
 MAX_TRACE_S = 20.0
-MAX_AREAS = 16
+MAX_AREAS = 64
 DEFAULT_POLL_HZ = 40.0
 MAX_VOXELS_PER_EVENT = 32
 

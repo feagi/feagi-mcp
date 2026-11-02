@@ -46,7 +46,7 @@ or mappings, or replacing mapping rules.
   Brain Visualizer does. Without `file_path`, FEAGI uses its genome directory.
 - `download_genome()` returns the full genome JSON. It is large; only fetch it when you need
   to read or transform the whole document.
-- `download_region_genome(region_id)` exports one circuit as a self-contained genome
+- `download_region_genome(region_id)` exports one circuit as a self-contained genome (only the morphologies its mappings reference, plus those of mappings entering it from outside; `prune_morphologies=False` returns FEAGI's full list; `file_path=...` writes the export to disk and returns the path, byte count and an area/morphology/region summary instead of ~25 KB inline, ready for `validate_genome(file_path=...)`). Mappings that ENTER the region from outside live in their source areas and are cut by the export; the result lists them (`entering_mappings`, or `export_notes.entering_mappings` inline) with morphology, PSC, delay and plastic flag. Re-create them when the region is merged (e.g. a pattern former's `pf_phase_*` rules from a CPG in another region)
   (mappings leaving the region are dropped), ready to share or merge elsewhere.
 - `download_connectome()` saves the connectome to disk and returns its `file_path`.
 
@@ -57,7 +57,7 @@ All of these replace the running brain. Snapshot and confirm first.
 - `load_genome_from_file(path)` loads a `.genome` file read by the MCP server. Prefer it to
   `upload_genome()` for files on disk: only the path crosses into the conversation.
 - `upload_genome(genome_json)` uploads a genome document you have in hand. Check it first
-  with `validate_genome(genome_json)`.
+  with `validate_genome(genome_json)` or `validate_genome(file_path=...)`.
 - `load_barebones_genome()` resets to a minimal genome with only core areas, as a clean start.
 - `upload_connectome(file_path)` restores a saved connectome, including learned weights.
 

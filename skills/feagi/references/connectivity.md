@@ -37,7 +37,8 @@ synapse counts and look at dimensions and rule filters.
 ## Reuse-first workflow
 
 1. `describe_connectivity_rules(include_classes=["core"])` or `list_morphologies_summary()`
-   to see what exists.
+   to see what exists. The default `detail="names"` returns name + one-line description;
+   use `detail="full"` (or `include_pattern_language=True`) only when authoring a custom rule.
 2. `recommend_connectivity_rules(src_area, dst_area, intent="...")` ranks existing rules for
    the intent and also returns a `construction` plan if nothing fits.
 3. `apply_connectivity_rule(src_area, dst_area, intent="...", postsynaptic_current_multiplier=...)`
@@ -151,7 +152,10 @@ Authoring flow:
 On an absolute positional servo OPU (`opse`, subunit 0), X is the device channel, Y is 1, and
 Z is command depth. **`z=0` decodes to the maximum command** and `z=depth-1` to near zero.
 When several Z voxels fire, FEAGI averages them and flips the result:
-`value = 1 - mean(z) / (depth - 1)`. Mapping a drive to high destination Z (for example
+`value = 1 - mean(z) / (depth - 1)`. The mean is over **distinct** voxels: several sources
+firing the same voxel count once (measured 2026-10-31: a stance voxel fired by three areas
+plus one offset voxel at z+9 decoded 4.5 bins, two offset voxels z+9 and z+18 decoded 9.0),
+so N sources on one channel scale each offset by 1/(distinct voxels). Mapping a drive to high destination Z (for example
 `?+17` on a depth-20 strip) produces about 0.05 of full scale. Select specific joints with an
 exact source-X filter (`source_x_channels` in `propose_connectivity_rule()`); wildcarding every
 muscle is refused. `send_motor_command()` handles this mapping for direct joint commands.

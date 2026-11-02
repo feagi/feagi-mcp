@@ -469,13 +469,31 @@ class TestConnectivityRuleIntelligence:
             }
         )
 
-        out = await mock_client.describe_connectivity_rules(include_classes=["core"])
+        out = await mock_client.describe_connectivity_rules(include_classes=["core"], detail="full")
         assert out["total"] == 1
         assert out["items"][0]["name"] == "block_to_block"
         assert out["items"][0]["use_case"]["requires_same_dimensions"] is True
         assert "one-to-one" in out["items"][0]["use_case"]["intent_tags"]
         assert out["pattern_language"]["rule_shape"]
         assert "propose_connectivity_rule" in out["authoring_note"]
+
+    @pytest.mark.asyncio
+    async def test_describe_connectivity_rules_default_is_compact(self, mock_client):
+        mock_client.list_morphologies_summary = AsyncMock(
+            return_value={
+                "items": [
+                    {"name": "block_to_block", "type": "vectors", "class": "core"},
+                ]
+            }
+        )
+        out = await mock_client.describe_connectivity_rules()
+        assert "pattern_language" not in out
+        assert "authoring_note" not in out
+        assert set(out["items"][0]) == {"name", "class", "description"}
+        with_pl = await mock_client.describe_connectivity_rules(include_pattern_language=True)
+        assert with_pl["pattern_language"]["rule_shape"]
+        bad = await mock_client.describe_connectivity_rules(detail="x")
+        assert bad["error"] == "invalid_detail"
 
     @pytest.mark.asyncio
     async def test_recommend_connectivity_rules_prefers_core_identity_when_dimensions_match(
@@ -833,6 +851,47 @@ class TestStanceRelative:
         row = next(t for t in out["table"] if t["src_bin"] == 7)
         # bin 7 offset +4 -> target between z=10 and z=9; mean of stance and reflex matches
         assert abs((10 + row["dst_z"]) / 2 - 9.5) <= 1.0
+
+    def test_coactive_z_compensates_against_other_rest_voxel(self):
+        from feagi_mcp.stance_mapping import compile_stance_offset_rows
+
+        # depth 80 over range 0..79 (1 unit per z, z=0 is the maximum): reference 19 -> z_ref 60;
+        # gain -6 on bin 1 (center 0) -> value 13 -> z_t 66.
+        args = {
+            "src_axis": "z",
+            "src_bins": 2,
+            "src_fixed": [0, 0, 0],
+            "channels": [{"channel": 0, "reference": 19.0}],
+            "depth": 80,
+            "joint_range": [0.0, 79.0],
+            "src_center": 0.0,
+        }
+        out = compile_stance_offset_rows(gain=-6.0, coactive_z=59, **args)
+        assert out["stance"][0]["stance_dst"] == [0, 0, 60]
+        row = next(t for t in out["table"] if t["src_bin"] == 1)
+        assert row["dst_z"] == 2 * 66 - 59 == 73
+        assert row["target_value"] == 79.0 - 66  # mean z (59 + 73) / 2 = 66
+        assert not out["warnings"]
+        # a per-channel mapping (dict or JSON string) gives the same rows
+        by_dict = compile_stance_offset_rows(gain=-6.0, coactive_z={0: 59}, **args)
+        by_json = compile_stance_offset_rows(gain=-6.0, coactive_z='{"0": 59}', **args)
+        assert by_dict["voxel_mappings"] == out["voxel_mappings"] == by_json["voxel_mappings"]
+
+    def test_coactive_z_clamps_with_warning(self):
+        from feagi_mcp.stance_mapping import compile_stance_offset_rows
+
+        args = dict(self.ARGS)
+        # z_ref 10, coactive 0, gain -10: bin 10 (offset -50) targets z_t 15 -> 2*15-0 = 30 > 19
+        out = compile_stance_offset_rows(gain=-10.0, coactive_z=0, **args)
+        row = next(t for t in out["table"] if t["src_bin"] == 10)
+        assert row["dst_z"] == 19
+        assert any("coactive voxel z=0" in w and "clamped" in w for w in out["warnings"])
+
+    def test_coactive_z_with_n_stance_voxels_rejected(self):
+        from feagi_mcp.stance_mapping import compile_stance_offset_rows
+
+        with pytest.raises(ValueError, match="not both"):
+            compile_stance_offset_rows(gain=10.0, n_stance_voxels=1, coactive_z=9, **self.ARGS)
 
     def test_per_channel_overrides_win(self):
         from feagi_mcp.stance_mapping import compile_stance_offset_rows

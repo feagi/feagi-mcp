@@ -15,6 +15,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from feagi_mcp.introspection_discovery import match_descriptor_to_registered_agents
+
 BURST_RATE_TOLERANCE = 0.01  # relative
 
 # Genome blueprint keys look like ``_____10c-<cortical_id>-cx-___bbx-i``.
@@ -160,9 +162,16 @@ def burst_rate_finding(
 
 
 def agent_finding(
-    descriptor: dict[str, Any] | None, registered_agent_ids: list[str]
+    descriptor: dict[str, Any] | None,
+    registered_agent_ids: list[str],
+    registered_agents: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
-    """Controller descriptor whose agent id is not registered with FEAGI."""
+    """Controller descriptor whose agent is not registered with FEAGI.
+
+    The descriptor file and the registry encode the agent id differently, so besides the
+    exact id the check matches the agent name decoded from the descriptor id against the
+    registered agents' ``agent_name`` (see ``match_descriptor_to_registered_agents``).
+    """
     if not descriptor or not descriptor.get("found"):
         return {
             "check": "agent_registration",
@@ -182,7 +191,7 @@ def agent_finding(
             "message": "Descriptor carries no agent_id; cannot verify registration.",
             "restore": None,
         }
-    if agent_id in registered_agent_ids:
+    if match_descriptor_to_registered_agents(agent_id, registered_agent_ids, registered_agents):
         return None
     return {
         "check": "agent_registration",
@@ -207,6 +216,7 @@ def compare_live_state(
     descriptor: dict[str, Any] | None,
     registered_agent_ids: list[str],
     sensor_snapshot: dict[str, Any],
+    registered_agents: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """All drift findings from already-fetched payloads."""
     expected_dims = blueprint_dimensions(blueprint)
@@ -216,7 +226,7 @@ def compare_live_state(
     rate = burst_rate_finding(burst_config, simulation_timestep)
     if rate:
         findings.append(rate)
-    agent = agent_finding(descriptor, registered_agent_ids)
+    agent = agent_finding(descriptor, registered_agent_ids, registered_agents)
     if agent:
         findings.append(agent)
     return {
@@ -259,6 +269,7 @@ async def gather_live_state_drift(client: Any, controller_id: str = "mujoco") ->
     blueprint = genome.get("blueprint") if isinstance(genome, dict) else None
     live_areas = areas if isinstance(areas, dict) and "error" not in areas else {}
     agent_ids = agents.get("agent_ids") if isinstance(agents, dict) else None
+    agent_records = agents.get("agents") if isinstance(agents, dict) else None
     result = compare_live_state(
         live_areas=live_areas,
         blueprint=blueprint if isinstance(blueprint, dict) else {},
@@ -267,6 +278,7 @@ async def gather_live_state_drift(client: Any, controller_id: str = "mujoco") ->
         descriptor=descriptor if isinstance(descriptor, dict) else None,
         registered_agent_ids=[a for a in (agent_ids or []) if isinstance(a, str)],
         sensor_snapshot=snapshot if isinstance(snapshot, dict) else {},
+        registered_agents=[a for a in (agent_records or []) if isinstance(a, dict)],
     )
     if errors:
         result["fetch_errors"] = errors

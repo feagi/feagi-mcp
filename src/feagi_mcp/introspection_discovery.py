@@ -24,6 +24,8 @@ every candidate root.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import logging
 import os
@@ -276,17 +278,53 @@ def discover_endpoint_or_raise(
     return found
 
 
+def descriptor_agent_name(descriptor_agent_id: str | None) -> str | None:
+    """Agent name carried by a descriptor's ``agent_id`` (base64 AgentDescriptor bytes).
+
+    The controller writes its AgentDescriptor as base64: a 4-byte instance id, the
+    NUL-padded manufacturer and agent name, and a 4-byte version. The registry lists
+    sessions under a different opaque id, but its capability record carries the same
+    ``agent_name``. Returns the second NUL-separated ASCII field, or None when the id does
+    not decode to that shape.
+    """
+    if not descriptor_agent_id:
+        return None
+    try:
+        raw = base64.b64decode(descriptor_agent_id + "=" * (-len(descriptor_agent_id) % 4))
+    except (binascii.Error, ValueError):
+        return None
+    fields = [f for f in raw[4:-4].split(b"\x00") if f]
+    if len(fields) < 2:
+        return None
+    try:
+        name = fields[1].decode("ascii")
+    except UnicodeDecodeError:
+        return None
+    return name if name.isprintable() else None
+
+
 def match_descriptor_to_registered_agents(
     descriptor_agent_id: str | None,
     registered_agent_ids: list[str],
+    registered_agents: list[dict[str, Any]] | None = None,
 ) -> list[str]:
-    """Join a controller descriptor to the FEAGI agent registry by exact id.
+    """Join a controller descriptor to the FEAGI agent registry.
 
-    FEAGI agent IDs are opaque base64 AgentDescriptors. Matching
+    FEAGI agent IDs are opaque. An exact id match wins. The descriptor file and the registry
+    can use different id encodings for the same agent, so when ``registered_agents``
+    (``{agent_id, agent_name}`` records) is given and no id matches, registered agents
+    whose ``agent_name`` equals the name decoded from the descriptor id match. Matching
     ``controller_id`` as a substring of those IDs is not a valid join.
     """
     if not descriptor_agent_id:
         return []
     if descriptor_agent_id in registered_agent_ids:
         return [descriptor_agent_id]
+    name = descriptor_agent_name(descriptor_agent_id)
+    if name and registered_agents:
+        return [
+            a["agent_id"]
+            for a in registered_agents
+            if isinstance(a, dict) and a.get("agent_name") == name and a.get("agent_id")
+        ]
     return []

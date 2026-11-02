@@ -1,6 +1,6 @@
 ---
 name: feagi
-description: Inspect, build, wire, test, and debug brains in a running FEAGI instance through the feagi MCP server. Use whenever the user mentions FEAGI, a genome or connectome, cortical areas, brain regions or "circuits", IPU/OPU/CUSTOM/MEMORY areas, morphologies or connectivity rules, mappings, plasticity/STDP, the burst engine, Brain Visualizer, Neurorobotics Studio, or a robot/MuJoCo embodiment driven by FEAGI. Covers FEAGI vocabulary, naming and placement policy, reuse-first wiring, verification, and diagnostics.
+description: Inspect, build, wire, test, and debug brains in a running FEAGI instance through the feagi MCP server. Use whenever the user mentions FEAGI, a genome or connectome, cortical areas, brain regions or "circuits", IPU/OPU/CUSTOM/MEMORY areas, morphologies or connectivity rules, mappings, plasticity/STDP, the burst engine, Brain Visualizer, Neurorobotics Studio, or a robot/MuJoCo embodiment driven by FEAGI. Covers FEAGI vocabulary, naming and placement policy, reuse-first wiring, verification, and diagnostics. Also use to design a genome, brain or circuit architecture (which modules, plan before building).
 license: Apache-2.0
 compatibility: Requires the feagi MCP server (PyPI package feagi-mcp) connected to a reachable FEAGI API (default localhost:8000).
 metadata:
@@ -116,7 +116,7 @@ locally with `interpret_cortical_id()`. Details: [references/concepts.md](refere
     a new mechanism.
 11. **Derive the burst rate from the body.** Before embodiment behavior work, set it from
     the body's fastest dynamic and the loop depth (see
-    [references/embodiment.md](references/embodiment.md#choosing-the-burst-rate)); never
+    [references/embodiment-burst-measuring.md](references/embodiment-burst-measuring.md#choosing-the-burst-rate)); never
     keep the default for balance or other unstable tasks. Changing it is one call,
     `set_burst_engine_frequency(frequency_hz)`. The return is the confirmation.
 11. **Go through Studio when it is running.** With Neurorobotics Studio open, call FEAGI
@@ -130,14 +130,26 @@ locally with `interpret_cortical_id()`. Details: [references/concepts.md](refere
     `verdict` that `amends` the hypothesis. When a mechanism fails its check twice, append a
     `dead_end` saying why. Mirror each implementation gap as a notebook `gap`. Do not file a
     bug as a `gap`. Generic facts still go to
-    [references/lessons.md](references/lessons.md). Entries are at most 5 lines, numbers and
+    [references/lessons.md](references/lessons.md) (also [learning](references/lessons-learning.md), [embodiment](references/lessons-embodiment.md)). Entries are at most 5 lines, numbers and
     refs only, never pasted logs or traces. Subagents append their own stage results; the main
     session writes goals, hypotheses and verdicts. Never amend another author's entry except
     to set a hypothesis status.
+13. **Build circuits with `build_circuit_from_spec()` first.** One JSON spec makes a region,
+    its areas, morphologies and mappings from sized templates (`port`, `onset_pulse`,
+    `ring_cpg`, `servo_channel_two_rest`, `phase_window_gate`), removes mappings (`delete`),
+    edits areas of an existing region (`edit_areas`) and checks the threshold arithmetic.
+    Run `dry_run=true`, read `errors`, `sizing` and `calls`, then apply with `dry_run=false`;
+    fall back to single calls only for what the spec cannot say. Check the result with
+    `record_spikes()` and `analyze_run(csv_path, ...)` (ring period, port-in-window share,
+    spikes per phase window, duty and off-episodes) instead of reading rows by eye.
 12. **Work top-down on behavior goals.** Go behavior, then region, then mapping, then synapse,
     and descend only when the level above pins the fault. State the region-level hypothesis
     and the behavior test for it before reading synapses. See
     [references/behavior-design.md](references/behavior-design.md).
+
+13. **Read the memory design guide first.** Before designing any circuit with a MEMORY area or
+    associative mapping, read `references/memory-design*.md`
+    ([memory-design.md](references/memory-design.md), [structures](references/memory-design-structures.md)).
 
 ## Keep responses small
 
@@ -162,24 +174,51 @@ independent calls together in one turn, and never poll physics or logs in a loop
 
 | Goal | Start with | Reference |
 |---|---|---|
+| Design a genome, brain or circuit architecture (modules, mechanisms, budget, schematic) | `get_brain_regions()`, `show_in_studio`, `get_runtime_metrics(measure_s=10)` | [genome-design.md](references/genome-design.md), [budget and build order](references/genome-design-budget.md), [template](references/genome-design-template.md), [patterns](references/genome-design-patterns.md), [adaptive patterns](references/genome-design-patterns-adaptive.md), [examples](references/genome-design-examples.md) |
 | Teach a robot a behavior (stand, reach, walk), or a behavior goal stalls | `get_brain_regions()`, `measure_balance()` / `run_embodiment_trial` | [behavior-design.md](references/behavior-design.md) |
-| Train a behavior with the Trainer (support, reward, results) | `get_trainer_experiment`, `configure_trainer_run`, `get_trainer_balance_results` | [behavior-design.md](references/behavior-design.md#training-method-fit) |
+| Train a behavior with the Trainer (support, reward, results) | `get_trainer_experiment`, `configure_trainer_run`, `get_trainer_balance_results` | [behavior-design-training.md](references/behavior-design-training.md#training-method-fit) |
 | Describe the genome, list circuits or areas | `get_genome_info()`, `get_brain_regions()`, `list_cortical_areas()` | [concepts.md](references/concepts.md) |
-| Explain one circuit's inputs, outputs, and edges | `get_region_circuit()` | [concepts.md](references/concepts.md) |
-| Build a new circuit (gate, CPG, reflex, controller) | `create_brain_region()`, `suggest_cortical_anchor_positions()`, `create_cortical_area()` | [building-circuits.md](references/building-circuits.md) |
+| Explain one circuit's inputs, outputs, and edges | `get_region_circuit()` (`compact=True`: names, dimensions, rules, synapse counts only) | [concepts.md](references/concepts.md) |
+| Build a new circuit (gate, CPG, reflex, controller) | `create_brain_region()`, `suggest_cortical_anchor_positions()`, `create_cortical_area()` | [building-circuits.md](references/building-circuits.md), [placement, areas, examples](references/building-circuits-placement.md) |
+| Build a whole circuit from one spec (port, onset pulse, ring CPG, servo rest voxels) | `build_circuit_from_spec(spec_json, dry_run=True)` | [building-circuits.md](references/building-circuits.md#build-from-a-spec) |
 | Connect area A to area B | `recommend_connectivity_rules()`, `apply_connectivity_rule()` | [connectivity.md](references/connectivity.md) |
-| Learning: STDP, R-STDP, memory areas, time series | `get_memory_area_runtime_config()`, `set_memory_mp_encoding()` | [memory-and-plasticity.md](references/memory-and-plasticity.md) |
-| Classifiers (training with reward and punishment), segmentation, depth maps, value planes | `inspect_classifier()`, `wire_value_passthrough()`, `run_stimulus_protocol()` | [value-planes-and-classifiers.md](references/value-planes-and-classifiers.md) |
-| Homeostasis: hold an area's firing rate (`rate_modulated_leak`) | `update_cortical_area()`, `get_area_parameters()` | [memory-and-plasticity.md](references/memory-and-plasticity.md) |
-| Neuromodulators, `memory.formation` (stop new memories forming) | `list_modulator_types()`, `create_modulator()` | [memory-and-plasticity.md](references/memory-and-plasticity.md) |
-| Test or debug signal flow, a silent output, a dead FEAGI | `probe_area_response()`, `trace_signal_path()`, `diagnose_feagi_runtime()` | [debugging.md](references/debugging.md) |
-| Change the burst frequency | `set_burst_engine_frequency(frequency_hz)` once. The return confirms it | [embodiment.md](references/embodiment.md) |
+| Learning: STDP, R-STDP, memory areas, time series | `get_memory_area_runtime_config()`, `set_memory_mp_encoding()` | [memory-and-plasticity.md](references/memory-and-plasticity.md), [STDP and R-STDP](references/memory-plasticity-stdp.md), [design with memory](references/memory-design.md), [structures and mistakes](references/memory-design-structures.md) |
+| Classifiers (training with reward and punishment), segmentation, depth maps, value planes | `inspect_classifier()`, `wire_value_passthrough()`, `run_stimulus_protocol()` | [value-planes-and-classifiers.md](references/value-planes-and-classifiers.md), [checking and debugging](references/value-planes-debugging.md) | 
+| Homeostasis: hold an area's firing rate (`rate_modulated_leak`) | `update_cortical_area()`, `get_area_parameters()` | [memory-plasticity-homeostatic.md](references/memory-plasticity-homeostatic.md) |
+| Modulators: excitability, gain, gating, learning phases, `memory.formation` (stop new memories forming) | `list_modulator_types()`, `create_modulator()`, `modulator_usage()` | [modulators.md](references/modulators.md), [memory.formation](references/memory-and-plasticity.md) |
+| Test or debug signal flow, a silent output, a dead FEAGI | `probe_area_response()`, `trace_signal_path()`, `diagnose_feagi_runtime()` | [debugging.md](references/debugging.md), [drift, learning, runtime failure](references/debugging-runtime.md) |
+| Every burst of an area's firing, or a stimulus held on every burst | `record_spikes()`, `hold_stimulus()` | [debugging.md](references/debugging.md#record-every-burst-and-hold-a-stimulus) |
+| Change the burst frequency | `set_burst_engine_frequency(frequency_hz)` once. The return confirms it | [embodiment-burst-measuring.md](references/embodiment-burst-measuring.md#choosing-the-burst-rate) |
 | Robots, joints, MuJoCo scenes, simulator assets | `get_registered_agents()`, `get_agent_joint_map()`, `get_mujoco_scene_config()` | [embodiment.md](references/embodiment.md) |
-| Measure robot behavior (balance, episodes, brain-to-body timing) | `measure_balance()`, `record_aligned_trace()` | [embodiment.md](references/embodiment.md) |
+| Measure robot behavior (balance, episodes, brain-to-body timing) | `measure_balance()`, `record_aligned_trace()` | [embodiment-burst-measuring.md](references/embodiment-burst-measuring.md#measuring-behavior) |
 | Save, snapshot, load, or merge genomes | `save_brain_snapshot()`, `save_genome_to_filesystem()`, `queue_amalgamation_by_payload()` | [genome-lifecycle.md](references/genome-lifecycle.md) |
-| Find a tool for anything else | | [tool-index.md](references/tool-index.md) |
+| Find a tool for anything else | | [tool-index.md](references/tool-index.md), [tool-index-2.md](references/tool-index-2.md) |
 
 ## Core workflows
+
+### Design a genome
+
+For a multi-module genome, a new region or a new mechanism. A single pattern goes straight to
+"Build a circuit". Method: [genome-design.md](references/genome-design.md) (its Design
+checklist is the 11-line version) and the document template
+[genome-design-template.md](references/genome-design-template.md): read these two by default.
+Blocks: [genome-design-patterns.md](references/genome-design-patterns.md)
+and [genome-design-patterns-adaptive.md](references/genome-design-patterns-adaptive.md), loaded by
+heading (`genome-design-patterns#<heading>`) when choosing a mechanism. Worked designs:
+[genome-design-examples.md](references/genome-design-examples.md), only when the task matches one.
+
+1. Intake: the goal as a number with a baseline, what must never happen (safety), the body's
+   facts and the burst rate derived from it.
+2. Hub first (step 0 of "Build a circuit"); keep what fits a module, record the ancestry.
+3. Decompose into one region per function, with an interface contract table per port.
+4. Choose the mechanism per module: innate wiring first; memory or plasticity only with a
+   credit path; decide which modulator freezes learning.
+5. Orchestrate: modulators and an influence table; reward only from hard-wired detectors.
+6. Budget: synapses per rule, events per burst, loop latency against the body's time constant.
+7. Layout (2D rows per layer, 3D anchors per module, in the template's layout table), then the
+   schematic (`show_in_studio` kind `circuit`, edges `<rule>, <sign>`), design notes, and a
+   report to the user with at most one exclusive question and the cost line.
+8. Build one stage per module with its acceptance number, snapshot first, black-box test after.
 
 ### Teach or fix a robot behavior
 
@@ -225,7 +264,8 @@ independent calls together in one turn, and never poll physics or logs in a loop
    one line how each could help, and prefer `augment_genome_from_hub` over building from
    scratch. If there are none, say so in one line and build. Do not search again for the same
    goal unless the plan changes. Hub genomes are merged only through `augment_genome_from_hub`
-   / `replace_genome_from_hub`, which record the download and ancestry.
+   / `replace_genome_from_hub`, which record the download and ancestry. When the function is new
+   or spans several modules, design it first ("Design a genome" above).
 1. Name the function. `get_brain_regions()` to reuse a matching region, otherwise
    `create_brain_region(title=<function>, coordinates_2d, coordinates_3d)` under the root, with
    coordinates next to the existing regions (see
@@ -233,9 +273,16 @@ independent calls together in one turn, and never poll physics or logs in a loop
 2. After the region exists, `suggest_cortical_anchor_positions(count, parent_region_id, layout)`
    to place the new areas near it. Without a parent it falls back to a default far from the
    rest of the brain.
-3. `create_cortical_area()` for each area, with `brain_region_id`, role-based names, and the
+3. Build with `build_circuit_from_spec(spec_json)` first: `dry_run=true` (read `errors`,
+   `sizing`, `calls`), then `dry_run=false`. Templates: `port` (leaky integrator with
+   self-hold), `onset_pulse` (one-burst pulse), `ring_cpg` (stepping ring), `servo_channel_two_rest`
+   (stance rest voxels and offsets), `phase_window_gate` (pass a pulse only inside a phase
+   window); `delete` and `edit_areas` change what already exists. Only what the spec cannot say
+   uses `create_cortical_area()` per area, with `brain_region_id`, role-based names, and the
    smallest dimensions that do the job (often `[1, 1, 1]` for logic).
-4. Wire each edge (next workflow), then verify with `probe_area_response()`.
+4. Wire each remaining edge (next workflow), then verify with `probe_area_response()`. Drive
+   inputs with `hold_stimulus(..., background=True)` (cancel it with
+   `get_stimulus_hold(hold_id, cancel=true)`) or `schedule_stimulus` for burst-exact pulses.
 5. Summarize what was created, and offer `save_genome_to_filesystem()`.
 6. Sharing nudge (rare). Only after a verified result passed its acceptance check, or a
    self-contained reusable circuit (a region with clear inputs and outputs) was just finished

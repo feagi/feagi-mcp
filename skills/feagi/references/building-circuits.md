@@ -1,14 +1,88 @@
 # Building circuits
 
+Part 1 of 2: workflow, naming and the `build_circuit_from_spec` spec (templates, `delete`, `edit_areas`). Placement, area creation, editing, pattern sketches and worked examples: [building-circuits-placement.md](building-circuits-placement.md).
+
 ## Contents
 
+- Build from a spec
 - Workflow
 - Naming policy
-- Placement
-- Creating areas by type
-- Editing, cloning, and deleting
-- Pattern sketches
-- Worked example: OR gate
+
+## Build from a spec
+
+`build_circuit_from_spec(spec_json, dry_run=True)` creates a region, its areas, morphologies and
+mappings from one JSON document instead of dozens of calls. Always dry-run first: it returns
+`valid`, `errors`, `warnings`, the `sizing` numbers every template computed, the `external` areas
+it will look up by name, and the full `calls` list. Then `snapshot_genome()` and run it with
+`dry_run=false`. Area `properties` are checked against FEAGI's parameter schema in the dry run (unknown keys and
+out-of-range values are errors; a percent such as `neuron_excitability: 100`, the form inspect
+returns for some existing areas, is sent as the fraction 1.0 with a warning). The run aborts
+before any create when an area name already exists. At the first failure it rolls back what the
+call created (its areas, then its region; `rolled_back` lists them and anything it could not
+remove; created morphologies stay) and otherwise ends with a `verification` read:
+areas found, rules and synapse count per mapping, `zero_synapse` mappings.
+
+```json
+{"region": {"title": "Step Generator", "coordinates_2d": [4, 0], "coordinates_3d": [120, 80, 100]},
+ "templates": [
+  {"template": "port", "name": "Level", "bins": 9, "threshold": 2.5, "psp": 3, "leak": 0.04, "input": 1},
+  {"template": "onset_pulse", "name": "Go", "gate": "Gate_Area"},
+  {"template": "ring_cpg", "name": "Ring", "bins": 16, "threshold": 6, "psp": 1, "leak": 0.02,
+   "drive": "Gate_Area", "drive_d": 0.05, "lateral_psc": 0.5,
+   "seed": {"area": "Go_Onset", "bin": 0}, "readouts": [{"name": "Phase", "shift": 0}, {"name": "Phase_Shifted", "shift": 8}]}
+ ]}
+```
+
+Spec keys: `region` (`{title, coordinates_3d, coordinates_2d?}` or `{region_id}`), `areas`
+(`{name, dimensions, position?, properties?}`), `morphologies`, `mappings` (`{src, dst, rules,
+replace?}`), `templates`, `defaults` (`origin`, `step`). Without `coordinates_2d` the region is
+placed one step past its sibling regions in the same row (the result's `region_coordinates_2d`
+says where); given coordinates are sent as is, read back after creation and corrected with one
+update if the genome shows another position (`created.region_coordinates_2d.mismatch`).
+Rules take the API keys or the shorthand `morphology`, `psc`, `delay`, `plastic`, `scalar`; the
+dry run translates and validates the same payload the real run sends, so the two cannot
+disagree. Names in `src`/`dst` are spec areas or
+live areas; positions default to a grid (40 apart) from the region's `coordinates_3d`. The
+numbers in the example are placeholders: read PSP, input per burst and thresholds from your
+areas (`inspect_cortical_areas_minimal`) before you size anything.
+
+A port's input per burst is the **source** area's PSP times the mapping's PSC, not the port's own
+PSP; read the source's PSP (`inspect_cortical_areas_minimal`) before choosing `input`. Self-hold
+cannot bridge gaps in the input: the membrane resets on every fire, so a port whose input drops
+out for a burst goes silent. To bridge input gaps add a delay line (a chain of `[1,1,1]` relays
+with `synaptic_delay_bursts`, or a second area copying the input one burst later) instead of
+raising the self-hold.
+
+| Template | What it makes | Sizing rule it applies |
+|---|---|---|
+| `port` | `[1,1,N]` leaky integrator, optional self-hold mapping | Self-hold `s = psp x psc` with `threshold - input <= s < threshold`; default is the middle of that interval, `hold_psc` outside it is an error |
+| `onset_pulse` | `<name>_Onset`, `<name>_Delay` from a `gate` area | Delay copy inhibits Onset from the next burst; inhibition >= gate input, so Onset fires once |
+| `ring_cpg` | `[1,1,N]` ring, self-hold, `lateral_+z` + `last_to_first` excitation (`lateral_psc`, required), `lateral_-z` + `first_to_last` inhibition (default `-lateral_psc`), `drive` via `0-0-0_to_all`, optional `seed`, shifted `readouts` | Self-hold `threshold - d <= s < threshold`. `predicted_step_bursts` uses `V <- V (1-leak) + (p + d)` and is **uncalibrated**: confirm the period with `record_spikes` and adjust `lateral_psc` |
+| `servo_channel_two_rest` | `<name>_RestReflex`, `<name>_RestPattern` (`[channels,1,depth]`), a tonic area firing both rest voxels per channel (stance z+1 and z-1), per-source offset rows with `coactive_z` set to the other role's rest voxel, each source inhibiting its own rest neuron | Inhibition `ceil(tonic_psp x tonic_psc / source_psp)` (membrane units); a clamp warning from the offset compiler is an error unless `allow_clamp` |
+| `phase_window_gate` | Gate area `<name>` (`[1,1,1]`): `pulse` and optional tonic `enable` excite it, every `phase` bin outside `window` (list or `"a..b"`, of `phase_bins`) inhibits it, it drives `target` | `V <- V (1 - leak) + I`, fire at `V >= T`, steady state with `accumulate`: enable alone < T; pulse alone < T (>= T without enable); enable + pulse >= T; enable + pulse - inhibition < T. Any violation fails the dry run; `inhibit_psc` defaults to the smallest integer that satisfies the last line |
+
+Spec keys beyond templates: `delete` (`[{src, dst}]`, removes those mappings before the new ones
+are written, so a pair can be deleted and rebuilt in one spec) and `edit_areas` (`[{name,
+properties}]` on live areas that are members of `region.region_id`, checked against the parameter
+schema). New areas in an existing region are ordinary `areas` entries with a `position` under
+`region: {region_id}`. A real run does not roll back deletes or edits: `snapshot_genome()` first.
+
+Memory and plasticity in a spec: an area takes `cortical_type: "MEMORY"` (the real run fails
+if the id does not start with `m`), memory `properties` (`temporal_depth`, `neuron_init_lifespan`,
+`neuron_lifespan_growth_rate`, `neuron_longterm_mem_threshold`, `memory_neuron_cap`,
+`ltm_eviction`), `mp_encoding` (`"mp_differential"` or `{mode, delta_quantization}`; change modes
+need `temporal_depth` >= 2) and `modulators` (area ids, e.g. `memory.formation`). Rules take
+`episodic_memory` (must end in a MEMORY area), `associative_memory` (must start in one),
+`plasticity_mode` `stdp`/`rstdp` with `plasticity_window`, `plasticity_eta`, `max_weight`,
+`ltp_multiplier`, `ltd_multiplier`, `eligibility_decay_bursts` (rstdp only; rstdp needs
+`modulators`) and `delay` >= 1. A mapping can carry `modulators` and `frozen: true`
+(frozen through FEAGI's `plasticity_frozen` route after its rules are written and read back;
+flag and mode kept; the mapping needs a plastic rule). Illegal combinations fail the dry run; live source/destination
+areas are checked for the `m` prefix before anything is created.
+
+Limits: the builder makes CUSTOM and MEMORY areas in one region, sets neuron parameters through
+the create path, and does not make IPU/OPU areas (those stay external names). A morphology that already exists is reported `morphologies_reused` and not compared with
+the spec's version.
 
 ## Workflow
 
@@ -22,12 +96,14 @@
 2. **Find or create the region.** `get_brain_regions()`; reuse a region already titled for
    this function, otherwise `create_brain_region(title, coordinates_2d, coordinates_3d)`.
    Omit `parent_region_id` to attach under the root. Coordinates:
-   - `coordinates_2d` (brain map): read the sibling regions' `coordinate_2d`. They usually sit
-     in a row with a regular step; place the new region one step past the largest x, with the
-     same y.
-   - `coordinates_3d`: near the areas the circuit will connect to (their `coordinates_3d`
-     from `list_cortical_areas()`; negative values are normal), at least 32 voxels from other
-     anchors.
+   - `coordinates_2d` (brain map): read the sibling regions' `coordinate_2d`. Place the new
+     region on its signal-flow row (see genome-design-template "Layout"), one map step
+     (about 120 voxels) past the previous circuit. Do not multiply that step by the title
+     length.
+   - `coordinates_3d`: on the next free row for its layer, one map step in Y from the
+     circuit below. Area anchors inside the circuit stay 32 voxels apart. Negative values
+     are normal. If the same Y would leave it within one map step of another title, a core
+     area, or an I/O area, take the next Y instead of stretching X.
 3. **Place areas.** (With Studio, before this step append a `hypothesis` note holding the
    acceptance check as a number.) Once the region exists,
    `suggest_cortical_anchor_positions(count, parent_region_id, layout)`. Without
@@ -65,123 +141,3 @@ region of an untitled genome: never put new CUSTOM or MEMORY areas there.
 | `Walk_CPG_Hip_FL`, `CPG_Rhythm_Core`, `Motor_FL_Hip` | `McpOrInput`, `FEAGI_Area`, `NewArea_2026` |
 
 Keep one style per project (PascalCase or snake_case with underscores between facets).
-
-## Placement
-
-New CUSTOM and MEMORY anchors must be at least 20 voxels from the world origin and at least
-32 voxels from every existing anchor, so labels stay readable in Brain Visualizer.
-`create_cortical_area()` enforces this; `skip_placement_validation=True` bypasses it only when
-the user insists.
-
-`suggest_cortical_anchor_positions()` reads live geometry and returns valid anchors near the
-parent region. Layouts (the Brain Visualizer camera looks toward +Z):
-
-| `layout` | Use for |
-|---|---|
-| `xy_plane` (default) / `co_occurring_inputs` | Parallel inputs or peers: same Y and Z, spread along +X |
-| `hierarchy_y` | Shallow hierarchies: each stage one step along +Y |
-| `temporal_z` | Time or deep feedforward chains: stages along +Z |
-
-FEAGI auto-places IPU and OPU areas, so a requested position may be overridden. The create
-result's `placement` block reports requested versus actual coordinates and `relocated`.
-
-## Creating areas by type
-
-**CUSTOM**: `create_cortical_area(name, cortical_type="CUSTOM", dimensions=[w, h, d],
-position=[x, y, z], brain_region_id=...)`. Optional `neurons_per_voxel`.
-
-**MEMORY**: same call with `cortical_type="MEMORY"`. Memory areas are `[1, 1, 1]`. The tool
-sends `sub_group_id: MEMORY`, so FEAGI assigns an ID starting with `m`. An area whose ID
-starts with `c` will never form memory neurons: delete it and recreate it as MEMORY. Then
-configure it (see [memory-and-plasticity.md](memory-and-plasticity.md)).
-
-**IPU / OPU for a known device**: prefer `create_io_area_for_unit(name, subtype, channels,
-depth, ...)`. It derives the canonical ID an agent's coder binds to, creates the area, and
-verifies the ID. Use plain `create_cortical_area(cortical_type="OPU" or "IPU", cortical_id=<subtype>,
-group_id, device_count, per_device_dimensions, data_type_configs_by_subunit)` only when you
-need control the helper does not offer. `get_cortical_template()` lists the available
-IPU/OPU templates. Before adding I/O for a robot, check what the agent registered (see
-[embodiment.md](embodiment.md)).
-
-## Editing, cloning, and deleting
-
-- `update_cortical_area(cortical_id, updates)` changes neuron parameters, dimensions,
-  position, name, or flags. Changes rebuild affected synapses.
-- `clone_cortical_area(source_area_id, new_name, coordinates_3d, coordinates_2d,
-  parent_region_id, clone_cortical_mapping)` duplicates a CUSTOM or MEMORY area, optionally
-  with its mappings.
-- `reset_cortical_neural_state(cortical_ids)` clears membrane potentials without touching the
-  genome. It keeps learned weights; to reset weights use `reset_area_incoming_weights(cortical_ids)`
-  (all incoming mappings of each area; synapse weights back to the rule's initial value, plasticity
-  traces cleared, neuron state untouched; snapshot first).
-- `delete_cortical_area(cortical_id)` removes the area with all its neurons and synapses.
-  Snapshot and confirm first.
-- To move areas between regions, use `brain_visualizer_api(operation_id="put_region_relocate_members", ...)`.
-  `list_brain_visualizer_operations()` lists every Brain Visualizer operation available
-  through that pass-through.
-
-## Pattern sketches
-
-These are starting shapes, not fixed recipes. Confirm rule names with
-`describe_connectivity_rules()` and tune against live activity.
-
-- **Logic gate (OR/AND)**: two `[1,1,1]` inputs into one `[1,1,1]` output. OR: each input
-  alone drives the output past threshold. AND: tune the output's threshold so one input is
-  not enough but two are (worked example below). PSC multipliers are integers, so balance
-  with thresholds, not fractional gains.
-- **Central pattern generator (CPG)**: a small ring of neurons along Z with a lateral
-  (`lateral_+z`-style) self-mapping so activity steps around the ring; leak and PSC set the
-  rhythm. Two CPGs with mutual inhibition (negative PSC multiplier) lock in anti-phase for
-  left/right or diagonal gaits.
-- **Pattern to motor**: CPG phases mapped onto joint drive areas, then onto OPU channels.
-  On positional servo OPUs, depth `z=0` is the maximum command (see
-  [connectivity.md](connectivity.md)).
-- **Sensorimotor loop**: IPU (joint position, IMU) to an error area to a controller area to
-  the OPU.
-- **Trigger / gate**: a `[1,1,1]` trigger area that enables a behavior circuit; stimulate it
-  with `stimulate_area()` to start the behavior.
-- **Reflex**: an IPU mapped straight to an OPU with a custom rule
-  (`build_reflex_mapping()`); `auto_polarity_probe()` finds which OPU column moves the
-  sensor in which direction before you wire it.
-
-## Worked example: OR gate
-
-1. `get_brain_regions()`: no region titled `OR Gate`, root region at a known UUID.
-2. `create_brain_region(title="OR Gate", coordinates_2d=[<right of existing>, 0],
-   coordinates_3d=[<near related areas>])` returns `region_id`.
-3. `suggest_cortical_anchor_positions(count=3, parent_region_id=region_id, layout="xy_plane")`.
-4. `create_cortical_area()` three times: `OrGate_Input_A`, `OrGate_Input_B`, `OrGate_Output`,
-   each CUSTOM `[1, 1, 1]` in the region.
-5. `apply_connectivity_rule(src_area=<input A>, dst_area=<output>, intent="one-to-one identity")`, and
-   the same for input B.
-6. `probe_area_response(stimulus_area=<input A>, stimulus_voxels=[[0, 0, 0]],
-   observe_area=<output>)`, then the same for input B. Both should report `responded: true`.
-7. Tell the user: "Created the OR Gate circuit with OR Gate > OrGate_Input_A,
-   OR Gate > OrGate_Input_B, and OR Gate > OrGate_Output; each input alone fires the output.
-   Changes are live but unsaved." Offer `save_genome_to_filesystem()`.
-
-## Worked example: AND gate
-
-Same structure as the OR gate, in a region titled `AND Gate`, with `AndGate_Input_A`,
-`AndGate_Input_B`, and `AndGate_Output`. The difference is the output's threshold.
-
-1. Steps 1 to 4 of the OR gate, with the AND names.
-2. Read the inputs' spike strength: `inspect_cortical_areas_minimal(cortical_ids=[<input A>, <input B>])`
-   gives `neuron_post_synaptic_potential` (PSP, often 1).
-3. Wire each input with `apply_connectivity_rule(src_area=<input>, dst_area=<output>,
-   intent="one-to-one identity", postsynaptic_current_multiplier=1)`. One input then delivers
-   about PSP x 1 to the output.
-4. Make one input insufficient and two sufficient, with no carry-over between bursts:
-   `update_cortical_area(cortical_id=<output>, updates={"neuron_fire_threshold": 1.5 * PSP,
-   "neuron_mp_charge_accumulation": false})`. If the area leaks
-   (`neuron_leak_coefficient` above 0), keep the threshold between one and two inputs' worth
-   after leak.
-5. Verify all three cases. Input A alone and input B alone:
-   `probe_area_response()` should report `responded: false`. Both together:
-   `run_stimulus_protocol(steps=[{"label": "A+B", "bursts": 5, "stimuli":
-   [{"area_id": <input A>, "coordinates": [[0, 0, 0]]}, {"area_id": <input B>,
-   "coordinates": [[0, 0, 0]]}]}], record_areas=[<output>], tail_bursts=3)` should show the
-   output firing. Two `stimulate_area()` calls would run one after the other and never overlap.
-   (If A and B are voxels of one area, use one stimulus entry with both coordinates.)
-6. Report the threshold you chose and why, and that changes are unsaved. PSP and leak are only
-   known once the areas exist, so read them after creating instead of assuming.

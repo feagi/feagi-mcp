@@ -1,12 +1,10 @@
 """Learning observability: weight series, plasticity freeze and weight reset for one mapping.
 
-FEAGI exposes no per-mapping freeze or weight-reset route. ``POST
-/v1/neuroplasticity/{enable,disable}/{area_id}`` exist but only log and return a
-message (verified in feagi-core ``endpoints/neuroplasticity.rs``). So:
-
-* **freeze** rewrites the mapping's rules with ``plasticity_flag`` off (on again to
-  unfreeze; ``plasticity_mode`` is left as stored) through
-  ``PUT /v1/cortical_mapping/mapping_properties``.
+* **freeze** calls ``PUT /v1/cortical_mapping/plasticity_frozen`` (body ``src_cortical_area``,
+  ``dst_cortical_area``, ``frozen``) and reads the state back with the GET route. FEAGI sets
+  ``plasticity_frozen`` on the mapping's plastic rules: the rule, its ``plasticity_flag``,
+  the synapses and the weights stay as they are. (``POST
+  /v1/neuroplasticity/{enable,disable}/{area_id}`` only log and are not used.)
 * **reset** deletes the mapping and recreates it with the same rules. FEAGI keeps the
   weight of a synapse whose neuron pair already existed (verified live), so the tool
   compares weight statistics before and after and reports whether they went back
@@ -135,23 +133,6 @@ async def watch_weights(
     }
 
 
-def frozen_rules(rules: list[dict[str, Any]], frozen: bool) -> list[dict[str, Any]]:
-    """Copy of ``rules`` with ``plasticity_flag`` off (frozen) or on.
-
-    feagi-core gates learning on ``plasticity_flag`` alone; ``plasticity_mode`` is left
-    as stored so unfreezing restores the same rule.
-    """
-    out: list[dict[str, Any]] = []
-    for rule in rules:
-        new = dict(rule)
-        if frozen:
-            new["plasticity_flag"] = False
-        elif new.get("plasticity_mode") not in (None, "", "none"):
-            new["plasticity_flag"] = True
-        out.append(new)
-    return out
-
-
 def _stats(diag: dict[str, Any]) -> dict[str, Any]:
     scan, stats, sample = _scan_parts(diag)
     weights = sorted(
@@ -172,24 +153,27 @@ def _stats(diag: dict[str, Any]) -> dict[str, Any]:
 
 
 async def freeze_mapping(client: Any, src: str, dst: str, frozen: bool) -> dict[str, Any]:
-    """Rewrite the src->dst rules with plasticity off (or on); report weights before/after."""
-    before_map, before_diag = await asyncio.gather(
-        client.get_cortical_mapping(src, dst),
-        client.get_mapping_plasticity_diagnostics(src, dst, sample_limit=FULL_SAMPLE_LIMIT),
+    """Freeze (or resume) learning on src->dst through FEAGI's route; report weights before/after.
+
+    ``frozen`` in the result is the state read back with the GET route, ``requested`` the
+    value asked for. The mapping's rules are not rewritten.
+    """
+    before_diag = await client.get_mapping_plasticity_diagnostics(
+        src, dst, sample_limit=FULL_SAMPLE_LIMIT
     )
-    rules = before_map.get("rules") if isinstance(before_map, dict) else None
-    if not isinstance(rules, list) or not rules:
+    if isinstance(before_diag, dict) and before_diag.get("mapping_exists") is False:
         return {
             "error": "mapping_not_found",
             "src_area": src,
             "dst_area": dst,
-            "details": before_map,
+            "details": before_diag,
         }
-    rules = [r for r in rules if isinstance(r, dict)]
-    new_rules = frozen_rules(rules, frozen)
-    update = await client.update_cortical_mapping(src, dst, new_rules)
-    if not isinstance(update, dict) or update.get("error"):
-        return {"error": "update_failed", "src_area": src, "dst_area": dst, "details": update}
+    put = await client.set_mapping_plasticity_frozen(src, dst, frozen)
+    if not isinstance(put, dict) or put.get("error"):
+        return {"error": "freeze_failed", "src_area": src, "dst_area": dst, "details": put}
+    read = await client.get_mapping_plasticity_frozen(src, dst)
+    if not isinstance(read, dict) or read.get("error"):
+        return {"error": "readback_failed", "src_area": src, "dst_area": dst, "details": read}
     after_diag = await client.get_mapping_plasticity_diagnostics(
         src, dst, sample_limit=FULL_SAMPLE_LIMIT
     )
@@ -197,17 +181,14 @@ async def freeze_mapping(client: Any, src: str, dst: str, frozen: bool) -> dict[
     return {
         "src_area": src,
         "dst_area": dst,
-        "frozen": frozen,
-        "rules_written": len(new_rules),
-        "plastic_rules_after": (
-            after_diag.get("plastic_rules_count") if isinstance(after_diag, dict) else None
-        ),
+        "requested": frozen,
+        "frozen": read.get("frozen"),
         "weights_before": before,
         "weights_after": after,
         "weights_preserved": before.get("count") == after.get("count")
         and before.get("avg") == after.get("avg"),
-        "method": "PUT /v1/cortical_mapping/mapping_properties with plasticity_flag off; "
-        "FEAGI has no per-mapping freeze route (its /v1/neuroplasticity/disable is a no-op).",
+        "method": "PUT /v1/cortical_mapping/plasticity_frozen, read back with GET; "
+        "rules are not rewritten.",
     }
 
 

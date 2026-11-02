@@ -1,14 +1,16 @@
 # Teach a robot a behavior (top-down)
 
+Part 1 of 2: analysis, capability checks, tuning, checklist. Training method fit, when to step back, run data: [behavior-design-training.md](behavior-design-training.md).
+
 ## Contents
 
 - Levels of analysis
 - Task analysis before building
 - Circuit capability check
+- Make the stance balance before wiring a reflex
+- Tune with a run plan, never one value per stage
 - Innate vs learned
-- Training method fit
-- When to step back
-- Run data
+- Motor targets are absolute and hold
 - Start-of-goal checklist
 
 ## Levels of analysis
@@ -38,7 +40,7 @@ Answer these on paper before the first edit.
   survival time says nothing. If it is not, the brain must act within one fall time.
 - **Loop delay in bursts.** Hops from sensor to motor plus transport. Convert to seconds and
   compare to the fastest dynamic; see
-  [embodiment.md](embodiment.md#choosing-the-burst-rate).
+  [embodiment-burst-measuring.md](embodiment-burst-measuring.md#choosing-the-burst-rate).
 - **Corrections per axis.** List which axes need a correction (a pitch axis, a roll axis)
   and in which direction the actuator must move to oppose each error. Measure the direction
   with a small joint move; do not assume it.
@@ -74,6 +76,44 @@ Record, per condition:
 - If full brain does not beat pose only, the circuit adds nothing yet. Fix that before any
   training.
 
+## Make the stance balance before wiring a reflex
+
+A stance that falls in about a second makes every reflex fight a constant bias, and the
+reflex then over-corrects. Before the first reflex:
+
+- Measure where the centre of mass projects against the support polygon in the stance
+  (`embodiment_measure_bodies`: torso `subtree_com` against the contact bodies' centroid),
+  with support 0 and the motors holding the stance.
+- Move the stance (ankle and hip pitch, knee bend, in the body adapter's stance rows) until the
+  projection sits at the centre of the support polygon, then measure the silent fall time
+  again. Sweep the stance values with a run plan (below), not by hand.
+- The reflex then corrects disturbances around a balanced pose, not a built-in lean.
+
+## Tune with a run plan, never one value per stage
+
+Once a reflex has the right sign, its gains (sense -> command PSC, rate -> command PSC, offset
+per level, stance values) are tuned with one Trainer run plan (`create_run_plan`, trainer skill
+"Run plan (matrix)"): one condition per gain combination, 3 to 5 trials each, at the support
+level the acceptance uses, compared on the key metric (median hold). A 3 x 3 sweep of two gains
+runs unattended in one stage; picking values by hand costs one stage per value and hides
+over-correction and oscillation. Start coarse (x0.5, x1, x2), then refine around the best cell.
+Use the same tool for silent-versus-active comparisons and regression checks.
+
+Keep sweeps cheap: put a condition's trials inside ONE cell as several attempts (protocol
+`train_only`, `trainAttempts` N, condition `trials` 1) instead of one cell per trial. Each cell
+pays a fixed overhead (Trainer start, brain change and read-back, reset, restore) of about 30 s,
+which dominates short attempts; one cell of 5 attempts costs about a quarter of 5 cells. Read the
+per-attempt holds from the cell's run data.
+
+Sweep a parameter that actually sets the gain. A mapping's PSC scales gain only when the
+target's threshold sits between the input values; into a target that fires on any input
+(threshold 1, PSP 100) the PSC is a no-op (measured 2026-11-01: a 3 x 3 PSC sweep gave the same
+hold in every cell). For a reflex that drives positional servos the gain lives in the offset per
+command bin (adapter morphology rows). Do not use `neuron_excitability` on the command ports as a
+gain proxy: measured 2026-11-01, any excitability below 1 behaved exactly like a silent reflex
+(1.07 s at 0.5, 0.33, 0.2 and 0.1 against 2.0 s at 1). Sweep the offset rows, or a lever upstream
+of the command threshold (a sense port's self-hold, which sets how many bursts it fires).
+
 ## Innate vs learned
 
 - Build correct-sign reflexes in. A reflex whose sign you can measure should be wired, not
@@ -100,62 +140,22 @@ Record, per condition:
   `build_stance_relative_mapping` (dry run first) converts joint-unit offsets to z bins,
   with deadband, max offset and mean compensation (`n_stance_voxels`).
 - Verify the sign with `probe_area_response` before wiring more.
-
-## Training method fit
-
-- The reward must credit the brain's own action, not an outcome produced by external
-  support. A body held up by support scores well whatever the brain does.
-- Check how reward and eligibility interact before a run; see
-  [memory-and-plasticity.md](memory-and-plasticity.md#credit-assignment-read-before-training-with-reward).
-- Trainer settings (`get_trainer_experiment`, `configure_trainer_run`):
-  - use the `balance_feet` task for standing on contact bodies;
-  - choose a support ladder (fixed steps) or adaptive support (follows deviation);
-  - use a contribution reward, which pays for the brain's share of the correction;
-  - support only helps a standing stance: feet loaded and the body upright. It must be off
-    when a contact body is off the floor.
-- Read the Support check panel and the deviation-vs-assistance chart in
-  `get_trainer_balance_results`. Assistance should rise with deviation (r > 0), and both
-  should fall over the run. Flat or rising assistance means the brain is not taking over.
-- Metrics observe, they do not steer. Do not feed a result metric back into the reward or
-  the circuit.
-
-## When to step back
-
-- After 2 failed stages on one goal, return to task analysis and the capability check.
-  Reassess the circuit and the training method before the next change.
-- Never spend two runs tuning the same mechanism.
-- State the level each stage works at in its brief; a stage must not drift below it.
-
-## Run data
-
-Every Trainer run, any task, writes `<run_id>.rundata/` in the Trainer artifacts folder:
-
-- `tables/*.csv` (per-step or per-sample values), `events.csv`, `neural/*` (only when areas are
-  recorded), `dictionary.json` and `dictionary.csv` (every column with unit and meaning), and
-  `manifest.json` (task, phases, label, operator, seeds, genome and connectome ids, versions,
-  burst rate, errors, and the size and sha256 of every file).
-- `runData` in the setup of any task: `label`, and `neural` with `areas` (cortical areas to
-  record: spikes, firing counts, burst clock), `neuronState` (a list of `{area, fields}`) and
-  `neuronStateSampleS` (seconds between samples; 0 = off). Nothing neural is recorded unless
-  areas are listed. A setup key set to `null` is deleted, so the default applies again.
-- `list_run_data` (filters: `task`, `label`, `limit`) lists the folders newest first from their
-  manifests. `export_run_data(run_id, destination?)` re-hashes every file against the manifest,
-  fails with the mismatches if one differs, then writes `<run_id>.rundata.zip` and returns its
-  path, file count, bytes and sha256. Run results report `run_data_dir`.
-- Per-neuron state of an area: `GET /v1/connectome/cortical_area/{id}/neuron_state?fields=a,b`
-  (columnar; an unknown field gets a 400 that lists the valid ones). The same fields feed
-  `runData.neural.neuronState`.
-- Scheduled actions (`scheduledEvents`: a list of `{at_s, label, action}`, where the action sets
-  a mapping's post-synaptic current multiplier or one area parameter) are applied during a run
-  and restored after it. Fixed support (`supportMode: fixed` with `supportLevel`) holds one
-  support level for every training attempt.
+- The average counts distinct voxels, not sources: two modules that share a rest voxel do not
+  add a third contributor. Two sources on one channel need two distinct rest voxels (z+1, z-1)
+  with offsets relative to each, or one owner per joint at a time.
 
 ## Start-of-goal checklist
 
 1. `get_brain_regions()`: list regions and their inputs and outputs.
 2. Name the outcome metric; take a baseline with `measure_balance()` or `run_embodiment_trial`.
 3. Derive the burst rate from the body's fastest dynamic and loop depth.
-4. Check the start pose: is it statically stable?
+3b. Check actuator authority against that dynamic: the controller's servo slew
+   (`incremental_step_ratios` x joint range per second for absolute targets) and the model's
+   servo gains must let a correction travel farther than the fall does in tau/2. If not, raise
+   the slew in the mapping file (embodiment config) before wiring any reflex; no reflex gain
+   can beat a slew limit (Microduck, 2026-10-31: 34 deg/s lost to a 0.12 s fall, 85 deg/s won).
+4. Check the start pose: is it statically stable? If not, centre the CoM over the support
+   polygon first ("Make the stance balance before wiring a reflex").
 5. List the axes that need correction and the direction each needs.
 6. Run full, region-muted and pose-only trials (3 repeats); fill the table.
 7. Push each direction; confirm the response opposes it.

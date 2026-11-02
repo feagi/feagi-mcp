@@ -1,5 +1,7 @@
 # Robots, simulators, and embodiment
 
+Part 1 of 2: agents, joints, simulator ground truth, scene settings, asset packs. Burst rate, measuring behavior, death and falls: [embodiment-burst-measuring.md](embodiment-burst-measuring.md).
+
 ## Contents
 
 - Agents and device registrations
@@ -7,9 +9,7 @@
 - Driving joints
 - Matching the genome to the robot
 - Simulator ground truth
-- Choosing the burst rate
-- Measuring behavior
-- Death and falls
+- Actuator-force (MiscData) sensing: measured caveats
 - MuJoCo scene settings
 - Simulator asset packs
 
@@ -84,87 +84,27 @@ When a robot does not respond, check that the genome's OPUs are the ones the age
 
 MuJoCo motor OPU depth (z neurons per channel, default 20) is set by the controller at registration from the mapping JSON's optional `motor_z_resolution` (2 to 1024); an existing genome OPU is only grown to it, never shrunk (FEAGI grows OPUs on re-registration, never shrinks them).
 
+After a `motor_z_resolution` change, rebuild every z pattern that feeds a servo OPU angle-preserving: a source z maps to `z * (N_new - 1) / (N_old - 1)` (rounded), and trim the stance bin by `atan(dx / h)` expressed in bins of the new resolution (`dx` the horizontal offset, `h` the height of the link). Rewrite the patterns (`build_circuit_from_spec` with `delete`, or `servo_channel_two_rest` with the new `depth`) rather than leaving the old z values, which now mean other angles.
+
 Motor targets on servo OPUs are absolute and hold until the next command; with several active z on a channel the decoder takes the mean.
 
-## Choosing the burst rate
+## Actuator-force (MiscData) sensing: measured caveats
 
-The burst rate is a design choice tied to the body, never a default. Studio defaults to
-10 Hz (`burst_engine_timestep` 0.1) and the genome's value overrides it; neither knows the
-robot.
+Measured 2026-11-01 on the MuJoCo controller pack 1.0.146 at 200 Hz (root cause being traced):
 
-- **Find the fastest dynamic the brain must react to.** Unstable tasks (standing,
-  balancing): the pendulum time constant `tau = sqrt(h/g)`, h = centre-of-mass height (a
-  0.11 m biped: tau about 0.1 s). Confirm it from a trace with the motors quiet as the
-  median 5-to-15 degree fall time. Tracking or reaching: the joint or target settling time.
-  Slow tasks (classification, wheeled driving at low speed, slow reaching) tolerate 10 Hz.
-- **Count loop latency in bursts.** Synaptic hops from sensor IPU to motor OPU
-  (`trace_signal_path()`), plus about one burst each way for transport. Latency in seconds
-  is bursts / burst_hz, or bursts x sim time per burst in lock-step.
-- **Rule of thumb: loop latency at most tau/4 for stabilizing feedback.** So
-  `burst_hz >= 4*(hops + 2)/tau`, or sim time per burst `<= tau/(4*(hops + 2))`. Example
-  (Howard, microduck): 3 hops + 2 transport, tau about 0.1 s needs at least 200 Hz in real
-  time, or at most 5 ms of sim time per burst in lock-step. Howard ran at 10 Hz: latency
-  0.30 s equaled the median fall time, so no circuit could balance it.
-- **Ceilings.** The burst must finish inside its period (`get_runtime_metrics()`); the
-  controller and sensors must keep up (no gain above the sensor sample rate); servo slew
-  limits. When the required rate exceeds the ceiling, shorten the sensor-to-motor path (a
-  direct reflex path) or run the simulator in lock-step (sim time advances a fixed step per
-  burst). Never slow the robot's physics as a stand-in.
-- **Also check the sensor frame rate (frames per burst) and the motor step size** against the chosen rate: a burst faster than the frame rate repeats stale frames, and the per-burst motor step must stay inside servo slew.
-- **Burst-counted settings change meaning in seconds when the rate changes:** R-STDP
-  windows, modulator holds, memory `temporal_depth`, refractory and leak timing, Trainer
-  `holdBursts`, `attemptBurstCap`, `settleBursts`. Rescale them only when the user asks.
-- **Change the rate with one call:** `set_burst_engine_frequency(frequency_hz)`. The
-  returned `burst_frequency_hz` is the confirmation. Do not search the source tree, call
-  physiology or `simulation_timestep`, or sample `get_burst_counter` unless the user asks
-  whether the engine is keeping the period. A later genome reload can restore the stored
-  physiology timestep; say so in one sentence. It is not a second call.
-
-## Measuring behavior
-
-Take a baseline with these before building toward a behavioral goal, and re-run them after
-each stage. Both read the controller's physics endpoint directly, so they need a running
-experiment (`_experiment.state` is `running`).
-
-- `measure_balance(duration_s, controller_id, upright_deg, fall_deg)`: samples the
-  simulator at 20 Hz for up to 25 s and returns numbers only: `reset_count` (clock drops),
-  `episode_length_s` (ended episodes with mean, median, max, plus the ongoing one),
-  `upright_fraction`, a 10-degree tilt histogram, `recoveries`, `falls`, and
-  `fall_confirmation_latency_s` (fall threshold to reset). Each call carries a
-  `window_id`; for a longer measurement make repeated calls and keep the ids. Tilt comes
-  from the trunk free joint's quaternion; pass `free_joint` if the robot's root is not
-  auto-detected. Compare windows by their numbers, not by impression.
-- `record_aligned_trace(duration_s, areas, signals)`: one timeline pairing each sampled
-  burst with the physics at that moment, for up to 20 s and 16 areas. The full trace is in
-  `<feagi-mcp>/var/traces/<trace_id>.jsonl` (absolute `trace_path` in the result; `FEAGI_MCP_TRACES_DIR` overrides); the result is per area a run-length list of the bursts on
-  which it fired with pitch, roll, tilt, trunk height and the chosen actuator targets at
-  the start of each run. Use it to answer "did the tilt bin fire before the nudge voxel,
-  and did pitch change after?" with burst numbers. `bursts_missed_by_sampler` says how
-  many engine bursts FEAGI's sampler skipped.
-- `check_live_state_drift()` after any controller restart: re-registration re-applies the
-  controller's IPU/OPU dimensions and can revert hand-widened areas. The result names each
-  drifted value and the `update_cortical_area()` or `set_burst_engine_frequency()` call
-  that restores it.
-- `embodiment_measure_bodies(bodies, contacts)`: one read-only snapshot of named bodies from
-  the controller's `measure` primitive: tilt, `com` (height), per contact set `touching`,
-  `bodies` in contact and `normal_force_n`, and the spring report. A contact set takes `a`
-  or `a_except` (every body except those listed, their descendants and the world), and `b`
-  `"world"` or a list.
-- For joint trajectories over time without brain alignment, the Studio tools
-  `record_embodiment_trace` and `run_embodiment_trial` remain the right choice.
-
-## Death and falls
-
-- Death resets the scene and ends a Trainer attempt as death.
-- Never drive Death from tilt, a fall detector, floor contact, a learning or affect signal,
-  or a timer. A fallen robot must stay in the scene so it can learn to recover.
-- Attempt endings for balance or locomotion belong to the Trainer: max tilt, Pain,
-  truncation.
-- An existing fall > Death path is a bug to remove. Howard: an accumulating zero-leak
-  detector fired Death every ~0.7 s, 42 times in 31 s, and gave 0/40 Trainer successes.
-- Check before any Trainer run: nothing maps into Death from sensory or vestibular areas,
-  and Death fires 0 times in 20 s. Count `[DEATH]` lines in the MuJoCo controller log, or
-  use `monitor_activity` on Death.
+- The per-actuator force IPU arrives on about 86% of bursts at 200 Hz, all channels together.
+  Cause: the controller loop and the burst clock are independent, so some bursts get no new
+  frame. FEAGI re-injects the previous frame for one burst only on areas with
+  `sensory_hold_last_frame` (default on for servo, percentage, SmartIMU and RawIMU types, off for
+  MiscData). Turn that property on for a scalar MiscData area (force, load) before building a
+  per-burst gate on it, and confirm the setting survives a Stop/Start. Rare 2- and 4-burst gaps
+  remain; values with |v| <= 0.0001 are dropped by the encoder.
+- Its potentials are tanh(|N m|), so 0.03 to 0.1 for a loaded knee, not 0 to 100, and the area
+  read a fire threshold of 1000 (origin under investigation), so it never fires until lowered.
+- Neurons that fired read 0 in `neuron_state` (the membrane resets on fire), so sample
+  potentials just before the fire or count spikes instead.
+- On a small biped the knee separates a loaded foot from a lifted one better than the ankle
+  (loaded about 0.03 to 0.04, lifted about 0.003).
 
 ## MuJoCo scene settings
 

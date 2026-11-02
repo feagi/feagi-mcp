@@ -39,7 +39,7 @@ Each region record from `get_brain_regions()` carries:
 - `inputs` / `outputs`: boundary areas inferred from wiring.
 - `coordinate_2d` (brain map position) and `coordinate_3d` (3D anchor).
 
-`get_region_circuit(region_id)` returns one region as a graph: members with roles, boundary
+`get_region_circuit(region_id)` (or `compact=True` for names, dimensions, rules and synapse counts only) returns one region as a graph: members with roles, boundary
 input and output areas, and edges split into `internal`, `incoming`, and `outgoing`. A member
 is a boundary input when it is an IPU or receives a mapping from outside the region, and a
 boundary output when it is an OPU or sends a mapping outside. `isolated_area_ids` lists areas

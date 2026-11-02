@@ -112,7 +112,7 @@ async def test_download_region_genome_delegates_to_client(monkeypatch):
         "version": "2.0",
     }
 
-    async def fake_download(_region_id: str):
+    async def fake_download(_region_id: str, _prune: bool = True, _path: str | None = None):
         return fake_region_genome
 
     monkeypatch.setattr(server.feagi, "download_region_genome", fake_download)
@@ -127,7 +127,7 @@ async def test_download_region_genome_propagates_error(monkeypatch):
     """download_region_genome surfaces FEAGI API errors."""
     from feagi_mcp import server
 
-    async def fake_download_err(_region_id: str):
+    async def fake_download_err(_region_id: str, _prune: bool = True, _path: str | None = None):
         return {"error": "HTTP 404", "message": "Region not found"}
 
     monkeypatch.setattr(server.feagi, "download_region_genome", fake_download_err)

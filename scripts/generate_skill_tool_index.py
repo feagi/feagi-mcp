@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from feagi_mcp.skill_bundle import (  # noqa: E402
     TOOL_INDEX_RELATIVE_PATH,
     category_problems,
-    render_tool_index,
+    render_tool_index_parts,
     tool_summaries,
 )
 
@@ -31,16 +31,26 @@ def main() -> int:
     for problem in category_problems(set(summaries)):
         print(f"warning: {problem} (update TOOL_CATEGORIES in skill_bundle.py)")
 
-    index_path = ROOT / "skills" / "feagi" / TOOL_INDEX_RELATIVE_PATH
-    rendered = render_tool_index(summaries)
+    ref_dir = (ROOT / "skills" / "feagi" / TOOL_INDEX_RELATIVE_PATH).parent
+    parts = render_tool_index_parts(summaries)
+    stale = {p for p in ref_dir.glob("tool-index*.md") if p.name not in parts}
     if args.check:
-        current = index_path.read_text("utf-8") if index_path.is_file() else ""
-        if current != rendered:
-            print(f"{index_path.relative_to(ROOT)} is stale; run {Path(__file__).name}")
+        for name, text in parts.items():
+            path = ref_dir / name
+            if not path.is_file() or path.read_text("utf-8") != text:
+                print(f"{path.relative_to(ROOT)} is stale; run {Path(__file__).name}")
+                return 1
+        for path in sorted(stale):
+            print(f"{path.relative_to(ROOT)} is no longer generated; run {Path(__file__).name}")
             return 1
         return 0
-    index_path.write_text(rendered, "utf-8")
-    print(f"wrote {index_path.relative_to(ROOT)} ({len(summaries)} tools)")
+    for name, text in parts.items():
+        (ref_dir / name).write_text(text, "utf-8")
+        print(f"wrote {(ref_dir / name).relative_to(ROOT)}")
+    for path in stale:
+        path.unlink()
+        print(f"removed {path.relative_to(ROOT)}")
+    print(f"{len(summaries)} tools in {len(parts)} parts")
     return 0
 
 

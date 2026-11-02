@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import binascii
+import json
 import logging
 import math
 import os
@@ -29,11 +30,29 @@ from feagi_mcp.circuit_naming import (
     parent_circuit_naming_error,
     validate_circuit_title,
 )
+from feagi_mcp.circuit_spec import (
+    MEMORY_KEYS as _MEMORY_KEYS,
+)
+from feagi_mcp.circuit_spec import (
+    apply_property_schema,
+    auto_region_2d,
+    calls_for,
+    execute_plan,
+    expand_spec,
+)
 from feagi_mcp.classifiers import (
     build_classifier_inspect,
     filter_classifier_records,
     project_classifier_row,
     select_classifier_record,
+)
+from feagi_mcp.compact_views import (
+    compact_edge_pairs,
+    compact_map,
+    compact_region,
+    filter_map_to_area,
+    region_edge_pairs,
+    region_member_ids,
 )
 from feagi_mcp.connectivity_rules import (
     PATTERN_LANGUAGE,
@@ -45,6 +64,12 @@ from feagi_mcp.connectivity_rules import (
 from feagi_mcp.genome_artifact import (
     GENOME_ARTIFACT_MEDIA_TYPE,
     is_genome_artifact_file_name,
+)
+from feagi_mcp.genome_tools import (
+    entering_mappings,
+    entering_morphology_ids,
+    prune_unreferenced_morphologies,
+    write_genome_file,
 )
 from feagi_mcp.introspection_discovery import (
     IntrospectionEndpoint,
@@ -84,7 +109,10 @@ from feagi_mcp.runtime_diagnostics import (
     log_missing_reason,
     select_local_log_diagnosis,
 )
+from feagi_mcp.spike_record import expand_region_refs, record_spikes_window
 from feagi_mcp.stance_mapping import compile_stance_offset_rows
+from feagi_mcp.stimulus_hold import hold_summary, new_hold_state, run_hold, validate_hold_args
+from feagi_mcp.synapse_counts import edge_synapse_counts
 from feagi_mcp.value_coding import (
     PROJECTOR_MORPHOLOGY,
     bins_geometry,
@@ -377,6 +405,16 @@ def _fired_in_areas(fire_queue: dict[str, Any], area_ids: list[str]) -> dict[str
     return out
 
 
+def _looks_like_cortical_id(ref: str) -> bool:
+    """True for a wire cortical id: base64 of exactly 8 bytes (12 characters)."""
+    if not isinstance(ref, str) or len(ref) != 12:
+        return False
+    try:
+        return len(base64.b64decode(ref, validate=True)) == 8
+    except (binascii.Error, ValueError):
+        return False
+
+
 def _as_json_dict(data: Any) -> dict[str, Any]:
     """Narrow ``response.json()`` / API payloads to ``dict`` for strict typing."""
     if isinstance(data, dict):
@@ -408,7 +446,7 @@ _NEURON_PARAMETER_KEYS = frozenset(
 
 def _is_neuron_parameter_key(key: str) -> bool:
     """True for neuron parameters the create endpoints ignore (applied via update after)."""
-    return key in _NEURON_PARAMETER_KEYS or key.startswith("neuron_")
+    return key in _NEURON_PARAMETER_KEYS or key.startswith("neuron_") or key in _MEMORY_KEYS
 
 
 def _summarize_cortical_activity(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1161,6 +1199,22 @@ def _is_already_exists_error(result: dict[str, Any]) -> bool:
     return "409" in text or "already exists" in text
 
 
+BURST_TIMING_GAP: dict[str, Any] = {
+    "available": False,
+    "gap": (
+        "feagi-core reports no burst duration or missed bursts: /v1/monitoring/metrics has "
+        "counts only; /v1/monitoring/performance returns constants 0.0; "
+        "/v1/burst_engine/frequency_status actual_frequency_hz echoes the target; "
+        "avg_burst_time_ms is hard-coded 0.0 (runtime_service_impl.rs get_status, "
+        "system_service_impl.rs: 'Not yet tracked by BurstLoopRunner')"
+    ),
+    "fix": (
+        "BurstLoopRunner records per-burst duration (mean, max) and overrun count; expose "
+        "them in /v1/monitoring/metrics"
+    ),
+}
+
+
 class FeagiClient:
     """Client for interacting with FEAGI REST API."""
 
@@ -1177,6 +1231,8 @@ class FeagiClient:
         agent_id = os.environ.get("FEAGI_AGENT_ID", "").strip()
         headers = {"X-FEAGI-Agent-Id": agent_id} if agent_id else {}
         self._client = httpx.AsyncClient(timeout=timeout, headers=headers)
+        self._fire_history_refs: dict[str, int] = {}
+        self._holds: dict[str, dict[str, Any]] = {}
 
     async def close(self) -> None:
         """Close the HTTP client."""
@@ -1702,15 +1758,26 @@ class FeagiClient:
             logger.error(f"download_genome failed: {e}")
             return {"error": str(e)}
 
-    async def download_region_genome(self, region_id: str) -> dict[str, Any]:
+    async def download_region_genome(
+        self, region_id: str, prune_morphologies: bool = True, file_path: str | None = None
+    ) -> dict[str, Any]:
         """GET /v1/genome/download_region — export a brain-region subtree as genome JSON.
 
         The returned genome contains only the cortical areas, morphologies,
         brain regions, and physiology that belong to the given region branch.
-        Destination mappings to areas outside the branch are stripped.
+        Destination mappings to areas outside the branch are stripped. FEAGI lists every
+        morphology of the brain in the export; with ``prune_morphologies`` (default) only
+        those named by a mapping rule of the exported areas, or by a mapping that ENTERS the
+        branch from outside, are kept. Entering mappings are not part of the export (they
+        live in their source areas); they are listed as ``export_notes.entering_mappings``
+        (inline) or ``entering_mappings`` (with ``file_path``) so they can be re-created when
+        the region is merged.
 
         Args:
             region_id: UUID of the root brain region to export.
+            prune_morphologies: Drop morphologies no exported or entering mapping references.
+            file_path: Write the export here and return the path plus a short summary
+                instead of the genome (for ``validate_genome(file_path=...)``).
 
         Returns:
             Region genome JSON (same shape as a full genome).
@@ -1721,7 +1788,31 @@ class FeagiClient:
                 params={"region_id": region_id},
             )
             if response.status_code == 200:
-                return _as_json_dict(response.json())
+                genome = _as_json_dict(response.json())
+                notes = await self._entering_notes(region_id)
+                if prune_morphologies:
+                    keep = notes.pop("keep_morphologies", None)
+                    if keep is None:
+                        notes["prune_skipped"] = (
+                            "mapping graph unreadable; every morphology of the brain kept"
+                        )
+                    else:
+                        genome, removed = prune_unreferenced_morphologies(genome, keep)
+                        logger.info(
+                            "download_region_genome: pruned %d unreferenced morphologies",
+                            removed,
+                        )
+                notes.pop("keep_morphologies", None)
+                if file_path:
+                    result = write_genome_file(genome, file_path)
+                    if "error" not in result and notes.get("entering_mappings"):
+                        result["entering_mappings"] = notes["entering_mappings"]
+                    if "prune_skipped" in notes:
+                        result["prune_skipped"] = notes["prune_skipped"]
+                    return result
+                if notes.get("entering_mappings") or "prune_skipped" in notes:
+                    genome = {**genome, "export_notes": notes}
+                return genome
             return {
                 "error": f"HTTP {response.status_code}",
                 "message": response.text,
@@ -1729,6 +1820,29 @@ class FeagiClient:
         except Exception as e:
             logger.error(f"download_region_genome failed: {e}")
             return {"error": str(e)}
+
+    async def _entering_notes(self, region_id: str) -> dict[str, Any]:
+        """Mappings entering the region subtree plus the morphology ids they need.
+
+        ``keep_morphologies`` is absent when the regions or mapping graph cannot be read.
+        """
+        regions, cortical_map, geometry = await asyncio.gather(
+            self.get_regions_members(),
+            self.get_cortical_map_detailed(),
+            self.get_cortical_area_geometry(),
+        )
+        if any("error" in p for p in (regions, cortical_map, geometry)):
+            return {}
+        try:
+            rows = entering_mappings(regions, cortical_map, geometry, region_id)
+        except KeyError:
+            return {}
+        return {
+            "entering_mappings": [
+                {k: v for k, v in row.items() if k not in ("src_id", "dst_id")} for row in rows
+            ],
+            "keep_morphologies": entering_morphology_ids(rows),
+        }
 
     async def upload_genome(self, genome_data: dict[str, Any]) -> dict[str, Any]:
         """Upload a genome to FEAGI.
@@ -2234,21 +2348,56 @@ class FeagiClient:
             "resolved_cortical_id": resolved,
         }
 
-    async def get_cortical_map_detailed(self) -> dict[str, Any]:
-        """GET /v1/cortical_area/cortical_map_detailed — outgoing mapping graph (BV reload)."""
+    async def get_cortical_map_detailed(
+        self,
+        compact: bool = False,
+        synapse_counts: bool = True,
+        cortical_id: str | None = None,
+    ) -> dict[str, Any]:
+        """GET /v1/cortical_area/cortical_map_detailed — outgoing mapping graph (BV reload).
+
+        ``compact=True`` returns area names and dimensions plus, per edge, the rule summary
+        (rule, psc, delay, plastic) and, with ``synapse_counts``, the realized synapse count.
+        ``cortical_id`` (an id; the server tool layer resolves names) keeps only the mappings
+        where that area is source or destination.
+        """
         try:
             response = await self._client.get(
                 f"{self.base_url}/v1/cortical_area/cortical_map_detailed"
             )
-            if response.status_code == 200:
-                return _as_json_dict(response.json())
-            return {
-                "error": f"HTTP {response.status_code}",
-                "message": response.text,
-            }
+            if response.status_code != 200:
+                return {
+                    "error": f"HTTP {response.status_code}",
+                    "message": response.text,
+                }
+            payload = _as_json_dict(response.json())
         except Exception as e:
             logger.error(f"get_cortical_map_detailed failed: {e}")
             return {"error": str(e)}
+        if cortical_id:
+            payload = filter_map_to_area(payload, cortical_id)
+        if not compact:
+            return payload
+        geometry = await self.get_cortical_area_geometry()
+        if "error" in geometry:
+            return {"error": "cortical_area_geometry failed", "detail": geometry}
+        counts, note = None, None
+        if synapse_counts:
+            counts, note = await edge_synapse_counts(
+                compact_edge_pairs(payload), self.fetch_synapse_edges
+            )
+        view = compact_map(payload, geometry, counts)
+        if note:
+            view["synapse_count_note"] = note
+        return view
+
+    async def fetch_synapse_edges(self, area_id: str, direction: str) -> list[Any] | None:
+        """All realized synapse edges of one area, or None when they cannot be read."""
+        listing = await self.list_area_synapses(area_id, direction=direction, view="edges")
+        if not isinstance(listing, dict) or listing.get("error"):
+            return None
+        synapses = listing.get("synapses")
+        return synapses if isinstance(synapses, list) else None
 
     async def get_regions_members(self) -> dict[str, Any]:
         """GET /v1/region/regions_members — brain regions and member cortical areas (BV)."""
@@ -2265,28 +2414,52 @@ class FeagiClient:
             return {"error": str(e)}
 
     async def get_region_circuit(
-        self, region_id: str, include_child_regions: bool = True
+        self,
+        region_id: str,
+        include_child_regions: bool = True,
+        compact: bool = False,
+        synapse_counts: bool = True,
     ) -> dict[str, Any]:
         """Members, boundary and ``[src, dst]`` edges of one brain region.
 
         Fetches regions, the mapping graph and area names concurrently, then computes
-        the view locally (see ``region_circuit.summarize_region_circuit``).
+        the view locally (see ``region_circuit.summarize_region_circuit``). With
+        ``compact`` the view is names, dimensions, mapping rules and synapse counts only
+        (see ``compact_views.compact_region``).
         """
         regions, cortical_map, names = await asyncio.gather(
             self.get_regions_members(),
             self.get_cortical_map_detailed(),
-            self.get_cortical_id_name_mapping(),
+            self.get_cortical_id_name_mapping()
+            if not compact
+            else self.get_cortical_area_geometry(),
         )
         for label, payload in (
             ("regions_members", regions),
             ("cortical_map_detailed", cortical_map),
-            ("cortical_id_name_mapping", names),
+            ("cortical_area_geometry" if compact else "cortical_id_name_mapping", names),
         ):
             if "error" in payload:
                 return {"error": f"{label} failed", "detail": payload}
-        return summarize_region_circuit(
-            regions, cortical_map, names, region_id, include_child_regions
+        if not compact:
+            return summarize_region_circuit(
+                regions, cortical_map, names, region_id, include_child_regions
+            )
+        counts, note = None, None
+        if synapse_counts:
+            try:
+                members = set(region_member_ids(regions, region_id, include_child_regions))
+            except KeyError:
+                members = set()
+            counts, note = await edge_synapse_counts(
+                region_edge_pairs(cortical_map, members), self.fetch_synapse_edges
+            )
+        view = compact_region(
+            regions, cortical_map, names, region_id, include_child_regions, counts
         )
+        if note:
+            view["synapse_count_note"] = note
+        return view
 
     async def _require_functional_parent_circuit(self, region_id: str) -> str | None:
         """Reject placeholder parents (Autogen Circuit / Untitled) using a local title check.
@@ -2353,6 +2526,47 @@ class FeagiClient:
             }
         except Exception as e:
             logger.error(f"create_brain_region failed: {e}")
+            return {"error": str(e)}
+
+    async def delete_brain_region(self, region_id: str) -> dict[str, Any]:
+        """DELETE /v1/region/region — delete a region record (its areas move to its parent)."""
+        try:
+            response = await self._client.request(
+                "DELETE", f"{self.base_url}/v1/region/region", json={"region_id": region_id}
+            )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return {"error": f"HTTP {response.status_code}", "message": response.text}
+        except Exception as e:
+            logger.error(f"delete_brain_region failed: {e}")
+            return {"error": str(e)}
+
+    async def get_area_parameter_schema(self) -> list[dict[str, Any]] | None:
+        """``parameters`` of GET /v1/cortical_area/parameter_schema, or None when unreadable."""
+        try:
+            response = await self._client.get(f"{self.base_url}/v1/cortical_area/parameter_schema")
+            if response.status_code != 200:
+                return None
+            params = _as_json_dict(response.json()).get("parameters")
+            return params if isinstance(params, list) else None
+        except Exception as e:
+            logger.warning(f"get_area_parameter_schema failed: {e}")
+            return None
+
+    async def update_brain_region(
+        self, region_id: str, properties: dict[str, Any]
+    ) -> dict[str, Any]:
+        """PUT /v1/region/region — update properties of a brain region (e.g. ``coordinate_2d``)."""
+        try:
+            response = await self._client.put(
+                f"{self.base_url}/v1/region/region",
+                json={"region_id": region_id, **properties},
+            )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return {"error": f"HTTP {response.status_code}", "message": response.text}
+        except Exception as e:
+            logger.error(f"update_brain_region failed: {e}")
             return {"error": str(e)}
 
     async def get_genome_file_name(self) -> dict[str, Any]:
@@ -2481,6 +2695,50 @@ class FeagiClient:
             }
         except Exception as e:
             logger.error(f"reset_mapping_weights_native failed: {e}")
+            return {"error": str(e)}
+
+    async def set_mapping_plasticity_frozen(
+        self, src_area: str, dst_area: str, frozen: bool
+    ) -> dict[str, Any]:
+        """PUT /v1/cortical_mapping/plasticity_frozen: freeze or resume one mapping's learning.
+
+        Body ``{src_cortical_area, dst_cortical_area, frozen}``; FEAGI stores
+        ``plasticity_frozen`` on the mapping's plastic rules and keeps rule, synapses and
+        weights. Returns ``{src_cortical_area, dst_cortical_area, frozen}``; HTTP 400 when
+        the mapping is unknown or holds no plastic rule.
+        """
+        try:
+            response = await self._client.put(
+                f"{self.base_url}/v1/cortical_mapping/plasticity_frozen",
+                json={
+                    "src_cortical_area": src_area,
+                    "dst_cortical_area": dst_area,
+                    "frozen": bool(frozen),
+                },
+            )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return {"error": f"HTTP {response.status_code}", "message": response.text}
+        except Exception as e:
+            logger.error(f"set_mapping_plasticity_frozen failed: {e}")
+            return {"error": str(e)}
+
+    async def get_mapping_plasticity_frozen(self, src_area: str, dst_area: str) -> dict[str, Any]:
+        """GET /v1/cortical_mapping/plasticity_frozen: read one mapping's freeze state.
+
+        Returns ``{src_cortical_area, dst_cortical_area, frozen}``; ``frozen`` is true when any
+        plastic rule carries ``plasticity_frozen`` and null when the mapping does not exist.
+        """
+        try:
+            response = await self._client.get(
+                f"{self.base_url}/v1/cortical_mapping/plasticity_frozen",
+                params={"src_cortical_area": src_area, "dst_cortical_area": dst_area},
+            )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return {"error": f"HTTP {response.status_code}", "message": response.text}
+        except Exception as e:
+            logger.error(f"get_mapping_plasticity_frozen failed: {e}")
             return {"error": str(e)}
 
     async def reset_area_incoming_weights(self, area_ids: list[str]) -> dict[str, Any]:
@@ -2816,6 +3074,24 @@ class FeagiClient:
             return {"success": False, "error": "steps must be non-empty"}
         if not record_areas:
             return {"success": False, "error": "record_areas must be non-empty"}
+        refs = list(
+            dict.fromkeys(
+                [
+                    *record_areas,
+                    *(
+                        s["area_id"]
+                        for st in steps
+                        for s in (st.get("stimuli") or [])
+                        if isinstance(s, dict) and isinstance(s.get("area_id"), str)
+                    ),
+                ]
+            )
+        )
+        resolved_ids, problem = await self._resolve_known_areas(*refs)
+        if problem:
+            return {"success": False, "error": problem}
+        by_ref = dict(zip(refs, resolved_ids, strict=True))
+        record_areas = [by_ref[a] for a in record_areas]
         merged: list[dict[str, list[list[int]]]] = []
         step_bursts: list[int] = []
         for i, step in enumerate(steps):
@@ -2837,7 +3113,7 @@ class FeagiClient:
                             "success": False,
                             "error": f"steps[{i}].stimuli[{j}] coordinate {c!r} is not [x, y, z]",
                         }
-                payload.setdefault(area, []).extend(
+                payload.setdefault(by_ref.get(area, area), []).extend(
                     [int(c[0]), int(c[1]), int(c[2])] for c in coords
                 )
             merged.append(payload)
@@ -2880,6 +3156,12 @@ class FeagiClient:
                     res = await self._post_stimulation(payload, mode)
                     if not res.get("success"):
                         errors.append(f"post failed at burst {counter}: {res.get('error')}")
+                        return False
+                    if res.get("matched_coordinates") == 0:
+                        errors.append(
+                            f"stimulus matched no voxel at burst {counter}: unknown area id or "
+                            "coordinates outside the area"
+                        )
                         return False
                 posts.append((counter, step_idx))
                 step_posts.setdefault(step_idx, []).append(counter)
@@ -2980,7 +3262,7 @@ class FeagiClient:
             ``first_burst`` and ``last_burst``.
         """
         try:
-            return await self._hold_stimulation(
+            return await self.stimulate_areas(
                 {area_id: [coordinates]}, "force_fire", duration_ms, bursts
             )
         except Exception as e:
@@ -3008,7 +3290,14 @@ class FeagiClient:
             Same shape as :meth:`stimulate_area` (success, neuron counts, etc.)
         """
         try:
-            return await self._hold_stimulation(stimulation_payload, mode, duration_ms, bursts)
+            refs = list(stimulation_payload)
+            ids, problem = await self._resolve_known_areas(*refs)
+            if problem:
+                return {"success": False, "error": problem}
+            resolved: dict[str, list[list[int]]] = {}
+            for ref, area_id in zip(refs, ids, strict=True):
+                resolved.setdefault(area_id, []).extend(stimulation_payload[ref])
+            return await self._hold_stimulation(resolved, mode, duration_ms, bursts)
         except Exception as e:
             logger.error(f"stimulate_areas failed: {e}")
             return {"success": False, "error": str(e)}
@@ -3117,6 +3406,313 @@ class FeagiClient:
             )
         return payload
 
+    async def get_fire_history(self, area_ids: list[str], bursts: int) -> dict[str, Any]:
+        """GET /v1/burst_engine/fire_history — burst-aligned firing of up to 64 areas.
+
+        The first read of an area subscribes it to the Fire Ledger with a window of
+        ``bursts`` (max 2000); later reads return the latest ``bursts`` frames.
+        """
+        endpoint = "/v1/burst_engine/fire_history"
+        try:
+            response = await self._client.get(
+                f"{self.base_url}{endpoint}",
+                params={"areas": ",".join(area_ids), "bursts": str(int(bursts))},
+            )
+        except Exception as e:  # noqa: BLE001 - normalized into a diagnostic payload
+            return self._request_exception_payload(endpoint=endpoint, exception=e)
+        if response.status_code != 200:
+            return self._http_failure_payload(endpoint=endpoint, response=response)
+        return _as_json_dict(response.json())
+
+    def acquire_fire_history(self, area_ids: list[str]) -> None:
+        """Count an in-process user of each area's fire-history subscription."""
+        for a in area_ids:
+            self._fire_history_refs[a] = self._fire_history_refs.get(a, 0) + 1
+
+    async def release_fire_history(self, area_ids: list[str]) -> None:
+        """Drop one in-process user per area; DELETE the subscription of areas left unused.
+
+        FEAGI keeps one subscription per area and DELETE removes it outright, so a second
+        recorder or hold on the same area must not delete it while the first still reads.
+        """
+        unused: list[str] = []
+        for a in area_ids:
+            n = self._fire_history_refs.get(a, 0) - 1
+            if n > 0:
+                self._fire_history_refs[a] = n
+            else:
+                self._fire_history_refs.pop(a, None)
+                unused.append(a)
+        if not unused:
+            return
+        try:
+            await self._client.delete(
+                f"{self.base_url}/v1/burst_engine/fire_history",
+                params={"areas": ",".join(unused)},
+            )
+        except Exception as e:  # noqa: BLE001 - the subscription idles out on its own
+            logger.warning("fire_history unsubscribe failed: %s", e)
+
+    async def record_spikes(
+        self,
+        areas: list[str],
+        bursts: int = 200,
+        csv_path: str | None = None,
+        max_runs: int = 20,
+    ) -> dict[str, Any]:
+        """Burst-exact firing of ``areas`` (ids or names) for ``bursts`` bursts.
+
+        See :mod:`feagi_mcp.spike_record`. Returns a compact summary; spikes go to
+        ``csv_path`` when given.
+        """
+        try:
+            if not isinstance(areas, list) or not areas:
+                return {"success": False, "error": "areas must be a non-empty list"}
+            refs = [a.strip() for a in areas if isinstance(a, str) and a.strip()]
+            regions = await self.get_regions_members()
+            expanded: list[dict[str, Any]] = []
+            if isinstance(regions, dict) and "error" not in regions:
+                try:
+                    refs, expanded, problem = expand_region_refs(refs, regions)
+                except KeyError as e:
+                    return {"success": False, "error": f"region member {e} not found"}
+                if problem:
+                    return {"success": False, "error": problem}
+            ids, problem = await self._resolve_area_refs(*refs)
+            if problem:
+                return {"success": False, "error": problem}
+            ids = list(dict.fromkeys(ids))
+            result = await record_spikes_window(self, ids, bursts, csv_path, max_runs)
+            if expanded:
+                result["regions_expanded"] = expanded
+            return result
+        except Exception as e:
+            logger.error(f"record_spikes failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def hold_stimulus(
+        self,
+        area: str,
+        voxels: list[list[int]],
+        duration_s: float,
+        start_delay_s: float = 0.0,
+        background: bool = False,
+        verify: bool = True,
+    ) -> dict[str, Any]:
+        """Hold ``voxels`` of ``area`` firing for ``duration_s`` (see :mod:`stimulus_hold`)."""
+        try:
+            norm = validate_hold_args(voxels, duration_s, start_delay_s)
+            if isinstance(norm, str):
+                return {"success": False, "error": norm}
+            clean, duration, delay = norm
+            (area_id,), problem = await self._resolve_area_refs(area)
+            if problem:
+                return {"success": False, "error": problem}
+            state = new_hold_state(area_id, clean, duration)
+            self._holds[state["hold_id"]] = state
+            while len(self._holds) > 20:
+                self._holds.pop(next(iter(self._holds)))
+            run = run_hold(self, state, area_id, clean, duration, delay, verify)
+            if background:
+                state["_task"] = asyncio.create_task(run)
+                return {**hold_summary(state), "background": True}
+            return await run
+        except Exception as e:
+            logger.error(f"hold_stimulus failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def get_stimulus_hold(
+        self, hold_id: str | None = None, cancel: bool = False
+    ) -> dict[str, Any]:
+        """Summary of one hold (or the list of holds); ``cancel`` stops a running hold."""
+        if hold_id is None:
+            return {
+                "holds": [
+                    {"hold_id": h["hold_id"], "state": h["state"], "area_id": h["area_id"]}
+                    for h in self._holds.values()
+                ]
+            }
+        state = self._holds.get(hold_id)
+        if state is None:
+            return {"error": f"unknown hold_id {hold_id}", "known": list(self._holds)}
+        if cancel and state["state"] in ("pending", "running"):
+            state["_cancel"].set()
+            task = state.get("_task")
+            if task is not None:
+                await asyncio.wait_for(asyncio.shield(task), timeout=10.0)
+        return hold_summary(state)
+
+    async def schedule_stimulus(
+        self, entries: list[dict[str, Any]], repeat_period_bursts: int | None = None
+    ) -> dict[str, Any]:
+        """Schedule force-fire stimulation at burst offsets.
+
+        ``POST /v1/simulation/stimulus_schedule``.
+
+        ``entries`` is ``[{"burst_offset": int >= 0, "stimuli": [{"area_id", "coordinates"}]}]``;
+        areas may be ids or exact names. FEAGI resolves offsets to absolute bursts when it
+        accepts the request (offset 0 is the next burst) and fires every area of one entry on the
+        same burst. Returns ``{schedule_id, start_burst, end_burst}``; ``end_burst`` is ``None``
+        for a repeating schedule.
+
+        ``repeat_period_bursts`` (optional, int > the largest ``burst_offset``) replays the
+        entries at ``offset + k * period`` until ``cancel_stimulus``.
+        """
+        try:
+            if not isinstance(entries, list) or not entries:
+                return {"success": False, "error": "entries must be a non-empty list"}
+            if repeat_period_bursts is not None and (
+                isinstance(repeat_period_bursts, bool)
+                or not isinstance(repeat_period_bursts, int)
+                or repeat_period_bursts < 1
+            ):
+                return {"success": False, "error": "repeat_period_bursts must be an int >= 1"}
+            refs: list[str] = []
+            for i, entry in enumerate(entries):
+                if not isinstance(entry, dict):
+                    return {"success": False, "error": f"entries[{i}] must be an object"}
+                offset = entry.get("burst_offset")
+                if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+                    return {
+                        "success": False,
+                        "error": f"entries[{i}].burst_offset must be an int >= 0",
+                    }
+                stimuli = entry.get("stimuli")
+                if not isinstance(stimuli, list) or not stimuli:
+                    return {
+                        "success": False,
+                        "error": f"entries[{i}].stimuli must be a non-empty list",
+                    }
+                for j, stim in enumerate(stimuli):
+                    coords = stim.get("coordinates") if isinstance(stim, dict) else None
+                    area = stim.get("area_id") if isinstance(stim, dict) else None
+                    if not isinstance(area, str) or not area.strip() or not coords:
+                        return {
+                            "success": False,
+                            "error": f"entries[{i}].stimuli[{j}] needs area_id and coordinates",
+                        }
+                    for c in coords:
+                        ok = isinstance(c, list) and len(c) == 3
+                        if not ok or not all(
+                            isinstance(v, int) and not isinstance(v, bool) and v >= 0 for v in c
+                        ):
+                            return {
+                                "success": False,
+                                "error": f"entries[{i}].stimuli[{j}] coordinate {c!r} is not "
+                                "non-negative [x, y, z]",
+                            }
+                    refs.append(area.strip())
+            unique = list(dict.fromkeys(refs))
+            resolved, problem = await self._resolve_known_areas(*unique)
+            if problem:
+                return {"success": False, "error": problem}
+            by_ref = dict(zip(unique, resolved, strict=True))
+            body: list[dict[str, Any]] = []
+            for entry in entries:
+                payload: dict[str, list[list[int]]] = {}
+                for stim in entry["stimuli"]:
+                    payload.setdefault(by_ref[stim["area_id"].strip()], []).extend(
+                        [list(c) for c in stim["coordinates"]]
+                    )
+                body.append({"burst_offset": entry["burst_offset"], "stimulation": payload})
+            request: dict[str, Any] = {"entries": body}
+            if repeat_period_bursts is not None:
+                last_offset = max(e["burst_offset"] for e in entries)
+                if repeat_period_bursts <= last_offset:
+                    return {
+                        "success": False,
+                        "error": f"repeat_period_bursts ({repeat_period_bursts}) must be greater "
+                        f"than the largest burst_offset ({last_offset})",
+                    }
+                request["repeat"] = {"period_bursts": repeat_period_bursts}
+            response = await self._client.post(
+                f"{self.base_url}/v1/simulation/stimulus_schedule", json=request
+            )
+            if response.status_code == 200:
+                return {"success": True, **_as_json_dict(response.json())}
+            return {
+                "success": False,
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error(f"schedule_stimulus failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def cancel_stimulus(self, schedule_id: int) -> dict[str, Any]:
+        """Cancel a schedule's unfired entries (``DELETE .../stimulus_schedule/{id}``)."""
+        try:
+            if isinstance(schedule_id, bool) or not isinstance(schedule_id, int) or schedule_id < 0:
+                return {"success": False, "error": "schedule_id must be an int >= 0"}
+            response = await self._client.delete(
+                f"{self.base_url}/v1/simulation/stimulus_schedule/{schedule_id}"
+            )
+            if response.status_code == 200:
+                return {"success": True, **_as_json_dict(response.json())}
+            return {
+                "success": False,
+                "error": f"HTTP {response.status_code}",
+                "message": response.text,
+            }
+        except Exception as e:
+            logger.error(f"cancel_stimulus failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def get_stimulus_schedule(self) -> dict[str, Any]:
+        """Active stimulus schedules (``GET /v1/simulation/stimulus_schedule``)."""
+        try:
+            response = await self._client.get(f"{self.base_url}/v1/simulation/stimulus_schedule")
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return {"error": f"HTTP {response.status_code}", "message": response.text}
+        except Exception as e:
+            logger.error(f"get_stimulus_schedule failed: {e}")
+            return {"error": str(e)}
+
+    async def build_circuit_from_spec(self, spec_json: str, dry_run: bool = True) -> dict[str, Any]:
+        """Build a circuit from one JSON spec (see :mod:`feagi_mcp.circuit_spec`)."""
+        try:
+            spec = json.loads(spec_json) if isinstance(spec_json, str) else spec_json
+        except json.JSONDecodeError as e:
+            return {"valid": False, "errors": [f"Invalid JSON: {e}"], "warnings": []}
+        report, plan = expand_spec(spec)
+        report["dry_run"] = bool(dry_run)
+        if report["valid"] and any(a["properties"] for a in [*plan.areas, *plan.edits]):
+            schema = await self.get_area_parameter_schema()
+            if schema is None:
+                report["warnings"].append(
+                    "area properties were not checked: parameter_schema is unavailable"
+                )
+            else:
+                errs, warns = apply_property_schema(plan, schema)
+                report["warnings"].extend(warns)
+                if errs:
+                    report["valid"] = False
+                    report["errors"].extend(errs)
+                    report["calls"] = []
+                    return report
+                report["calls"] = calls_for(plan)
+        if report["valid"] and plan.region and plan.region.get("coordinates_2d") is None:
+            regions = await self.get_regions_members()
+            if not isinstance(regions, dict) or "error" in regions:
+                report["valid"] = False
+                report["errors"].append(f"cannot place the region: {regions}")
+                return report
+            plan.region["coordinates_2d"] = auto_region_2d(
+                regions, plan.region.get("parent_region_id")
+            )
+            report["calls"] = calls_for(plan)
+            report["region_coordinates_2d"] = {
+                "placed": plan.region["coordinates_2d"],
+                "rule": "one step past the sibling regions, same row",
+            }
+        if dry_run or not report["valid"]:
+            return report
+        outcome = await execute_plan(self, plan)
+        outcome["warnings"] = report["warnings"]
+        outcome["sizing"] = report["sizing"]
+        return outcome
+
     async def get_network_connection_info(self) -> dict[str, Any]:
         """Get FEAGI's active networking details (GET /v1/network/connection_info).
 
@@ -3135,16 +3731,51 @@ class FeagiClient:
             return self._http_failure_payload(endpoint=endpoint, response=response)
         return _as_json_dict(response.json())
 
-    async def get_runtime_metrics(self) -> dict[str, Any]:
-        """Get comprehensive runtime metrics."""
+    async def get_runtime_metrics(self, measure_s: float = 0.0) -> dict[str, Any]:
+        """Get comprehensive runtime metrics plus a ``burst_timing`` block.
+
+        FEAGI does not report burst duration or missed bursts (see ``BURST_TIMING_GAP``), so
+        ``burst_timing.available`` is False. With ``measure_s > 0`` (max 10) the burst counter
+        is compared with the wall clock to give the achieved rate and the shortfall.
+        """
         try:
             response = await self._client.get(f"{self.base_url}/v1/monitoring/metrics")
-            if response.status_code == 200:
-                return _as_json_dict(response.json())
-            return {"error": f"HTTP {response.status_code}", "message": response.text}
+            if response.status_code != 200:
+                return {"error": f"HTTP {response.status_code}", "message": response.text}
+            result = _as_json_dict(response.json())
         except Exception as e:
             logger.error(f"get_runtime_metrics failed: {e}")
             return {"error": str(e)}
+        timing: dict[str, Any] = dict(BURST_TIMING_GAP)
+        if measure_s and measure_s > 0:
+            timing["measured"] = await self._measure_burst_rate(min(float(measure_s), 10.0))
+        result["burst_timing"] = timing
+        return result
+
+    async def _measure_burst_rate(self, window_s: float) -> dict[str, Any]:
+        """Counter delta against the wall clock over ``window_s`` seconds."""
+        cfg = await self.get_burst_engine_config()
+        interval = cfg.get("burst_interval_seconds")
+        c0 = (await self.get_burst_counter()).get("burst_counter")
+        t0 = time.monotonic()
+        await asyncio.sleep(window_s)
+        c1 = (await self.get_burst_counter()).get("burst_counter")
+        elapsed_s = time.monotonic() - t0
+        if not isinstance(c0, int) or not isinstance(c1, int):
+            return {"error": "burst_counter unavailable"}
+        if not isinstance(interval, (int, float)) or interval <= 0:
+            return {"error": "burst_interval_seconds unavailable"}
+        expected = elapsed_s / interval
+        return {
+            "source": "counter_vs_wallclock",
+            "window_s": round(elapsed_s, 3),
+            "bursts_elapsed": c1 - c0,
+            "expected_bursts": round(expected, 1),
+            "achieved_frequency_hz": round((c1 - c0) / elapsed_s, 2),
+            "target_frequency_hz": round(1.0 / interval, 2),
+            "mean_period_ms": round(elapsed_s / (c1 - c0) * 1000, 3) if c1 > c0 else None,
+            "shortfall_bursts": round(max(0.0, expected - (c1 - c0)), 1),
+        }
 
     async def get_cortical_synapse_counts(self, area_id: str) -> dict[str, Any]:
         """Incoming and outgoing synapse counts from ``cortical_area_properties``.
@@ -3939,6 +4570,25 @@ class FeagiClient:
             resolved.append(hits[0] if hits else ref)
         return resolved, None
 
+    async def _resolve_known_areas(self, *refs: str) -> tuple[list[str], str | None]:
+        """Like :meth:`_resolve_area_refs`, but an unknown ref is an error.
+
+        ``manual_stimulation`` and the fire queue are keyed by cortical id only; a display
+        name posted to them matches nothing and fails silently. When the id/name list cannot
+        be read the refs are kept unchanged.
+        """
+        if all(_looks_like_cortical_id(r) for r in refs):
+            return list(refs), None  # ids need no lookup (keeps plain stimulation to one post)
+        ids, problem = await self._resolve_area_refs(*refs)
+        if problem:
+            return ids, problem
+        mapping = await self.get_cortical_id_name_mapping()
+        if isinstance(mapping, dict) and "error" not in mapping:
+            unknown = [r for r, i in zip(refs, ids, strict=True) if i not in mapping]
+            if unknown:
+                return ids, f"unknown cortical area(s) {unknown}: pass an area id or its exact name"
+        return ids, None
+
     async def get_cortical_mapping(self, src_area: str, dst_area: str) -> dict[str, Any]:
         """Get stored mapping rules from the source area properties record.
 
@@ -4335,11 +4985,17 @@ class FeagiClient:
             return {"error": str(e)}
 
     async def delete_cortical_mapping(self, src_area: str, dst_area: str) -> dict[str, Any]:
-        """Delete connections between two cortical areas."""
+        """Delete connections between two cortical areas (ids or exact display names)."""
         try:
+            (src_id, dst_id), problem = await self._resolve_known_areas(
+                src_area.strip() if isinstance(src_area, str) else "",
+                dst_area.strip() if isinstance(dst_area, str) else "",
+            )
+            if problem:
+                return {"error": problem}
             response = await self._client.delete(
                 f"{self.base_url}/v1/cortical_mapping/mapping",
-                params={"src_cortical_area": src_area, "dst_cortical_area": dst_area},
+                params={"src_cortical_area": src_id, "dst_cortical_area": dst_id},
             )
             if response.status_code == 200:
                 return _as_json_dict(response.json())
@@ -4841,6 +5497,20 @@ class FeagiClient:
             path = resolve_path(spec.path_template, path_params)
         except ValueError as e:
             return {"error": "invalid_path", "message": str(e)}
+
+        # Contract check: reject before sending when a required JSON body field is absent.
+        if spec.required_body_fields and (
+            not isinstance(json_body, dict)
+            or any(name not in json_body for name in spec.required_body_fields)
+        ):
+            return {
+                "error": "invalid_body",
+                "operation_id": operation_id,
+                "required_body_fields": list(spec.required_body_fields),
+                "message": (
+                    f"{operation_id} needs a JSON body with: {', '.join(spec.required_body_fields)}"
+                ),
+            }
 
         url = f"{self.base_url}{path}"
         q = self._stringify_query(query)
@@ -6032,13 +6702,23 @@ class FeagiClient:
         include_classes: list[str] | None = None,
         limit: int = 200,
         offset: int = 0,
+        detail: str = "names",
+        include_pattern_language: bool = False,
     ) -> dict[str, Any]:
         """Return morphology rules augmented with explicit use-case metadata.
 
         This closes a major guidance gap for circuit construction: LLMs can now read
         concise, deterministic "when to use" hints per morphology, especially for core
         rules.
+
+        ``detail="names"`` (default) returns only name, class and a one-line
+        description per rule. ``detail="full"`` returns the complete rows plus the
+        pattern language and authoring note; ``include_pattern_language=True`` adds
+        those two fields in any mode.
         """
+        detail_mode = str(detail).strip().lower()
+        if detail_mode not in ("names", "full"):
+            return {"error": "invalid_detail", "message": "detail must be 'names' or 'full'."}
         normalized_classes: list[str] = []
         if include_classes:
             for cls in include_classes:
@@ -6090,19 +6770,31 @@ class FeagiClient:
         safe_limit = max(1, min(int(limit), 500))
         safe_offset = max(0, int(offset))
         window = rows[safe_offset : safe_offset + safe_limit]
-        return {
+        if detail_mode == "names":
+            window = [
+                {
+                    "name": r["name"],
+                    "class": r.get("class"),
+                    "description": r["use_case"].get("description", ""),
+                }
+                for r in window
+            ]
+        out: dict[str, Any] = {
             "total": total,
             "returned": len(window),
             "offset": safe_offset,
             "limit": safe_limit,
+            "detail": detail_mode,
             "items": window,
-            "pattern_language": PATTERN_LANGUAGE,
-            "authoring_note": (
+        }
+        if detail_mode == "full" or include_pattern_language:
+            out["pattern_language"] = PATTERN_LANGUAGE
+            out["authoring_note"] = (
                 "Call propose_connectivity_rule before create_morphology. "
                 "Reuse a core rule when it already matches. Never enumerate exact voxels "
                 "for a regular * / ? / ?+N transform."
-            ),
-        }
+            )
+        return out
 
     async def recommend_connectivity_rules(
         self,
@@ -6629,6 +7321,7 @@ class FeagiClient:
         dst_depth: int | None = None,
         z0_is_max: bool = True,
         n_stance_voxels: int = 0,
+        coactive_z: int | dict[Any, Any] | str | None = None,
         dry_run: bool = True,
         postsynaptic_current_multiplier: int = 1,
         synaptic_delay_bursts: int = 1,
@@ -6669,6 +7362,7 @@ class FeagiClient:
                 joint_range=joint_range,
                 z0_is_max=bool(z0_is_max),
                 n_stance_voxels=int(n_stance_voxels),
+                coactive_z=coactive_z,
             )
         except (ValueError, KeyError, TypeError) as e:
             return {"error": "invalid_stance_mapping", "message": str(e)}
@@ -6866,7 +7560,9 @@ class FeagiClient:
                 "descriptor_path": desc.descriptor_path,
                 "descriptor_agent_id": desc.agent_id,
             }
-            matching_agents = match_descriptor_to_registered_agents(desc.agent_id, agent_ids)
+            matching_agents = match_descriptor_to_registered_agents(
+                desc.agent_id, agent_ids, registered_agents
+            )
             entry["matching_agent_ids"] = matching_agents
             entry["agent_registered"] = len(matching_agents) > 0
             if matching_agents:
