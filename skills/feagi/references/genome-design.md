@@ -23,7 +23,7 @@ straight to "Build a circuit" (act with defaults).
    silent population, reward wireheading, memory pool full) and the hard-wired veto for each.
 3. **Facts:** embodiment, burst rate derived from the body, neuron and synapse budget.
 4. **Hub first:** search_brain_hub_genomes, prefer augment_genome_from_hub, record ancestry.
-5. **Modules:** one region per function, each with its own acceptance number and tool; a
+5. **Blocks:** behaviors are Lego blocks for Brain Hub ("Decompose into modules"); one region per function, each with its own acceptance number and tool; a
    port contract row (shape, code, sign, latency, driver) per port.
 6. **Mechanism:** innate wiring first; memory only for few patterns; plasticity only with a
    credit path; a learn/freeze gate.
@@ -88,6 +88,13 @@ declares a region's ports, so re-create the glue mappings at assembly; the contr
 is the workaround.
 
 ## Decompose into modules
+
+Design behaviors as Lego blocks that others can pull from Brain Hub and combine. A block does one
+behavior and connects only through documented ports; no mapping enters another block's internal
+area, and a block that must quiet another uses a port that block offers. Robot rows and poses stay
+in an adapter block, split per behavior when another behavior does not need them. A block is done
+when it exports cleanly, loads without blocks it does not depend on, passes its check there, and
+passes again combined.
 
 One brain region per function, with declared inputs and outputs, so each can be tested as a
 black box (sign, gain, lag; see [behavior-design.md](behavior-design.md)) and exported alone.

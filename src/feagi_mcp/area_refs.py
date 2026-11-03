@@ -50,6 +50,7 @@ _SCALARS: dict[str, tuple[str, ...]] = {
     "apply_connectivity_rule": ("src_area", "dst_area"),
     "delete_cortical_mapping": ("src_area", "dst_area"),
     "get_cortical_map_detailed": ("cortical_id",),
+    "scale_morphology_rows": ("dst_area",),
     "inspect_cortical_area": ("cortical_id",),
     "clone_cortical_area": ("source_area_id",),
     "get_motor_snapshot_last": ("cortical_id",),

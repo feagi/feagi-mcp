@@ -56,3 +56,26 @@ def test_decode_invalid():
     out = decode_cortical_id_interpretation("not-valid-base64!!!")
     assert out["ok"] is False
     assert out.get("error")
+
+
+def test_decode_variant_kind_signed_and_positioning():
+    """Bits 0-3 variant, bit 9 positioning; variants without a positioning axis report None."""
+    cases = [
+        ("percentage", "Percentage", False, "Fractional", "fractional"),
+        ("signed_percentage_2d", "SignedPercentage2D", True, "Linear", "linear"),
+        ("misc", "Misc", False, None, "linear"),
+    ]
+    for variant, kind, signed, positioning, pos_arg in cases:
+        encoded = encode_io_cortical_id(
+            "omot",
+            variant=variant,
+            unit_index=0,
+            subunit_index=3,
+            positioning=pos_arg,
+            framing="incremental",
+        )
+        out = decode_cortical_id_interpretation(encoded["cortical_id"])
+        assert out["kind"] == kind and out["signed"] is signed
+        assert out["positioning"] == positioning
+        assert out["cortical_subunit_index"] == 3
+        assert out["frame_change_handling"] == "Incremental"

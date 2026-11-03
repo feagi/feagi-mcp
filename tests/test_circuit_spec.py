@@ -1169,3 +1169,112 @@ def test_create_applies_memory_keys_via_followup_update() -> None:
 
     for k in ("temporal_depth", "neuron_init_lifespan", "ltm_eviction", "mp_change_mode"):
         assert _is_neuron_parameter_key(k)
+
+
+def _ring_spec(**extra: Any) -> dict[str, Any]:
+    ring = {
+        "template": "ring_cpg",
+        "name": "Chain",
+        "bins": 6,
+        "threshold": 6,
+        "psp": 1,
+        "drive": "Drive",
+        "drive_d": 0.05,
+        "lateral_psc": 0.5,
+        "seed": {"area": "Start", "bin": 0},
+        **extra,
+    }
+    return {"region": REGION, "templates": [ring]}
+
+
+def test_ring_wrap_default_is_unchanged_and_false_drops_wrap_edges() -> None:
+    _, default = expand_spec(_ring_spec())
+    _, explicit = expand_spec(_ring_spec(wrap=True))
+    assert default.mappings[("Chain", "Chain")] == explicit.mappings[("Chain", "Chain")]
+    report, chain = expand_spec(_ring_spec(wrap=False))
+    assert report["valid"], report["errors"]
+    ids = [r["morphology_id"] for r in _rules(chain, "Chain", "Chain")]
+    assert ids == ["block_to_block", "lateral_+z", "lateral_-z"]
+    assert report["sizing"]["Chain"]["wrap"] is False
+    assert "release_check" in report["sizing"]["Chain"]
+    assert "release_check" not in expand_spec(_ring_spec())[0]["sizing"]["Chain"]
+    assert not any("seed" in w for w in report["warnings"])
+
+
+def test_ring_chain_without_seed_warns_and_bad_wrap_is_an_error() -> None:
+    spec = _ring_spec(wrap=False)
+    del spec["templates"][0]["seed"]
+    assert any("no 'seed'" in w for w in expand_spec(spec)[0]["warnings"])
+    assert expand_spec(_ring_spec(wrap="no"))[0]["errors"]
+
+
+def _exclusive_spec(**src: Any) -> dict[str, Any]:
+    spec = _all_templates_spec()
+    servo = spec["templates"][3]
+    servo["sources"].append(
+        {
+            "area": "CmdX",
+            "channel": 0,
+            "exclusive": True,
+            "src_bins": 9,
+            "src_fixed": [0, 0, 0],
+            "gain": 2,
+            "max_offset": 12,
+            **src,
+        }
+    )
+    return spec
+
+
+def test_servo_default_output_unchanged_without_exclusive() -> None:
+    report, plan = expand_spec(_all_templates_spec())
+    assert all("exclusive" not in s for s in report["sizing"]["Servo"]["sources"])
+    assert [r["morphology_id"] for r in _rules(plan, "CmdA", "Servo_RestReflex")] == [
+        "Servo_CmdA_inhibit_rest"
+    ]
+    assert ("CmdA", "Servo_RestPattern") not in plan.mappings
+
+
+def test_exclusive_rows_use_z_target_and_inhibit_both_rests() -> None:
+    report, plan = expand_spec(_exclusive_spec())
+    assert report["valid"], report["errors"]
+    rows = _morph(plan, "Servo_CmdX_offset")["parameters"]["patterns"]
+    dst_z = {tuple(r[0]): r[1][2] for r in rows}
+    assert dst_z[(0, 0, 8)] == 41  # z_target, no 2 * z_target - coactive compensation
+    for role, z in (("reflex", 46), ("pattern", 44)):
+        rest_area = f"Servo_Rest{role.capitalize()}"
+        rule_ = _rules(plan, "CmdX", rest_area)[0]
+        assert rule_["postSynapticCurrent_multiplier"] == -2
+        patterns = _morph(plan, rule_["morphology_id"])["parameters"]["patterns"]
+        assert all(p[1] == [0, 0, z] for p in patterns)
+    src = report["sizing"]["Servo"]["sources"][-1]
+    assert src["exclusive"] and len(src["inhibitions"]) == 2
+    assert {"src_bin": 8, "z_target": 41} in src["rows"]
+
+
+def test_exclusive_row_may_sit_on_the_strip_edge() -> None:
+    spec = _exclusive_spec(gain=25, max_offset=200)  # 4 bins x 25 reaches both range limits
+    report, plan = expand_spec(spec)
+    assert report["valid"], report["errors"]
+    zs = {r[1][2] for r in _morph(plan, "Servo_CmdX_offset")["parameters"]["patterns"]}
+    assert 0 in zs and 90 in zs
+
+
+def test_exclusive_low_inhibition_is_rejected_and_psp_scales_default() -> None:
+    err = expand_spec(_exclusive_spec(exclusive_inhibition_psc=1))[0]["errors"]
+    assert err and "below the rest drive" in err[0]
+    ok = expand_spec(_exclusive_spec(psp=0.5))[0]
+    assert ok["sizing"]["Servo"]["sources"][-1]["inhibit_psc"] == -4
+    assert expand_spec(_exclusive_spec(exclusive_inhibition_psc=3))[0]["valid"]
+
+
+def test_exclusive_mixed_with_non_exclusive_and_mutual_exclusion_warning() -> None:
+    report, _ = expand_spec(_exclusive_spec())  # CmdA is non-exclusive on channel 0
+    reflex = report["sizing"]["Servo"]["sources"][0]
+    assert reflex["role"] == "reflex" and reflex["coactive_z"] == 44
+    assert not any("mutual exclusion" in w for w in report["warnings"])
+    two = _exclusive_spec()
+    two["templates"][3]["sources"].append({**two["templates"][3]["sources"][-1], "area": "CmdY"})
+    assert any("mutual exclusion" in w for w in expand_spec(two)[0]["warnings"])
+    two["templates"][3]["sources"][-1]["mutually_exclusive_with"] = ["CmdX"]
+    assert not any("mutual exclusion" in w for w in expand_spec(two)[0]["warnings"])

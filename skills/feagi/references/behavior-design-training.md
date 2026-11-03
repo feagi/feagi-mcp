@@ -53,6 +53,12 @@ Every Trainer run, any task, writes `<run_id>.rundata/` in the Trainer artifacts
   (columnar; an unknown field gets a 400 that lists the valid ones). The same fields feed
   `runData.neural.neuronState`.
 - Scheduled actions (`scheduledEvents`: a list of `{at_s, label, action}`, where the action sets
-  a mapping's post-synaptic current multiplier or one area parameter) are applied during a run
-  and restored after it. Fixed support (`supportMode: fixed` with `supportLevel`) holds one
+  a mapping's post-synaptic current multiplier or one area parameter, or force-fires voxels of an
+  area with `stimulate_area`) are applied during a run and restored after it. `stimulate_area`
+  takes `area`, `voxels` (`[[x, y, z], ...]`, positions only, each inside the area's
+  dimensions) and one of `bursts`, `seconds` or `hold: true` (every burst until the attempt or
+  phase ends). Train phase only: the test phase refuses scheduled events and probes clear them,
+  so a held stimulus is absent from both. In a run plan, put it in a condition's
+  `setup.scheduledEvents` to hold an input through that cell; the cell's `scheduledEvents` show
+  in `get_run_plan` (summary false) and `get_run_plan_results`. Fixed support (`supportMode: fixed` with `supportLevel`) holds one
   support level for every training attempt.

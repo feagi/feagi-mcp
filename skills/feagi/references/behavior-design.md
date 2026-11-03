@@ -4,6 +4,7 @@ Part 1 of 2: analysis, capability checks, tuning, checklist. Training method fit
 
 ## Contents
 
+- Stay bio-inspired
 - Levels of analysis
 - Task analysis before building
 - Circuit capability check
@@ -12,6 +13,22 @@ Part 1 of 2: analysis, capability checks, tuning, checklist. Training method fit
 - Innate vs learned
 - Motor targets are absolute and hold
 - Start-of-goal checklist
+
+## Stay bio-inspired
+
+Ask first how an animal solves this with what it can sense: vestibular-like tilt, joint state, foot
+pressure, reflexes, learning.
+
+- **Inputs** are the body's own sensors. Simulator ground truth such as centre of mass or exact
+  pose never reaches the brain.
+- **Solutions** are circuits and learning, not solvers, planners, inverse kinematics or
+  hand-computed targets standing in for feedback.
+- **Metrics** are behavior first: stays up, which feet touch, hold time, recovery. If the Trainer
+  lacks an engineering number such as centre of mass, try a behavioral measure before adding it.
+- **Physics** may inform reasoning (fall time sets the burst rate), but a model's output is not the
+  design.
+- **Exception:** only when the project requires it or a very strong reason exists. Say which
+  principle it departs from and give the bio-inspired alternative; the user decides.
 
 ## Levels of analysis
 
@@ -81,12 +98,11 @@ Record, per condition:
 A stance that falls in about a second makes every reflex fight a constant bias, and the
 reflex then over-corrects. Before the first reflex:
 
-- Measure where the centre of mass projects against the support polygon in the stance
-  (`embodiment_measure_bodies`: torso `subtree_com` against the contact bodies' centroid),
-  with support 0 and the motors holding the stance.
-- Move the stance (ankle and hip pitch, knee bend, in the body adapter's stance rows) until the
-  projection sits at the centre of the support polygon, then measure the silent fall time
-  again. Sweep the stance values with a run plan (below), not by hand.
+- Measure the silent stance by behavior, with support 0 and the motors holding it: fall time and
+  fall direction.
+- Move the stance (ankle and hip pitch, knee bend, in the body adapter's stance rows) against the
+  fall direction and sweep the stance values with a run plan (below), not by hand, until the silent
+  fall time stops improving.
 - The reflex then corrects disturbances around a balanced pose, not a built-in lean.
 
 ## Tune with a run plan, never one value per stage
@@ -154,8 +170,8 @@ of the command threshold (a sense port's self-hold, which sets how many bursts i
    servo gains must let a correction travel farther than the fall does in tau/2. If not, raise
    the slew in the mapping file (embodiment config) before wiring any reflex; no reflex gain
    can beat a slew limit (Microduck, 2026-10-31: 34 deg/s lost to a 0.12 s fall, 85 deg/s won).
-4. Check the start pose: is it statically stable? If not, centre the CoM over the support
-   polygon first ("Make the stance balance before wiring a reflex").
+4. Check the start pose: does it stand with the brain silent? If not, sweep the stance by its fall
+   time and direction first ("Make the stance balance before wiring a reflex").
 5. List the axes that need correction and the direction each needs.
 6. Run full, region-muted and pose-only trials (3 repeats); fill the table.
 7. Push each direction; confirm the response opposes it.

@@ -128,6 +128,7 @@ TOOL_CATEGORIES: dict[str, tuple[str, ...]] = {
         "recommend_connectivity_rules",
         "apply_connectivity_rule",
         "propose_connectivity_rule",
+        "scale_morphology_rows",
         "build_reflex_mapping",
         "build_stance_relative_mapping",
         "update_cortical_mapping",
@@ -240,6 +241,10 @@ TOOL_CATEGORIES: dict[str, tuple[str, ...]] = {
         "composer_get_simulator_pack_resolved",
         "composer_download_simulator_pack_bundle",
     ),
+    "Brain Hub block datasheets": (
+        "get_block_datasheet",
+        "check_port_contract",
+    ),
     "Brain Visualizer API pass-through": (
         "list_brain_visualizer_operations",
         "brain_visualizer_api",
@@ -275,6 +280,24 @@ STUDIO_ONLY_TOOLS: dict[str, str] = {
     "list_brain_snapshots": (
         "`list_brain_snapshots(experiment_id?)`: the experiment's named snapshots with "
         "saved-by, counts and sync state."
+    ),
+    "preview_block_datasheet": (
+        "`preview_block_datasheet(working_genome_id)`: previews a block's datasheet in Studio "
+        "for a working genome; read-only, nothing is published."
+    ),
+    "set_block_datasheet_draft": (
+        "`set_block_datasheet_draft(working_genome_id, datasheet)`: writes the author and measured "
+        "datasheet fields into the working genome's draft in Studio; nothing is published."
+    ),
+    "package_region_for_hub": (
+        "`package_region_for_hub(region_id, title?, ports{inputs,outputs}, datasheet?, form?)`: "
+        "Persist-tier; raises a Studio approval the user must accept. Writes a region copy with "
+        "ports to the account and opens Publish (form fills it in); publishes nothing."
+    ),
+    "prepare_hub_release_form": (
+        "`prepare_hub_release_form(working_genome_id, form)`: Persist-tier; raises a Studio "
+        "approval listing every form value. Opens Publish on an uploaded working genome with "
+        "the form filled in; the user accepts the terms and presses Publish; publishes nothing."
     ),
     "restore_brain_snapshot": (
         "`restore_brain_snapshot(label | checkpoint_id, experiment_id?)`: reverts the genome "

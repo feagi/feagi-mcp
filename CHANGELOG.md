@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **Development**: pre-commit now runs `mypy src/` on commit and `pytest` on push, matching CI; `mypy` pinned to `2.4.1` in the `dev` extra.
 
+## [0.1.5] - 2026-11-02
+
+### Changed
+- **Dependencies**: pin `feagi-core==2.6.13` (Python SDK; Brain Visualizer `2.11.0`).
+
 ## [0.1.4] - 2026-10-28
 
 ### Changed

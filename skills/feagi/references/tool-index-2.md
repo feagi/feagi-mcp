@@ -84,6 +84,11 @@ Part 2 of 2. Other parts: [tool-index.md](tool-index.md).
 - `composer_get_simulator_pack_resolved()`: Resolved pack manifest with per-file HTTPS URLs (include.xml, LICENSE, etc.).
 - `composer_download_simulator_pack_bundle()`: Download every file listed in the resolved manifest into `output_directory`.
 
+## Brain Hub block datasheets
+
+- `get_block_datasheet()`: Read a Brain Hub block release's datasheet (`feagi.datasheet/1`) from Composer.
+- `check_port_contract()`: Check one live area against one datasheet port row; per-check pass/fail with numbers.
+
 ## Brain Visualizer API pass-through
 
 - `list_brain_visualizer_operations()`: List every Brain Visualizer REST operation (operation_id, method, path, description).
@@ -96,4 +101,8 @@ Part 2 of 2. Other parts: [tool-index.md](tool-index.md).
 - `save_brain_snapshot(label, note?)`: pins a named snapshot of the running experiment: genome saved to the experiment in Composer (team-aware), connectome kept locally and uploaded in lite form asynchronously.
 - `export_run_data(run_id, destination?)`: exports a recorded run's data after re-hashing every file against its manifest.
 - `list_brain_snapshots(experiment_id?)`: the experiment's named snapshots with saved-by, counts and sync state.
+- `preview_block_datasheet(working_genome_id)`: previews a block's datasheet in Studio for a working genome; read-only, nothing is published.
+- `set_block_datasheet_draft(working_genome_id, datasheet)`: writes the author and measured datasheet fields into the working genome's draft in Studio; nothing is published.
+- `package_region_for_hub(region_id, title?, ports{inputs,outputs}, datasheet?, form?)`: Persist-tier; raises a Studio approval the user must accept. Writes a region copy with ports to the account and opens Publish (form fills it in); publishes nothing.
+- `prepare_hub_release_form(working_genome_id, form)`: Persist-tier; raises a Studio approval listing every form value. Opens Publish on an uploaded working genome with the form filled in; the user accepts the terms and presses Publish; publishes nothing.
 - `restore_brain_snapshot(label | checkpoint_id, experiment_id?)`: reverts the genome and reloads the connectome. Destructive; changes the shared brain for a team.

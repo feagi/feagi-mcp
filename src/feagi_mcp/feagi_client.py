@@ -90,6 +90,7 @@ from feagi_mcp.io_naming_provenance import (
 )
 from feagi_mcp.io_passthrough import edge_voxel, evaluate_magnitude_passthrough
 from feagi_mcp.memory_diagnostics import annotate_shared_edges
+from feagi_mcp.morphology_scaling import ScaleRowsError, plan_scaled_rows
 from feagi_mcp.placement_policy import (
     check_min_separation_to_existing,
     check_origin_exclusion,
@@ -2233,6 +2234,91 @@ class FeagiClient:
             logger.error(f"update_morphology failed: {e}")
             return {"error": str(e), "success": False}
 
+    async def scale_morphology_rows(
+        self,
+        morphology_name: str,
+        gain: float,
+        new_name: str,
+        used_src_bins: list[int],
+        dst_depth: int | None = None,
+        dst_area: str | None = None,
+        base_z: int | None = None,
+        src_axis: int | None = None,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        """Create a NEW pattern morphology whose destination z rows are scaled about a base.
+
+        Reads rows with ``get_morphology(include_parameters=True)`` (rows are omitted otherwise
+        on rejected dumps). Never mutates the source morphology or rebinds a mapping. The
+        destination strip is ``0..depth-1`` from ``dst_depth`` or the depth of ``dst_area``.
+        ``dry_run`` returns the table only (old/new z, in-strip or clamped, used, and the
+        largest gain with no clamp over ``used_src_bins``).
+        """
+        if (dst_depth is None) == (dst_area is None):
+            return {"success": False, "error": "pass exactly one of dst_depth or dst_area"}
+        new_name = (new_name or "").strip()
+        if not new_name:
+            return {"success": False, "error": "new_name must be non-empty"}
+        source = await self.get_morphology(morphology_name, include_parameters=True)
+        if not source.get("success"):
+            return {"success": False, "error": "source morphology not readable", "detail": source}
+        if source.get("type") != "patterns":
+            return {
+                "success": False,
+                "error": f"morphology type {source.get('type')!r} is not patterns",
+            }
+        depth = dst_depth
+        if dst_area is not None:
+            (area_id,), problem = await self._resolve_area_refs(dst_area)
+            if problem:
+                return {"success": False, "error": problem}
+            props = await self.fetch_multi_cortical_area_properties([area_id])
+            area = props.get(area_id) if isinstance(props, dict) else None
+            dims = extract_cortical_dimensions(area) if isinstance(area, dict) else None
+            if not dims or len(dims) != 3:
+                return {"success": False, "error": f"cannot read dimensions of {dst_area!r}"}
+            depth = int(dims[2])
+        existing = await self.get_morphology(new_name)
+        if existing.get("success"):
+            return {"success": False, "error": f"morphology {new_name!r} already exists"}
+        if "HTTP 404" not in str(existing.get("error", "")) and not re.search(
+            r"not found|does not exist|unknown", str(existing.get("message", "")), re.I
+        ):
+            return {
+                "success": False,
+                "error": "could not confirm new_name is free",
+                "detail": existing,
+            }
+        try:
+            plan = plan_scaled_rows(
+                (source.get("parameters") or {}).get("patterns"),
+                gain=gain,
+                depth=cast(int, depth),
+                used_src_bins=used_src_bins,
+                base_z=base_z,
+                src_axis=src_axis,
+            )
+        except ScaleRowsError as e:
+            return {"success": False, "error": str(e)}
+        result: dict[str, Any] = {
+            "success": True,
+            "dry_run": dry_run,
+            "source": morphology_name,
+            "new_name": new_name,
+            "gain": gain,
+            "strip_depth": depth,
+            "src_axis": plan["src_axis"],
+            "largest_no_clamp_gain": plan["largest_no_clamp_gain"],
+            "table": plan["table"],
+        }
+        if dry_run:
+            return result
+        created = await self.create_morphology(new_name, "patterns", {"patterns": plan["rows"]})
+        result["created"] = created
+        if created.get("success") is False or "error" in created:
+            result["success"] = False
+        return result
+
     async def rename_morphology(
         self,
         old_morphology_id: str,
@@ -2894,6 +2980,11 @@ class FeagiClient:
                 "cortical_type",
                 "cortical_group",
                 "cortical_dimensions",
+                "cortical_dimensions_per_device",
+                "cortical_subtype",
+                "encoding_type",
+                "encoding_format",
+                "dev_count",
             )
             for field in identity_fields:
                 if field in area:

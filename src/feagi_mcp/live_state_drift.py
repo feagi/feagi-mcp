@@ -207,6 +207,37 @@ def agent_finding(
     }
 
 
+def stimulus_schedule_findings(schedules: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Active stimulus schedules: each one keeps firing voxels, so it is a mismatch.
+
+    A stage starts from a quiet brain. A schedule left by a crashed run or an earlier
+    session (a repeating hold never ends by itself) drives its area until cancelled.
+    """
+    listed = schedules.get("schedules") if isinstance(schedules, dict) else None
+    findings: list[dict[str, Any]] = []
+    for entry in listed if isinstance(listed, list) else []:
+        if not isinstance(entry, dict) or entry.get("schedule_id") is None:
+            continue
+        schedule_id = entry["schedule_id"]
+        findings.append(
+            {
+                "check": "stimulus_schedule",
+                "schedule_id": schedule_id,
+                "repeating": entry.get("repeat") is not None,
+                "start_burst": entry.get("start_burst"),
+                "end_burst": entry.get("end_burst"),
+                "remaining_entries": entry.get("remaining_entries"),
+                "message": "An active stimulus schedule is still firing voxels.",
+                "restore": {
+                    "tool": "cancel_stimulus",
+                    "args": {"schedule_id": schedule_id},
+                    "note": "cancels the schedule's unfired entries",
+                },
+            }
+        )
+    return findings
+
+
 def compare_live_state(
     *,
     live_areas: dict[str, dict[str, Any]],
@@ -217,6 +248,7 @@ def compare_live_state(
     registered_agent_ids: list[str],
     sensor_snapshot: dict[str, Any],
     registered_agents: list[dict[str, Any]] | None = None,
+    stimulus_schedules: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """All drift findings from already-fetched payloads."""
     expected_dims = blueprint_dimensions(blueprint)
@@ -229,6 +261,8 @@ def compare_live_state(
     agent = agent_finding(descriptor, registered_agent_ids, registered_agents)
     if agent:
         findings.append(agent)
+    schedule_findings = stimulus_schedule_findings(stimulus_schedules)
+    findings.extend(schedule_findings)
     return {
         "finding_count": len(findings),
         "findings": findings,
@@ -240,13 +274,23 @@ def compare_live_state(
             "burst_frequency_hz": burst_config.get("burst_frequency_hz"),
             "simulation_timestep_s": simulation_timestep,
             "registered_agent_count": len(registered_agent_ids),
+            "active_stimulus_schedules": len(schedule_findings),
         },
     }
 
 
 async def gather_live_state_drift(client: Any, controller_id: str = "mujoco") -> dict[str, Any]:
     """Fetch genome, live areas, burst config, agents, descriptor and snapshot, then compare."""
-    genome, areas, burst_config, health, agents, descriptor, snapshot = await asyncio.gather(
+    (
+        genome,
+        areas,
+        burst_config,
+        health,
+        agents,
+        descriptor,
+        snapshot,
+        schedules,
+    ) = await asyncio.gather(
         client.download_genome(),
         client.list_cortical_areas_detailed(),
         client.get_burst_engine_config(),
@@ -254,6 +298,7 @@ async def gather_live_state_drift(client: Any, controller_id: str = "mujoco") ->
         client.get_registered_agents(),
         client.embodiment_discover_introspection_endpoint(controller_id),
         client.get_sensor_snapshot_last(summary_only=False),
+        client.get_stimulus_schedule(),
     )
     errors: dict[str, Any] = {}
     for name, payload in (
@@ -263,6 +308,7 @@ async def gather_live_state_drift(client: Any, controller_id: str = "mujoco") ->
         ("health", health),
         ("agents", agents),
         ("sensor_snapshot", snapshot),
+        ("stimulus_schedule", schedules),
     ):
         if not isinstance(payload, dict) or payload.get("error"):
             errors[name] = payload
@@ -279,6 +325,7 @@ async def gather_live_state_drift(client: Any, controller_id: str = "mujoco") ->
         registered_agent_ids=[a for a in (agent_ids or []) if isinstance(a, str)],
         sensor_snapshot=snapshot if isinstance(snapshot, dict) else {},
         registered_agents=[a for a in (agent_records or []) if isinstance(a, dict)],
+        stimulus_schedules=schedules if isinstance(schedules, dict) else None,
     )
     if errors:
         result["fetch_errors"] = errors

@@ -20,6 +20,10 @@ You reach the running instance through the `feagi` MCP server. Every fact about 
 brain comes from those tools. FEAGI is not human neuroscience: never answer with anatomy
 (prefrontal cortex, V1, Broca's area) unless those names appear in tool results.
 
+FEAGI is bio-inspired. Keep suggestions and designs that way: behavior comes from spiking circuits
+and learning, acting on what the body can sense, and is judged by what the body does. See "Stay
+bio-inspired" in [references/behavior-design.md](references/behavior-design.md).
+
 Tool names below end in `()`, for example `health_check()`. Depending on the host they may
 appear with a prefix such as `mcp__feagi__`. If no FEAGI tools are available, read
 [references/setup.md](references/setup.md) and help the user connect the server instead of
@@ -192,6 +196,7 @@ independent calls together in one turn, and never poll physics or logs in a loop
 | Robots, joints, MuJoCo scenes, simulator assets | `get_registered_agents()`, `get_agent_joint_map()`, `get_mujoco_scene_config()` | [embodiment.md](references/embodiment.md) |
 | Measure robot behavior (balance, episodes, brain-to-body timing) | `measure_balance()`, `record_aligned_trace()` | [embodiment-burst-measuring.md](references/embodiment-burst-measuring.md#measuring-behavior) |
 | Save, snapshot, load, or merge genomes | `save_brain_snapshot()`, `save_genome_to_filesystem()`, `queue_amalgamation_by_payload()` | [genome-lifecycle.md](references/genome-lifecycle.md) |
+| Use a Brain Hub block in my brain, or publish a block with its datasheet | `get_block_datasheet(item_id, version)`, `check_port_contract(port, area_id)`, `package_region_for_hub(region_id, ports)` (Studio, user approval) | [hub-block-datasheet.md](references/hub-block-datasheet.md) |
 | Find a tool for anything else | | [tool-index.md](references/tool-index.md), [tool-index-2.md](references/tool-index-2.md) |
 
 ## Core workflows

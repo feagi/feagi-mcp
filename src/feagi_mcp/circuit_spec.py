@@ -658,10 +658,23 @@ def _shift_rows(bins: int, shift: int) -> list[Any]:
     ]
 
 
+_WRAP_MORPHOLOGIES = frozenset({"last_to_first", "first_to_last"})
+
+
 def _tpl_ring_cpg(t: dict[str, Any], plan: Plan) -> None:
-    """A self-holding ring: lateral excitation steps the active bin, inhibition clears it."""
+    """A self-holding ring: lateral excitation steps the active bin, inhibition clears it.
+
+    ``wrap`` (default true) closes the ring with ``last_to_first`` / ``first_to_last``.
+    ``wrap: false`` builds a one-shot chain: no wrap edges, the last bin holds while its drive
+    lasts. Release check for a chain: with the drive off every bin must fall silent, so the
+    self-hold plus the next-bin inhibition must be sized to allow that (adjacent active bins
+    that hold each other can latch); confirm it with ``record_spikes`` after the drive stops.
+    """
     name = _name(t)
     bins = _inum(t, "bins", minimum=2)
+    wrap = t.get("wrap", True)
+    if not isinstance(wrap, bool):
+        raise SpecError(f"ring_cpg '{name}': 'wrap' must be true or false")
     threshold = _fnum(t, "threshold", positive=True)
     psp = _fnum(t, "psp", positive=True)
     leak = _fnum(t, "leak", 0.0, minimum=0.0)
@@ -692,17 +705,16 @@ def _tpl_ring_cpg(t: dict[str, Any], plan: Plan) -> None:
         neuron_props(threshold, psp, leak, refractory, psp_uniform=True),
         neurons_per_voxel=1,
     )
-    plan.add_rules(
-        name,
-        name,
-        [
-            rule("block_to_block", hold_psc),
-            rule("lateral_+z", lateral),
-            rule("last_to_first", lateral),
-            rule("lateral_-z", inhibit),
-            rule("first_to_last", inhibit),
-        ],
-    )
+    ring_rules = [
+        rule("block_to_block", hold_psc),
+        rule("lateral_+z", lateral),
+        rule("last_to_first", lateral),
+        rule("lateral_-z", inhibit),
+        rule("first_to_last", inhibit),
+    ]
+    if not wrap:
+        ring_rules = [r for r in ring_rules if r["morphology_id"] not in _WRAP_MORPHOLOGIES]
+    plan.add_rules(name, name, ring_rules)
     plan.add_rules(drive, name, [rule("0-0-0_to_all", d / drive_psp)])
     predicted = predicted_step_bursts(psp * lateral + d, leak, threshold)
     sizing: dict[str, Any] = {
@@ -713,7 +725,18 @@ def _tpl_ring_cpg(t: dict[str, Any], plan: Plan) -> None:
         "drive_psc": _clean(d / drive_psp),
         "predicted_step_bursts": predicted,
         "predicted_step_status": "uncalibrated: check the period with record_spikes",
+        "wrap": wrap,
     }
+    if not wrap:
+        sizing["release_check"] = (
+            "drive off: every bin must fall silent (record_spikes + analyze_run); self-hold "
+            "and next-bin inhibition must allow it"
+        )
+        if t.get("seed") is None:
+            plan.warnings.append(
+                f"ring_cpg '{name}': wrap is false and there is no 'seed'; a chain with no "
+                "onset seeding never starts at bin 0"
+            )
     want = t.get("step_bursts")
     if want is not None and predicted != want:
         plan.warnings.append(
@@ -829,9 +852,10 @@ def _tpl_servo_two_rest(t: dict[str, Any], plan: Plan) -> None:
         "rest_z_pattern": {str(c): z for c, z in sorted(rest_z["pattern"].items())},
         "sources": [],
     }
+    exclusive_by_channel: dict[int, list[dict[str, Any]]] = {}
     for src in sources:
         role = src.get("role")
-        if role not in rest:
+        if role not in rest and not src.get("exclusive"):
             raise SpecError(f"'{name}': source role must be 'reflex' or 'pattern'")
         area = _ref(src, "area")
         assert area is not None
@@ -840,6 +864,9 @@ def _tpl_servo_two_rest(t: dict[str, Any], plan: Plan) -> None:
             raise SpecError(f"'{name}': source '{area}' uses channel {c} not in 'channels'")
         other = "pattern" if role == "reflex" else "reflex"
         src_psp = _fnum(src, "psp", 1.0, positive=True)
+        exclusive = src.get("exclusive", False)
+        if not isinstance(exclusive, bool):
+            raise SpecError(f"'{name}': source '{area}' 'exclusive' must be true or false")
         compiled = compile_stance_offset_rows(
             src_axis=str(src.get("src_axis", "z")),
             src_bins=_inum(src, "src_bins", minimum=1),
@@ -856,7 +883,7 @@ def _tpl_servo_two_rest(t: dict[str, Any], plan: Plan) -> None:
             deadband=_fnum(src, "deadband", 0.0, minimum=0.0),
             max_offset=src.get("max_offset"),
             z0_is_max=z0_is_max,
-            coactive_z={c: rest_z[other][c]},
+            coactive_z=None if exclusive else {c: rest_z[other][c]},
         )
         clamped = [w for w in compiled["warnings"] if "clamped" in w]
         if clamped and not allow_clamp:
@@ -867,6 +894,12 @@ def _tpl_servo_two_rest(t: dict[str, Any], plan: Plan) -> None:
         off = f"{name}_{area}_offset"
         plan.add_patterns(off, [[vm["src"], vm["dst"]] for vm in compiled["voxel_mappings"]])
         plan.add_rules(area, opu, [rule(off, opu_psc)])
+        if exclusive:
+            _exclusive_source(
+                name, area, src, c, compiled, rest, rest_z, tonic_mp, src_psp, plan, sizing
+            )
+            exclusive_by_channel.setdefault(c, []).append(src)
+            continue
         axis = {"x": 0, "y": 1, "z": 2}[str(src.get("src_axis", "z")).lower()]
         fixed = list(src.get("src_fixed") or ["*", "*", "*"])
         inhibit_rows = []
@@ -888,7 +921,70 @@ def _tpl_servo_two_rest(t: dict[str, Any], plan: Plan) -> None:
                 "inhibit_psc": -inh,
             }
         )
+    for c, group in sorted(exclusive_by_channel.items()):
+        declared = {str(g.get("area")): set(g.get("mutually_exclusive_with") or []) for g in group}
+        for idx, first in enumerate(group):
+            for second in group[idx + 1 :]:
+                an, bn = str(first.get("area")), str(second.get("area"))
+                if bn not in declared[an] and an not in declared[bn]:
+                    plan.warnings.append(
+                        f"'{name}': exclusive sources '{an}' and '{bn}' share channel {c} "
+                        "without declared mutual exclusion ('mutually_exclusive_with'); "
+                        "firing together would average their targets"
+                    )
     plan.sizing[name] = sizing
+
+
+def _exclusive_source(
+    name: str,
+    area: str,
+    src: dict[str, Any],
+    c: int,
+    compiled: dict[str, Any],
+    rest: dict[str, str],
+    rest_z: dict[str, dict[int, int]],
+    tonic_mp: float,
+    src_psp: float,
+    plan: Plan,
+    sizing: dict[str, Any],
+) -> None:
+    """Exclusive source: rows land on z_target unchanged; it inhibits both rest neurons."""
+    min_psc = math.ceil(tonic_mp / src_psp - EPS)
+    inh = _fnum(src, "exclusive_inhibition_psc", float(min_psc), positive=True)
+    if src_psp * inh < tonic_mp - EPS:
+        raise SpecError(
+            f"'{name}' source '{area}': exclusive_inhibition_psc {inh:g} x psp {src_psp:g} is "
+            f"below the rest drive {tonic_mp:g}; the rest neurons would keep firing"
+        )
+    axis = {"x": 0, "y": 1, "z": 2}[str(src.get("src_axis", "z")).lower()]
+    fixed = list(src.get("src_fixed") or ["*", "*", "*"])
+    bins = [r["src_bin"] for r in compiled["table"] if r["dst_z"] is not None]
+    for role, rest_area in rest.items():
+        rows = []
+        for a, b in _runs(bins):
+            row_src = list(fixed)
+            row_src[axis] = a if a == b else f"{a}..{b}"
+            rows.append([row_src, [c, 0, rest_z[role][c]]])
+        morph = f"{name}_{area}_inhibit_rest_{role}"
+        plan.add_patterns(morph, rows)
+        plan.add_rules(area, rest_area, [rule(morph, -inh)])
+    sizing["sources"].append(
+        {
+            "area": area,
+            "exclusive": True,
+            "channel": c,
+            "rows": [
+                {"src_bin": r["src_bin"], "z_target": r["dst_z"]}
+                for r in compiled["table"]
+                if r["dst_z"] is not None
+            ],
+            "offset_rows": len(compiled["voxel_mappings"]),
+            "inhibitions": [
+                {"rest": rest[role], "z": rest_z[role][c], "psc": -_clean(inh)} for role in rest
+            ],
+            "inhibit_psc": -_clean(inh),
+        }
+    )
 
 
 def _bins_of(t: dict[str, Any], key: str, size: int) -> set[int]:

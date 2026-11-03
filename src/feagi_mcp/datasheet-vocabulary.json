@@ -1,0 +1,20 @@
+{
+  "code": ["binary", "thermometer", "one-hot", "value plane", "rate"],
+  "code_source": ["measured", "stated"],
+  "kind": [
+    "Boolean",
+    "Percentage",
+    "Percentage2D",
+    "Percentage3D",
+    "Percentage4D",
+    "SignedPercentage",
+    "SignedPercentage2D",
+    "SignedPercentage3D",
+    "SignedPercentage4D",
+    "CartesianPlane",
+    "Misc",
+    "PoseEstimation"
+  ],
+  "frame": ["Absolute", "Incremental"],
+  "positioning": ["Linear", "Fractional"]
+}

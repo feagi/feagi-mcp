@@ -2,7 +2,7 @@
   "name": "feagi",
   "displayName": "FEAGI Neural Monitor",
   "description": "Observe and control FEAGI neural systems for LLM-assisted circuit design",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "neuraville",
   "categories": ["AI", "Robotics", "Science"],
   "keywords": ["feagi", "neural", "brain", "robotics", "mcp", "ai"],
@@ -169,6 +169,16 @@
       "name": "composer_get_simulator_pack_resolved",
       "category": "composer",
       "description": "Resolved pack manifest + per-file HTTPS URLs"
+    },
+    {
+      "name": "get_block_datasheet",
+      "category": "composer",
+      "description": "Read a Brain Hub block release's datasheet from Composer (requires FEAGI_COMPOSER_BASE_URL)"
+    },
+    {
+      "name": "check_port_contract",
+      "category": "composer",
+      "description": "Check one live area against a datasheet port row; optional latency probe changes live activity"
     },
     {
       "name": "composer_download_simulator_pack_bundle",

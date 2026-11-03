@@ -10,6 +10,7 @@ Part 2 of 2. Workflow, naming and `build_circuit_from_spec` (templates incl. `ph
 - Pattern sketches
 - Worked example: OR gate
 - Worked example: AND gate
+- Template options
 
 ## Placement
 
@@ -174,3 +175,11 @@ Same structure as the OR gate, in a region titled `AND Gate`, with `AndGate_Inpu
    (If A and B are voxels of one area, use one stimulus entry with both coordinates.)
 6. Report the threshold you chose and why, and that changes are unsaved. PSP and leak are only
    known once the areas exist, so read them after creating instead of assuming.
+
+## Template options
+
+Options of the `build_circuit_from_spec` templates in [building-circuits.md](building-circuits.md).
+
+`ring_cpg` option `wrap: false` (default true) builds a one-shot chain with no `last_to_first` / `first_to_last`; the last bin holds while its drive lasts. Release check: with the drive off every bin must fall silent (self-hold plus next-bin inhibition sized for it, adjacent active bins can latch), confirm with `record_spikes`; a chain with no `seed` warns.
+
+`servo_channel_two_rest` source option `exclusive: true`: rows target `z_target` with no two-rest compensation (edges allowed, `role` optional), and the source inhibits BOTH rest neurons with `exclusive_inhibition_psc` (default `ceil(rest drive / psp)`, must give `psp x psc >= rest drive`). Two exclusive sources on one channel warn unless declared with `mutually_exclusive_with: [area]`.

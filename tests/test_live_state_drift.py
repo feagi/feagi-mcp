@@ -14,6 +14,7 @@ from feagi_mcp.live_state_drift import (
     gather_live_state_drift,
     ipu_width_findings,
     sensor_columns,
+    stimulus_schedule_findings,
 )
 
 IMU = "aXJpbQcABQA="
@@ -157,6 +158,7 @@ async def test_gather_live_state_drift_uses_client_and_reports_fetch_errors() ->
         "agent_id": AGENT,
     }
     client.get_sensor_snapshot_last.return_value = {"error": "HTTP 500"}
+    client.get_stimulus_schedule.return_value = {"schedules": []}
     result = await gather_live_state_drift(client, controller_id="mujoco")
     checks = sorted(f["check"] for f in result["findings"])
     assert checks == ["agent_registration", "burst_frequency", "cortical_dimensions"]
@@ -181,5 +183,32 @@ async def test_gather_live_state_drift_registered_under_another_id_is_not_a_find
         "agent_id": AGENT,
     }
     client.get_sensor_snapshot_last.return_value = _snapshot({IMU: 6})
+    client.get_stimulus_schedule.return_value = {"schedules": []}
     result = await gather_live_state_drift(client)
     assert [f["check"] for f in result["findings"]] == []
+    client.get_stimulus_schedule.return_value = {
+        "schedules": [
+            {
+                "schedule_id": 3,
+                "start_burst": 10,
+                "end_burst": None,
+                "remaining_entries": 1,
+                "repeat": {"period_bursts": 1},
+            }
+        ]
+    }
+    result = await gather_live_state_drift(client)
+    assert [f["check"] for f in result["findings"]] == ["stimulus_schedule"]
+    finding = result["findings"][0]
+    assert finding["repeating"] is True
+    assert finding["restore"] == {
+        "tool": "cancel_stimulus",
+        "args": {"schedule_id": 3},
+        "note": "cancels the schedule's unfired entries",
+    }
+
+
+def test_stimulus_schedule_findings_ignore_empty_and_malformed_payloads() -> None:
+    assert stimulus_schedule_findings(None) == []
+    assert stimulus_schedule_findings({"error": "HTTP 500"}) == []
+    assert stimulus_schedule_findings({"schedules": [{"no_id": 1}, "x"]}) == []

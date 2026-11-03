@@ -28,7 +28,28 @@ from typing import Any
 
 _SUBUNIT_SHIFT = 4
 _SUBUNIT_MASK = 0x0F
+_VARIANT_MASK = 0x0F
 _FRAME_CHANGE_SHIFT = 8
+_POSITIONING_SHIFT = 9
+
+#: Variant discriminant (flag bits 0-3) to ``IOCorticalAreaConfigurationFlag`` kind name, as in
+#: ``io_cortical_area_configuration_flag.rs`` ``try_from_data_type_configuration_flag``.
+_VARIANT_KINDS: dict[int, str] = {
+    0: "Boolean",
+    1: "Percentage",
+    2: "Percentage2D",
+    3: "Percentage3D",
+    4: "Percentage4D",
+    5: "SignedPercentage",
+    6: "SignedPercentage2D",
+    7: "SignedPercentage3D",
+    8: "SignedPercentage4D",
+    9: "CartesianPlane",
+    10: "Misc",
+    11: "PoseEstimation",
+}
+#: Variants whose flag carries the positioning bit (bit 9); the others have no positioning axis.
+_POSITIONING_VARIANTS = frozenset(range(1, 9))
 
 
 def _raw_from_cortical_id_string(cortical_id: str) -> tuple[bytes | None, str | None]:
@@ -91,6 +112,11 @@ def decode_cortical_id_interpretation(cortical_id: str) -> dict[str, Any]:
     subunit = (flags >> _SUBUNIT_SHIFT) & _SUBUNIT_MASK
     unit_index = int.from_bytes(raw[6:8], "little")
     frame_change = "Incremental" if ((flags >> _FRAME_CHANGE_SHIFT) & 0x01) == 1 else "Absolute"
+    variant = flags & _VARIANT_MASK
+    kind = _VARIANT_KINDS.get(variant)
+    positioning: str | None = None
+    if variant in _POSITIONING_VARIANTS:
+        positioning = "Fractional" if ((flags >> _POSITIONING_SHIFT) & 0x01) == 1 else "Linear"
 
     base.update(
         {
@@ -103,6 +129,10 @@ def decode_cortical_id_interpretation(cortical_id: str) -> dict[str, Any]:
             "cortical_subunit_index": subunit,
             "cortical_unit_index": unit_index,
             "frame_change_handling": frame_change,
+            "variant_index": variant,
+            "kind": kind,
+            "signed": kind.startswith("SignedPercentage") if kind else None,
+            "positioning": positioning,
             "mapping_hints": {
                 "bv_unit_id": unit_index,
                 "bv_subunit_id": subunit,
@@ -112,8 +142,9 @@ def decode_cortical_id_interpretation(cortical_id: str) -> dict[str, Any]:
             "notes": (
                 "cortical_subunit_index is flag bits 4-7 of bytes 4-5 (connectome "
                 "subunit_id / title suffix). cortical_unit_index is little-endian u16 "
-                "in bytes 6-7 (BV unit_id / device group). Bit 8 of the flag is "
-                "Absolute vs Incremental frame handling."
+                "in bytes 6-7 (BV unit_id / device group). Bits 0-3 are the variant "
+                "(kind), bit 8 is Absolute vs Incremental frame handling, bit 9 is Linear vs "
+                "Fractional positioning (null for variants without a positioning axis)."
             ),
         }
     )

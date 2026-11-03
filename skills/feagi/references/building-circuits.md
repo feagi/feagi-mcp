@@ -61,6 +61,8 @@ raising the self-hold.
 | `servo_channel_two_rest` | `<name>_RestReflex`, `<name>_RestPattern` (`[channels,1,depth]`), a tonic area firing both rest voxels per channel (stance z+1 and z-1), per-source offset rows with `coactive_z` set to the other role's rest voxel, each source inhibiting its own rest neuron | Inhibition `ceil(tonic_psp x tonic_psc / source_psp)` (membrane units); a clamp warning from the offset compiler is an error unless `allow_clamp` |
 | `phase_window_gate` | Gate area `<name>` (`[1,1,1]`): `pulse` and optional tonic `enable` excite it, every `phase` bin outside `window` (list or `"a..b"`, of `phase_bins`) inhibits it, it drives `target` | `V <- V (1 - leak) + I`, fire at `V >= T`, steady state with `accumulate`: enable alone < T; pulse alone < T (>= T without enable); enable + pulse >= T; enable + pulse - inhibition < T. Any violation fails the dry run; `inhibit_psc` defaults to the smallest integer that satisfies the last line |
 
+Template options `ring_cpg` `wrap: false` and `servo_channel_two_rest` `exclusive: true`: see [building-circuits-placement.md](building-circuits-placement.md), "Template options".
+
 Spec keys beyond templates: `delete` (`[{src, dst}]`, removes those mappings before the new ones
 are written, so a pair can be deleted and rebuilt in one spec) and `edit_areas` (`[{name,
 properties}]` on live areas that are members of `region.region_id`, checked against the parameter
@@ -108,7 +110,11 @@ the spec's version.
    acceptance check as a number.) Once the region exists,
    `suggest_cortical_anchor_positions(count, parent_region_id, layout)`. Without
    `parent_region_id` it returns a default far from the rest of the brain.
-4. **Create areas** with `create_cortical_area()`, passing `brain_region_id`.
+4. **Create areas** with `create_cortical_area()`, passing `brain_region_id`. Size each input
+   against its target's threshold: a source with `neuron_psp_uniform_distribution` off splits its
+   PSP over its fan-out, so per-synapse drive is weight x PSP / fan-out (see
+   [lessons.md](lessons.md), "PSP is divided across fan-out"). A port that never fires is
+   usually subthreshold, not an excitability or core fault.
 5. **Wire** each edge (see [connectivity.md](connectivity.md)).
 6. **Verify** with `probe_area_response()` (see [debugging.md](debugging.md)). With Studio,
    append a `measurement` with `metrics`, then a `verdict` that amends the hypothesis.
@@ -119,6 +125,8 @@ the spec's version.
    never after a decline or while troubleshooting. Published versions cannot be edited or
    deleted but can be superseded; connectomes carry learned data and need two-step consent.
    The user publishes in Studio (Publish version…); you never publish.
+
+To rescale a pattern morphology's destination z rows by a gain (new morphology, original and mappings untouched), use `scale_morphology_rows(..., dry_run=True)` first: it lists old/new z, clamped rows and the largest gain with no clamp over the used bins.
 
 Choose defaults instead of asking: role-based names, the smallest dimensions that work
 (`[1, 1, 1]` for boolean logic, one voxel column per channel for motor drives), and
