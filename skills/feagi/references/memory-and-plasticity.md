@@ -50,8 +50,11 @@ is full, `lru` evicts that area's least recently reactivated neuron, `none` fail
 
 **Measured.** A memory neuron fires in the same burst as its matching input, on creation and
 on reactivation. `temporal_depth` N makes one neuron per window position. `neuron_init_lifespan`
-defaults to 9 bursts, +1 per reactivation; a gap >= the lifespan loses the neuron and its
-synapses. A self-held input reactivates it EVERY burst, so long-term thresholds count bursts of
+defaults to 9 bursts, +1 per reactivation. A neuron created at burst b and never matched
+again expires at the end of burst b + init lifespan, and can still be reactivated in that
+burst (matching runs before aging); a longer gap loses the neuron and its synapses.
+`neuron_lifespan_growth_rate` is truncated to an integer on each reactivation (1.9 grows by 1,
+0.5 by 0). A self-held input reactivates it EVERY burst, so long-term thresholds count bursts of
 presence.
 
 **Reward consolidates.** On a reward-gated `associative_memory` mapping, a positive reward

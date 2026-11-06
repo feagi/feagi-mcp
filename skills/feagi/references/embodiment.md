@@ -127,8 +127,10 @@ Settings dialog. They are not cortical areas and not asset-pack XML.
   FEAGI creates areas, a stable `device_id`, and a `feagi_group` above the host's limb count)
   or `io_mode=geometry` (mesh only).
 - `configure_mujoco_scene(action="save_mujoco_general", ...)` with `controllerLoopRateHz`
-  sets how often the embodiment reads sensors and applies commands on the **next** launch (stored on the experiment as `controllerLoopRateHz`). It
+  sets how often the embodiment reads sensors and applies commands on the **next** launch (stored as `controllerLoopRateHz`). It
   does not change the physics timestep or the FEAGI burst rate.
+- Saved MuJoCo scene settings are per robot (embodiment) within an experiment: settings saved
+  for one robot do not apply to another robot in the same experiment.
 - If a tool reports a missing control URL, ask the user to restart the MuJoCo controller.
   Never invent MJCF as a substitute.
 

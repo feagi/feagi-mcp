@@ -44,7 +44,7 @@ potentiation while the reward driver is silent. Confirm learning with
   inside `plasticity_window`. `eligibility_decay_bursts` does not help creation: a synapse
   that does not exist has no trace.
 - An existing synapse keeps an eligibility trace; a reward up to about
-  `eligibility_decay_bursts` later still moves it (`w += eta * R * e`).
+  `eligibility_decay_bursts` later still moves it (`w += eta * R * e * step`).
 - Only synapses whose own endpoint neurons fired get credit. For memory areas the exception
   is the placeholder seed edge between the memory voxels, which counts any activity in its
   areas.
@@ -59,7 +59,8 @@ potentiation while the reward driver is silent. Confirm learning with
 2. One `update_cortical_mapping(src, dst, rules)` call carries the whole rule, read back first with
    `get_cortical_mapping()` so the edge's other rules are kept:
    `plasticity_mode: "rstdp"`, `plasticity_flag: true`, `modulators: [reward_id, punish_id]`,
-   `ltp_multiplier`, `ltd_multiplier` (0 to keep weights from wearing), `plasticity_constant`,
+   `ltp_multiplier`, `ltd_multiplier` (0 also turns punishment off and stops one-sided depression, so
+   it is not a way to keep weights from wearing), `plasticity_constant`,
    `plasticity_eta`, `max_weight`, `plasticity_window`, `eligibility_decay_bursts`,
    `synaptic_delay_bursts` (at least 1).
    Send `eligibility_decay_bursts` only together with `plasticity_mode: "rstdp"`. On a rule that is
@@ -92,14 +93,26 @@ and see per-area ledger windows with `get_fire_ledger_areas_window_config()`.
 
 ### Credit assignment (read before training with reward)
 
-- The weight commit is `w += eta * R * e`, applied only when R is not 0 and e is not 0. The
-  trace `e` gains LTP on co-firing and loses LTD on one-sided firing (source or destination
-  fired alone in the window).
-- Potentiation happens only when R > 0, e > 0 and LTP > 0. Punishment never potentiates.
+- Plain STDP here is not spike-order sensitive. LTP needs both ends to fire anywhere inside
+  `plasticity_window`, in either order. LTD (only when LTD > 0, and not on associative-memory
+  mappings) comes from one-sided firing, never from post-before-pre. The exponential timing
+  curves (`stdp_core.rs`, `compute_timing_factors`) exist in the plasticity crate but the burst
+  engine does not run them (`apply_stdp_updates_for_burst`, npu.rs, uses window sets and the
+  event count `e` only).
+
+- The weight commit is `w += eta * R * e * step`, applied only when R is not 0 and e is not 0.
+  The trace `e` counts events: +1 per co-firing burst, -1 per one-sided burst (source or
+  destination fired alone in the window), decayed each burst. `step` is LTP or LTD:
+  R > 0 on e > 0 uses LTP; R < 0 on e > 0 (punished co-firing) and R > 0 on e < 0 use LTD;
+  R < 0 on e < 0 commits nothing. Punishment never potentiates.
+- LTD 0 disables punishment (and one-sided depression); LTP 0 disables reward only.
 - With LTD > 0, `e` goes negative on one-sided firing, so a positive reward then lowers the
   weight. Reward that arrives while the postsynaptic area is quiet wears weights down.
 - With LTD 0, `e` never goes negative, so every reward potentiates co-firing until
-  `max_weight`. The weights saturate.
+  `max_weight`. The weights saturate, and punishment cannot lower them.
+- On associative mappings the commit needs a co-firing burst. Delayed punishment (pain
+  arriving after the co-firing) does not commit; pain must precede or coincide with a
+  co-firing burst.
 - A one-to-one mapping per direction means R-STDP only gates a fixed direction. It can mute
   a wrong one; it cannot flip it.
 - A reward that pays for an outcome produced by external support teaches dependence on the

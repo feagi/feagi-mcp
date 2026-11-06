@@ -49,7 +49,7 @@ Silent driver = rest value. Every type accepts `graded`; it scales s by driver M
 | `neuro.leak` | area | leak x (1+s), clamp 0..1; leak is the fraction of V lost per burst (dynamics.rs:26): +50 = 1.5x faster loss, -100 = no leak | baseline; baseline 0 stays 0 |
 | `neuro.firing_probability` | area | excitability x (1+s), clamp 0..1: -70 = about 30% of threshold crossings fire | baseline; positive m on baseline 1 does nothing |
 | `synaptic.transmission_gain` | mapping | each synapse's final contribution x (1+s): +100 = 2x, -100 = 0 | factor 1 |
-| `synaptic.reward` | mapping | adds s to R: +100 reward, -100 punishment; R = summed reward x learning factor (npu.rs:6451-6459) | R = 0; mapping is reward-gated |
+| `synaptic.reward` | mapping | adds s to R: +100 reward, -100 punishment; R = summed reward x learning factor (npu.rs:6484-6498) | R = 0; mapping is reward-gated |
 | `synaptic.learning_rate` | mapping | multiplies the commit (eta): +50 = 1.5x, -100 = 0 | factor 1 |
 | `synaptic.gate` | mapping | closed (0) unless the driver fires; then the factor is s: +100 passes all, +50 half, m <= 0 never opens, m > 100 amplifies | closed, also before the first burst (engine:111-128; test_conditional_gate.rs:104-117) |
 | `memory.formation` | memory area | factor clamp(1+s, 0, 1); new memory neurons are blocked only at factor 0, so m = -100 at full drive; -50 and any positive m do nothing (engine:174-190) | forms normally; recall and existing memories keep running (plasticity/src/service.rs:4916-4950) |
@@ -60,14 +60,14 @@ Verify each with `record_spikes()` (burst-exact `fire_fraction`) unless the line
 
 1. **R-STDP reward and punishment.** Two `synaptic.reward` modulators (+100, -100), each driver
    fed only by hard-wired detectors: plastic input into a reward driver is rejected in either
-   build order (npu.rs:6012-6050). `set_mapping_modulators()` with a reward id also switches the
+   build order (npu.rs:6046-6089). `set_mapping_modulators()` with a reward id also switches the
    rule to `rstdp` (server.py:1437-1450); set `eligibility_decay_bursts` for late reward. Read:
    weight stats in `diagnose_mapping_plasticity()`, `watch_mapping_weights()`.
 2. **Freeze learning for a test phase.** One `synaptic.learning_rate` at -100 on a `LearnOff`
    driver; subscribe every plastic rule (`modulator_usage()` lists them). R becomes 0, so no
    weight commit. It does not stop `rstdp` eligibility traces (they keep growing and a later
    reward commits them), and a plain `stdp` associative rule can still create synapses, because only
-   reward-gated rules check R before synthesis (npu.rs:6633-6647). For a hard stop use
+   reward-gated rules check R before synthesis (npu.rs:6689-6692). For a hard stop use
    `freeze_mapping_plasticity()` (sets `plasticity_frozen`; rule, synapses and weights stay). Read: `watch_mapping_weights()` flat under co-firing.
 3. **Salience-gated memory formation.** `memory.formation` at -100, `set_area_modulators()` on the
    memory area. Driver active means blocked, so make the driver tonic (steady drive) and let the
@@ -101,7 +101,7 @@ Verify each with `record_spikes()` (burst-exact `fire_fraction`) unless the line
 ## Pitfalls
 
 - A reward subscription makes plain `stdp` reward-gated: no potentiation or new synapses while the
-  driver is silent (npu.rs:6451-6456; test_balance_circuit_regressions.rs:111-153). Rewards on one
+  driver is silent (npu.rs:6484-6490; test_balance_circuit_regressions.rs:111-153). Rewards on one
   rule sum, so +100 with -100 firing together gives 0.
 - `set_area_modulators()` and `set_mapping_modulators()` replace the whole list: pass existing ids.
 - Persistence: areas and rules name modulators by id; the registry (`genome.modulators`) is

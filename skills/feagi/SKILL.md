@@ -294,7 +294,8 @@ heading (`genome-design-patterns#<heading>`) when choosing a mechanism. Worked d
    and verified: suggest publishing to Brain Hub in one sentence naming what would be shared
    (genome or connectome, which region). At most once per goal or session, never after the
    user declined, never while troubleshooting. Say that published versions cannot be edited
-   or deleted but can be superseded, and that connectomes carry learned data and need
+   but can be superseded, that the creator can make the work private later (copies people
+   already made cannot be taken back), and that connectomes carry learned data and need
    two-step consent. Publishing happens in Studio (Publish version…); never publish yourself.
 
 ### Wire A to B

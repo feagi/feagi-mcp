@@ -69,6 +69,10 @@ are counted in bursts, so rescale them whenever the burst rate changes.
    takes about `(leak_max - leak_min) / (gain * |rate - target|)` updates. Choose the gain so
    that time is close to `rate_ema_tau_bursts`. Much faster, and the leak oscillates; much
    slower, and the area spends the run out of range.
+   When the burst rate changes, convert by time, not per burst: keep `gain * |rate_error| * burst_hz`
+   (leak change per second) and keep arm and EMA windows in seconds. Verify in a short run without
+   the disturbance that active neurons' leaks settle inside the range instead of hitting
+   `leak_min`/`leak_max`.
 4. **Range.** Set `leak_min` from the longest integration the area may have (`1/leak_min`
    bursts) and `leak_max` from the shortest. Start the area's own `leak_coefficient` inside
    the range; a leak edit becomes the homeostat's new starting point.
@@ -86,6 +90,8 @@ Record the derivation in the design notebook with the burst-rate derivation.
   neuron's rate is measured; that rate becomes its frozen target.
 - Arm while the brain runs the regime to hold: experiment running, sensors live, a normal
   task in progress. A brain that is idle while arming arms every neuron to silence.
+  Arm while the body is in its steady state; a condition applied before a reset arms through
+  the reset. Re-arm with a scheduled `arm_epoch` change after settle.
 - Re-arm with `{"arm_epoch": <new number>}` alone; partial updates merge, so the other
   fields are kept. Re-sending the config with the same `arm_epoch` changes only the gain,
   clamps and time constants and keeps the targets.
@@ -99,6 +105,34 @@ A `neuro.leak` modulator scales the homeostat's leak (`leak x (1 + m)`, clamped 
 the homeostat sets the baseline, the modulator scales it while active. A long, strong
 `neuro.leak` signal is seen by the homeostat as a rate change and partly undone after about
 `rate_ema_tau_bursts`.
+
+### Counter mode (hardware LEAK<3:0> analogue)
+
+`update_rule: "counter"` replaces the proportional step with an integer leak code, like a
+chip's 4-bit leak register. Default is `"proportional"` (unchanged; existing genomes behave as
+before). Fields (counter only):
+
+- `leak_levels` (integer, >= 2, required): number of leak codes. Level `i` maps to
+  `leak_min + i * (leak_max - leak_min) / (leak_levels - 1)`.
+- `counter_timeout_bursts` (integer, >= 1, required): silent bursts that cost one down-step.
+
+Rule, per neuron, every burst (`update_every_n_bursts` is ignored; so are `gain` and the
+targets): a spike steps the level up by one (clamped at `leak_levels - 1`) and zeroes the
+silent counter; a silent burst adds 1 to the counter and when it reaches the timeout the level
+steps down by one and the counter restarts (one down-step per window). The level starts at the
+grid level nearest the area's base leak and restarts on a new `arm_epoch`. The stored leak is
+always a grid value once the rule runs. `rate_ema`, `rate_target` and `homeostat_regulated`
+still read out as before.
+
+Floors: `target_mode: "area"` floors every neuron at level 0 (no base floor, chip-faithful).
+`per_neuron` after arming: active neurons floor at level 0; silent-armed neurons floor at the
+base level with `silent_neurons: "one_sided"`; with `"unregulated"` they are left at the base
+leak and not stepped.
+
+The equilibrium firing rate is about `1 / counter_timeout_bursts` per burst (up-steps and
+down-steps balance when one spike arrives per timeout window). Older builds ignore unknown
+fields silently, so on a build without counter mode the area runs with its static leak: check
+`leak_coefficient` on the neuron-state read to confirm the rule is live.
 
 ### Set it, then verify it
 

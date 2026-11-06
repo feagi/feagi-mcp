@@ -56,20 +56,19 @@ Confirm availability with `describe_connectivity_rules()`; these are the usual c
 | Rule | Use for | Same dimensions? |
 |---|---|---|
 | `block_to_block` | One-to-one, topology-preserving copy | Yes |
-| `projector` | Resample or project source space into destination space | No |
-| `centered_projector` | Projection centered in the destination | No |
+| `projector` | Scale each axis by the ratio of the sizes: a larger source folds onto fewer voxels, a smaller one spreads over more | No |
+| `centered_projector` | Align the centre voxels (even sizes use the lower middle voxel), keep each voxel's offset, drop what lands outside | No |
 | `all_to_all` | Dense, fully connected coupling | No |
 | `0-0-0_to_all` | Broadcast one starter voxel to every destination voxel | No |
 | `all_to_0-0-0` | Funnel everything into the destination origin voxel | No |
-| `lateral_+x`, `lateral_-x`, `lateral_+y`, `lateral_-y`, `lateral_+z`, `lateral_-z` | Shift activity one step along an axis (chains, rings, CPG steps) | Yes |
-| `lateral_pairs_x` | Pairwise neighbors across X | Yes |
-| `transpose_xy`, `transpose_xz`, `transpose_yz` | Swap axes | Yes |
-| `rotator_z` | Rotate around Z | Yes |
-| `tile` | Repeat a source pattern across destination tiles | No |
-| `sweeper` | Sequential sweep through the destination | No |
-| `first_to_last`, `last_to_first` | Route the first unit to the end, or the last to the start | No |
-| `randomizer` | Random connectivity for decorrelation or exploration | No |
-| `bitmask_encoder_x/y/z`, `bitmask_decoder_x/y/z` | Pack or unpack bitmask values along an axis | No |
+| `lateral_+x`, `lateral_-x`, `lateral_+y`, `lateral_-y`, `lateral_+z`, `lateral_-z` | Shift activity one step along an axis; the last voxel has no target, nothing wraps (chains, CPG steps) | Yes |
+| `transpose_xy`, `transpose_xz`, `transpose_yz` | A projector that reads the source with two axes exchanged. Not a plain swap and not for same-size areas only: the destination keeps its own shape, so each axis is also scaled to fit it, and one source voxel can reach several destination voxels | No |
+| `rotator_z` | Each source XY voxel reaches every destination Z layer, rotated about the XY centre from -90 degrees (first layer) to +90 (last). Needs a destination with depth above 1 (depth 1 is the identity); a rotation outside the grid is dropped for that layer | Source depth is ignored; destination depth sets the angles |
+| `tile` | Source larger than the destination (by voxel count): fold it onto the destination tile by tile. Otherwise copy it across the destination. The genome's `src_seed` and `src_pattern` are ignored | No |
+| `sweeper` | Each source voxel to the next destination voxel: along x, then the next row, then the next layer; the last voxel has none | No |
+| `first_to_last`, `last_to_first` | Source voxel 0,0,0 to the highest destination voxel, or the highest source voxel to destination 0,0,0 | No |
+| `bitmask_encoder_x/y/z`, `bitmask_decoder_x/y/z` | Encoder: source voxel i along the axis is bit i (most significant first) and reaches every destination position with that bit set, so 3 source bits need 8 destination voxels. Decoder: the reverse | No |
+| `randomizer`, `lateral_pairs_x` | Named in genomes but not implemented in feagi-core: a rule using them silently creates 0 synapses. Do not use | n/a |
 | `episodic_memory` | Feed a memory area so it forms memory neurons. FEAGI also writes it, non-plastic, as the generated memory-to-twin recall edge | No |
 | `associative_memory` | STDP association from a memory area to any ordinary area other than its own twin | No |
 | `memory_replay` | Legacy. FEAGI replaces it with `episodic_memory` on the memory-to-twin pair; do not wire it | No |

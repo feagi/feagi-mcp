@@ -13,10 +13,10 @@ Legal pairs: memory->memory, memory->plain, plain->memory. (code: npu.rs)
 - Initial weight = clamp(`plasticity_constant` * `ltp_multiplier`, 0..255). (code: npu.rs:242-247)
 - Each later co-firing: w += eta * R * e, capped at `max_weight`. (code: npu.rs:6593-6610)
 - `stdp`: R is the learning factor, 1.0 without modulators. `rstdp` needs a `synaptic.reward`
-  modulator, else R=0 and nothing is learned. (code: npu.rs:6451-6463, 6647)
+  modulator, else R=0 and nothing is learned. (code: npu.rs:6484-6498)
 - A `stdp` mapping subscribed to any `synaptic.reward` modulator is reward-gated too: off-reward
   R=0, so it neither creates nor grows. For an unrewarded seed phase leave it unsubscribed, then
-  subscribe at the switch to `rstdp`. (code: npu.rs:6451-6456)
+  subscribe at the switch to `rstdp`. (code: npu.rs:6484-6490)
 - `e` is a trace, not 1: it gains `delta_plus` on every co-firing burst and decays over
   `eligibility_decay_bursts` (code: npu.rs:6559-6575). A held state co-firing for many bursts
   gives e >> 1, so one presentation can move the weight several steps (window 5 gave weight 5).

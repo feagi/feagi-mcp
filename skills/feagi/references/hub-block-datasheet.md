@@ -63,7 +63,8 @@ the release artifact; the author supplies meaning (code, sign, function) and mea
    (packaging only) and the Publish dialog opens with the form filled in. The live region is not
    modified. Terms acceptance, media and the Publish button are not in `form`.
 7. Say that NOTHING IS PUBLISHED: the user accepts the terms and presses Publish in Studio.
-   Never claim or attempt to publish; published versions cannot be edited or deleted. If the user
+   Never claim or attempt to publish; published versions cannot be edited, only superseded. The
+   creator can make the work private later, but copies people already made cannot be taken back. If the user
    asks for help publishing, have the form ready first (steps 5 and 6).
 8. Package once per region; reuse the returned working genome id for later preview and draft edits.
 9. After the user publishes, offer to read the datasheet back with `get_block_datasheet`.

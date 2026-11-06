@@ -892,6 +892,10 @@ async def analyze_run(
 ) -> dict[str, Any]:
     """Acceptance metrics from a spikes CSV, as compact JSON (never rows).
 
+    For Trainer-owned time windows (seconds from attempt_start), falls, and stored neuron
+    state (leak_coefficient, membrane_potential) use ``get_run_window_stats`` (Studio MCP)
+    instead; this tool covers spike-timing, ring-period and phase-window metrics only.
+
     ``csv_path`` is a Trainer run's ``neural/spikes.csv`` (the ``dir`` from ``list_run_data``;
     columns ``burst,area,x,y,z``) or a ``record_spikes`` ``csv_path``
     (``burst,area_id,area_name,x,y,z,memory_neuron_id``). Areas are named as in the file.
@@ -1935,7 +1939,8 @@ async def get_agent_liveness() -> dict[str, Any]:
     """How close each registered agent is to being deregistered for inactivity.
 
     Registration does not mean an agent stays connected. FEAGI removes any agent
-    that produces no traffic for ``heartbeat_timeout_s``, and that teardown drops
+    that sends nothing to FEAGI for ``heartbeat_timeout_s`` (data FEAGI pushes to the
+    agent never counts), and that teardown drops
     the agent's motor and visualization publishers, which closes its sockets. The
     client then reconnects and registers again under a **new** agent ID.
 
@@ -1945,8 +1950,8 @@ async def get_agent_liveness() -> dict[str, Any]:
     - ``prune_in_s`` counting down to 0 and the agent vanishing means FEAGI reaped
       it for inactivity; the client is not sending heartbeats.
     - ``last_command_control_age_s`` climbing while ``last_activity_age_s`` stays
-      low means the agent sends nothing itself and is being held alive only by
-      FEAGI's outbound traffic; it will drop as soon as that traffic pauses.
+      low means the agent sends no heartbeat or command but is streaming sensory
+      data to FEAGI, which keeps it alive; it will drop once that stream stops.
     - An agent disappearing while ``prune_in_s`` is still large points at the
       transport, not at liveness.
 
