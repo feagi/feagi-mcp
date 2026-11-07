@@ -81,3 +81,4 @@ region exports only. It records no Hub download and no lineage.
 4. Inspect the new region with `get_region_circuit()` and wire it into the rest of the brain.
 
 In Neurorobotics Studio, users can also merge Brain Hub genomes from the desktop app (same registration).
+Publishing a block back to Brain Hub, with its datasheet, is described in [hub-block-datasheet.md](hub-block-datasheet.md); the user does the final publish in Studio.

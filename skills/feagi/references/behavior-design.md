@@ -169,7 +169,7 @@ of the command threshold (a sense port's self-hold, which sets how many bursts i
    (`incremental_step_ratios` x joint range per second for absolute targets) and the model's
    servo gains must let a correction travel farther than the fall does in tau/2. If not, raise
    the slew in the mapping file (embodiment config) before wiring any reflex; no reflex gain
-   can beat a slew limit (Microduck, 2026-10-31: 34 deg/s lost to a 0.12 s fall, 85 deg/s won).
+   can beat a slew limit (one biped's measurement: 34 deg/s lost to a 0.12 s fall, 85 deg/s won).
 4. Check the start pose: does it stand with the brain silent? If not, sweep the stance by its fall
    time and direction first ("Make the stance balance before wiring a reflex").
 5. List the axes that need correction and the direction each needs.

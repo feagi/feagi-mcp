@@ -1,7 +1,7 @@
 {
   "name": "feagi",
   "displayName": "FEAGI",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Inspect, build, wire, test, and debug brains in a running FEAGI instance. Bundles the feagi MCP server and a skill covering FEAGI concepts, circuit-building policy, connectivity, memory and plasticity, embodiment, and diagnostics.",
   "author": {
     "name": "Neuraville Inc.",
@@ -34,7 +34,7 @@
   "mcpServers": {
     "feagi": {
       "command": "uvx",
-      "args": ["feagi-mcp@0.1.5"],
+      "args": ["feagi-mcp@0.1.6"],
       "env": {
         "FEAGI_HOST": "${user_config.feagi_host}",
         "FEAGI_PORT": "${user_config.feagi_port}"

@@ -27,6 +27,24 @@ the release artifact; the author supplies meaning (code, sign, function) and mea
    run it only when no experiment is live.
 7. Run the datasheet's `acceptance` (tool, expectation, conditions) and quote its numbers.
 
+## Choose and adapt a block
+
+- **Choosing among matches:** open each, then prefer a block that has a datasheet, whose
+  `characterised_on` and `host_requirements` resemble your host, whose `burst` timestep is nearest
+  yours, and that has the fewest `dependencies`. A null field is Unknown, not a pass. Recommend one or
+  two and say why; do not claim a block fits a body it was not characterised on.
+- **Reading `fits` and `min_bins_that_pass`:** `fits` lists device kinds the port natively matches
+  (advisory, never wiring). `min_bins_that_pass` is the fewest bins that still pass acceptance: if your
+  area has fewer bins, the port cannot be used as it stands.
+- **Burst-rate mismatch:** derive your own burst rate first. If it differs from the block's `burst`,
+  rescale the block's burst-counted settings in the same change and re-run its `acceptance`, or reject
+  the block. Never run it unchanged and never edit its internal areas.
+- **Without Studio:** `get_block_datasheet` and `check_port_contract` run only through Studio. Without it,
+  ask the user for the block's datasheet and compare each port with `list_io_areas_compact` by hand,
+  and say the contract was not machine-checked.
+- **After merging:** the block works alone and combined: [standing-testing.md](standing-testing.md)
+  ("Works alone and combined") describes the check.
+
 ## Publish a block with its datasheet
 
 1. Make sure the region has designated inputs and outputs (a published block needs at least one port).

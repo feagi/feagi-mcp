@@ -121,14 +121,14 @@ locally with `interpret_cortical_id()`. Details: [references/concepts.md](refere
 11. **Derive the burst rate from the body.** Before embodiment behavior work, set it from
     the body's fastest dynamic and the loop depth (see
     [references/embodiment-burst-measuring.md](references/embodiment-burst-measuring.md#choosing-the-burst-rate)); never
-    keep the default for balance or other unstable tasks. Changing it is one call,
+    keep the default for any embodiment work. Changing it is one call,
     `set_burst_engine_frequency(frequency_hz)`. The return is the confirmation.
-11. **Go through Studio when it is running.** With Neurorobotics Studio open, call FEAGI
+12. **Go through Studio when it is running.** With Neurorobotics Studio open, call FEAGI
     tools on the `neurorobotics-studio` server (same names and arguments): Studio logs the
     call, asks approval for changes and snapshots the genome. The standalone `feagi` server
     then refuses with a hand-off message; follow it. If a tool is missing there, set the
     assistant's tool set to "Everything" in Studio, Settings, AI assistants.
-10. **Keep the design notebook (Studio only).** Skip this rule when `read_design_notebook`
+13. **Keep the design notebook (Studio only).** Skip this rule when `read_design_notebook`
     is not a tool. Before a stage, `append_design_note` with kind `hypothesis` and the acceptance
     check as a number. After the verify read, append a `measurement` with `metrics`, then a
     `verdict` that `amends` the hypothesis. When a mechanism fails its check twice, append a
@@ -138,7 +138,7 @@ locally with `interpret_cortical_id()`. Details: [references/concepts.md](refere
     refs only, never pasted logs or traces. Subagents append their own stage results; the main
     session writes goals, hypotheses and verdicts. Never amend another author's entry except
     to set a hypothesis status.
-13. **Build circuits with `build_circuit_from_spec()` first.** One JSON spec makes a region,
+14. **Build circuits with `build_circuit_from_spec()` first.** One JSON spec makes a region,
     its areas, morphologies and mappings from sized templates (`port`, `onset_pulse`,
     `ring_cpg`, `servo_channel_two_rest`, `phase_window_gate`), removes mappings (`delete`),
     edits areas of an existing region (`edit_areas`) and checks the threshold arithmetic.
@@ -146,12 +146,12 @@ locally with `interpret_cortical_id()`. Details: [references/concepts.md](refere
     fall back to single calls only for what the spec cannot say. Check the result with
     `record_spikes()` and `analyze_run(csv_path, ...)` (ring period, port-in-window share,
     spikes per phase window, duty and off-episodes) instead of reading rows by eye.
-12. **Work top-down on behavior goals.** Go behavior, then region, then mapping, then synapse,
+15. **Work top-down on behavior goals.** Go behavior, then region, then mapping, then synapse,
     and descend only when the level above pins the fault. State the region-level hypothesis
     and the behavior test for it before reading synapses. See
     [references/behavior-design.md](references/behavior-design.md).
 
-13. **Read the memory design guide first.** Before designing any circuit with a MEMORY area or
+16. **Read the memory design guide first.** Before designing any circuit with a MEMORY area or
     associative mapping, read `references/memory-design*.md`
     ([memory-design.md](references/memory-design.md), [structures](references/memory-design-structures.md)).
 
@@ -180,6 +180,7 @@ independent calls together in one turn, and never poll physics or logs in a loop
 |---|---|---|
 | Design a genome, brain or circuit architecture (modules, mechanisms, budget, schematic) | `get_brain_regions()`, `show_in_studio`, `get_runtime_metrics(measure_s=10)` | [genome-design.md](references/genome-design.md), [budget and build order](references/genome-design-budget.md), [template](references/genome-design-template.md), [patterns](references/genome-design-patterns.md), [adaptive patterns](references/genome-design-patterns-adaptive.md), [examples](references/genome-design-examples.md) |
 | Teach a robot a behavior (stand, reach, walk), or a behavior goal stalls | `get_brain_regions()`, `measure_balance()` / `run_embodiment_trial` | [behavior-design.md](references/behavior-design.md) |
+| Make a biped (any body) stand and stay up; test or fix standing | `search_brain_hub_genomes`, `measure_balance()`, `check_live_state_drift` | [standing-guide.md](references/standing-guide.md), [testing and verifying](references/standing-testing.md) |
 | Train a behavior with the Trainer (support, reward, results) | `get_trainer_experiment`, `configure_trainer_run`, `get_trainer_balance_results` | [behavior-design-training.md](references/behavior-design-training.md#training-method-fit) |
 | Describe the genome, list circuits or areas | `get_genome_info()`, `get_brain_regions()`, `list_cortical_areas()` | [concepts.md](references/concepts.md) |
 | Explain one circuit's inputs, outputs, and edges | `get_region_circuit()` (`compact=True`: names, dimensions, rules, synapse counts only) | [concepts.md](references/concepts.md) |

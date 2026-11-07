@@ -18,14 +18,14 @@ robot.
   balancing): the pendulum time constant `tau = sqrt(h/g)`, h = centre-of-mass height (a
   0.11 m biped: tau about 0.1 s). Confirm it from a trace with the motors quiet as the
   median 5-to-15 degree fall time. Tracking or reaching: the joint or target settling time.
-  Slow tasks (classification, wheeled driving at low speed, slow reaching) tolerate 10 Hz.
+  Slow tasks (classification, wheeled driving at low speed, slow reaching) may land at a low rate, but derive it and record the derivation; never keep 10 Hz as an unexamined default.
 - **Count loop latency in bursts.** Synaptic hops from sensor IPU to motor OPU
   (`trace_signal_path()`), plus about one burst each way for transport. Latency in seconds
   is bursts / burst_hz, or bursts x sim time per burst in lock-step.
 - **Rule of thumb: loop latency at most tau/4 for stabilizing feedback.** So
   `burst_hz >= 4*(hops + 2)/tau`, or sim time per burst `<= tau/(4*(hops + 2))`. Example
-  (Howard, microduck): 3 hops + 2 transport, tau about 0.1 s needs at least 200 Hz in real
-  time, or at most 5 ms of sim time per burst in lock-step. Howard ran at 10 Hz: latency
+  (one small biped, a worked example to derive your own from): 3 hops + 2 transport, tau about 0.1 s needs at least 200 Hz in real
+  time, or at most 5 ms of sim time per burst in lock-step. The same biped at 10 Hz: latency
   0.30 s equaled the median fall time, so no circuit could balance it.
 - **Ceilings.** The burst must finish inside its period (`get_runtime_metrics(measure_s=5)`: `burst_timing.measured` gives the achieved rate and shortfall; burst duration and missed bursts are not reported by FEAGI, `burst_timing.gap` names the endpoints); the
   controller and sensors must keep up (no gain above the sensor sample rate); servo slew
@@ -35,7 +35,7 @@ robot.
 - **Also check the sensor frame rate (frames per burst) and the motor step size** against the chosen rate: a burst faster than the frame rate repeats stale frames, and the per-burst motor step must stay inside servo slew.
 - **Burst-counted settings change meaning in seconds when the rate changes:** R-STDP
   windows, modulator holds, memory `temporal_depth`, refractory and leak timing, Trainer
-  `holdBursts`, `attemptBurstCap`, `settleBursts`. Rescale them only when the user asks.
+  `holdBursts`, `attemptBurstCap`, `settleBursts`. Rescale them in the same change as the rate, and record the derivation in the design notebook.
 - **Change the rate with one call:** `set_burst_engine_frequency(frequency_hz)`. The
   returned `burst_frequency_hz` is the confirmation. Do not search the source tree, call
   physiology or `simulation_timestep`, or sample `get_burst_counter` unless the user asks
@@ -87,7 +87,7 @@ experiment (`_experiment.state` is `running`).
   or a timer. A fallen robot must stay in the scene so it can learn to recover.
 - Attempt endings for balance or locomotion belong to the Trainer: max tilt, Pain,
   truncation.
-- An existing fall > Death path is a bug to remove. Howard: an accumulating zero-leak
+- An existing fall > Death path is a bug to remove. Worked example: an accumulating zero-leak
   detector fired Death every ~0.7 s, 42 times in 31 s, and gave 0/40 Trainer successes.
 - Check before any Trainer run: nothing maps into Death from sensory or vestibular areas,
   and Death fires 0 times in 20 s. Count `[DEATH]` lines in the MuJoCo controller log, or

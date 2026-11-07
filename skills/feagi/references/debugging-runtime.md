@@ -57,6 +57,12 @@ IPU width vs the columns present in the last sensor snapshot.
   `outstanding_control_reply_then_client_stop`) with evidence.
 - Health is fine but an upload, genome change, or experiment launch failed:
   `get_last_failed_mutation()`.
+- Tools dropped mid-call: confirm FEAGI is down before blaming it. FEAGI logs events, not
+  bursts, so a quiet log while bursts run is normal, not a hang. Call `get_burst_counter()`
+  twice a few seconds apart: a rising counter means FEAGI is running. A controller that still
+  receives motor frames at the burst rate says the same. When FEAGI is running, the failure is
+  in the process between the assistant and FEAGI (the MCP host or server): read that host's log
+  for the last call it started.
 - Logs: `get_log_tail(message_contains=..., level=..., limit=...)`. Always filter.
 - An experiment stopped unexpectedly: `get_experiment_stop_cause()` and
   `get_controller_lifecycle_events()`.

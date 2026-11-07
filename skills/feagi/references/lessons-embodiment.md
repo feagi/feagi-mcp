@@ -28,7 +28,7 @@ Part 3 of 3 of [lessons.md](lessons.md). Learning facts: [lessons-learning.md](l
   that change turns into a source hunt. A later genome reload can restore the stored
   timestep; that is one sentence in the report, not another call. Sample the counter only
   when the user asks whether the loop is keeping the period.
-- **The default burst rate can make balance impossible.** Howard ran at 10 Hz: a 3-hop path
+- **The default burst rate can make balance impossible.** A balance task at 10 Hz (one worked example): a 3-hop path
   plus transport was 0.30 s of loop latency, equal to the median fall time (tau about
   0.1 s). Derive the rate from tau and hops (`embodiment-burst-measuring.md`, "Choosing the burst rate")
   before wiring anything.
@@ -41,7 +41,7 @@ Part 3 of 3 of [lessons.md](lessons.md). Learning facts: [lessons-learning.md](l
   mapping or morphology edit re-read the driver and the OPU firing before trusting the servo
   `ctrl` values: the controller holds the last decoded target while the OPU is silent.
 - **Servo bins are joint-specific (2026-10-31).** Degrees per z bin come from each channel's
-  `ctrl_min`/`ctrl_max` (read them from a trace), not from one joint's range. Microduck at depth
+  `ctrl_min`/`ctrl_max` (read them from a trace), not from one joint's range. One biped at depth
   91 measured 2026-11-01: about 2.8 deg per bin on ankle, hip pitch and knee, 0.49 deg on hip
   roll, so equal bin offsets give very unequal angles.
 
