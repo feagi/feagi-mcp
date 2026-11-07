@@ -303,6 +303,11 @@ STUDIO_ONLY_TOOLS: dict[str, str] = {
         "`restore_brain_snapshot(label | checkpoint_id, experiment_id?)`: reverts the genome "
         "and reloads the connectome. Destructive; changes the shared brain for a team."
     ),
+    "get_run_window_stats": (
+        "`get_run_window_stats(plan_id, execution_id?, cell_ids?, windows, areas?, fields?)`: "
+        "per-attempt window stats (falls, steps RMS, neuron state at window end, firing rate) "
+        "from a Trainer run data folder. Use `analyze_run` for spike-timing/ring/phase metrics."
+    ),
 }
 
 

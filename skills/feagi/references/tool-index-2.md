@@ -28,7 +28,7 @@ Part 2 of 2. Other parts: [tool-index.md](tool-index.md).
 - `cancel_stimulus()`: Cancel the entries of a `schedule_stimulus` schedule that have not fired yet.
 - `get_stimulus_schedule()`: Active `schedule_stimulus` schedules: ids, burst range, remaining entries, next burst.
 - `record_spikes()`: Burst-exact firing of up to 64 areas over the next `bursts` bursts.
-- `analyze_run()`: Acceptance metrics from a spikes CSV, as compact JSON (never rows). For Trainer-owned time windows, falls and stored neuron state use `get_run_window_stats` (Studio MCP) instead. For Trainer-owned time windows, falls and stored neuron state use `get_run_window_stats` (Studio MCP) instead.
+- `analyze_run()`: Acceptance metrics from a spikes CSV, as compact JSON (never rows).
 - `monitor_activity()`: Monitor real-time neural activity, plus lifetime fire-count enrichment.
 - `monitor_activity_batch()`: Monitor multiple cortical areas concurrently.
 - `get_fire_queue_detailed()`: Get last-burst fire queue with neuron IDs per cortical area.
@@ -106,5 +106,4 @@ Part 2 of 2. Other parts: [tool-index.md](tool-index.md).
 - `package_region_for_hub(region_id, title?, ports{inputs,outputs}, datasheet?, form?)`: Persist-tier; raises a Studio approval the user must accept. Writes a region copy with ports to the account and opens Publish (form fills it in); publishes nothing.
 - `prepare_hub_release_form(working_genome_id, form)`: Persist-tier; raises a Studio approval listing every form value. Opens Publish on an uploaded working genome with the form filled in; the user accepts the terms and presses Publish; publishes nothing.
 - `restore_brain_snapshot(label | checkpoint_id, experiment_id?)`: reverts the genome and reloads the connectome. Destructive; changes the shared brain for a team.
-- `get_run_window_stats(plan_id, execution_id?, cell_ids?, windows, areas?, fields?)`: per-attempt window stats (falls, steps RMS, neuron state at window end, firing rate) from a Trainer run data folder. Use `analyze_run` for spike-timing/ring/phase metrics.
 - `get_run_window_stats(plan_id, execution_id?, cell_ids?, windows, areas?, fields?)`: per-attempt window stats (falls, steps RMS, neuron state at window end, firing rate) from a Trainer run data folder. Use `analyze_run` for spike-timing/ring/phase metrics.
