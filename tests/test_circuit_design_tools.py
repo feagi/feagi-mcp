@@ -19,6 +19,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from feagi_mcp.feagi_client import FeagiClient
+from feagi_mcp.stance_mapping import compile_stance_offset_rows as compile_rows
+from tests.io_fixtures import OPU_ID, FakeFeagi, opu_area, registration, servo_coding
 
 
 @pytest.fixture
@@ -796,7 +798,7 @@ class TestStanceRelative:
         "src_bins": 11,
         "src_fixed": [2, 0, 0],
         "channels": [{"channel": 3, "reference": 0.0}],
-        "depth": 20,
+        "coding": servo_coding(20),
         "joint_range": [-90.0, 90.0],
     }
 
@@ -805,12 +807,13 @@ class TestStanceRelative:
         return {r["src"][2]: r["dst"][2] for r in out["voxel_mappings"]}
 
     def test_conversion_follows_opu_direction(self):
-        from feagi_mcp.stance_mapping import value_to_z_bin
+        from feagi_mcp.stance_mapping import range_fraction
 
-        assert value_to_z_bin(90, -90, 90, 20) == 0
-        assert value_to_z_bin(-90, -90, 90, 20) == 19
-        assert value_to_z_bin(90, -90, 90, 20, z0_is_max=False) == 19
-        assert value_to_z_bin(-90, -90, 90, 20, z0_is_max=False) == 0
+        coding = servo_coding(20)
+        assert coding.bin_for_fraction(range_fraction(90, -90, 90)) == 0
+        assert coding.bin_for_fraction(range_fraction(-90, -90, 90)) == 19
+        with pytest.raises(ValueError, match="greater than range min"):
+            range_fraction(1.0, 5.0, 5.0)
 
     def test_positive_gain_moves_toward_lower_z(self):
         from feagi_mcp.stance_mapping import compile_stance_offset_rows
@@ -862,7 +865,7 @@ class TestStanceRelative:
             "src_bins": 2,
             "src_fixed": [0, 0, 0],
             "channels": [{"channel": 0, "reference": 19.0}],
-            "depth": 80,
+            "coding": servo_coding(80),
             "joint_range": [0.0, 79.0],
             "src_center": 0.0,
         }
@@ -870,7 +873,7 @@ class TestStanceRelative:
         assert out["stance"][0]["stance_dst"] == [0, 0, 60]
         row = next(t for t in out["table"] if t["src_bin"] == 1)
         assert row["dst_z"] == 2 * 66 - 59 == 73
-        assert row["target_value"] == 79.0 - 66  # mean z (59 + 73) / 2 = 66
+        assert row["target_value"] == pytest.approx(79.0 - 66, abs=1e-4)  # mean z 66
         assert not out["warnings"]
         # a per-channel mapping (dict or JSON string) gives the same rows
         by_dict = compile_stance_offset_rows(gain=-6.0, coactive_z={0: 59}, **args)
@@ -928,21 +931,53 @@ class TestStanceRelative:
         assert not compile_stance_offset_rows(gain=10.0, **self.ARGS)["warnings"]
 
     @pytest.mark.asyncio
-    async def test_dry_run_does_not_write_and_live_calls_build(self, mock_client):
-        mock_client.build_reflex_mapping = AsyncMock(return_value={"ok": True})
+    async def test_dry_run_does_not_write_and_live_calls_build(self):
+        fake = FakeFeagi()
+        fake.areas = [
+            opu_area(cortical_dimensions=[4, 1, 20], cortical_dimensions_per_device=[1, 1, 20])
+        ]
+        fake.add_agent("agent-a", registration())
+        client = fake.client()
+        client.build_reflex_mapping = AsyncMock(return_value={"ok": True})
         kw = dict(
             src_area_id="s",
-            dst_area_id="d",
+            dst_area_id=OPU_ID,
             morphology_name="m",
             gain=10.0,
             dst_depth=20,
             joint_range=[-90.0, 90.0],
-            **{k: v for k, v in self.ARGS.items() if k not in ("depth", "joint_range")},
+            **{k: v for k, v in self.ARGS.items() if k not in ("coding", "joint_range")},
         )
-        dry = await mock_client.build_stance_relative_mapping(**kw)
-        assert dry["dry_run"] and "table_text" in dry
-        mock_client.build_reflex_mapping.assert_not_awaited()
-        live = await mock_client.build_stance_relative_mapping(dry_run=False, **kw)
+        dry = await client.build_stance_relative_mapping(**kw)
+        assert dry["dry_run"] and "table_text" in dry and dry["dst_depth"] == 20
+        client.build_reflex_mapping.assert_not_awaited()
+        live = await client.build_stance_relative_mapping(dry_run=False, **kw)
         assert live["build"] == {"ok": True}
-        sent = mock_client.build_reflex_mapping.await_args.kwargs["voxel_mappings"]
+        sent = client.build_reflex_mapping.await_args.kwargs["voxel_mappings"]
         assert sent == live["voxel_mappings"]
+        # the rows are the ones the compiler gives for the registered coding
+        assert sent == compile_rows(gain=10.0, **self.ARGS)["voxel_mappings"]
+        bad_depth = await client.build_stance_relative_mapping(**{**kw, "dst_depth": 21})
+        assert (
+            bad_depth["error"] == "invalid_stance_mapping" and "z depth 20" in bad_depth["message"]
+        )
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_stance_builder_needs_a_registered_driving_agent(self):
+        fake = FakeFeagi()
+        fake.areas = [
+            opu_area(cortical_dimensions=[4, 1, 20], cortical_dimensions_per_device=[1, 1, 20])
+        ]
+        client = fake.client()
+        kw = {k: v for k, v in self.ARGS.items() if k != "coding"}
+        out = await client.build_stance_relative_mapping(
+            src_area_id="s", dst_area_id=OPU_ID, morphology_name="m", gain=10.0, **kw
+        )
+        assert out["error"] == "invalid_stance_mapping"
+        assert "no registered agent drives" in out["message"]
+        missing = await client.build_stance_relative_mapping(
+            src_area_id="s", dst_area_id="ZZZZZZZZZZZ=", morphology_name="m", gain=10.0, **kw
+        )
+        assert "not found" in missing["message"]
+        await client.close()

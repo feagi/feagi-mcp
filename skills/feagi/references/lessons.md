@@ -1,6 +1,6 @@
 # Lessons from live builds
 
-Part 1 of 3: staging, measuring, sizing, signals, layout, behavior design, tools. Learning facts: [lessons-learning.md](lessons-learning.md). Embodiment facts: [lessons-embodiment.md](lessons-embodiment.md).
+Staging, measuring, sizing, signals, layout, behavior design, tools. The measured learning and embodiment lessons ship with Neurorobotics Studio (`behavior-playbooks` skill).
 
 Facts about FEAGI, its MCP tools and embodiments that cost real time to learn. Each entry
 says what happened, how to recognize it, and what to do. Add to this file when a task's gap
@@ -15,7 +15,7 @@ report finds a generic fact; keep host- and vendor-specific advice out of it.
 - Diagnosing before designing
 - Layout facts
 - Behavior design facts
-- Recording and building tools (2026-10-31)
+- Recording and building tools
 
 ## Work in stages
 
@@ -54,7 +54,7 @@ reverts live area widths and the burst rate silently.
 ## Sizing facts
 
 Used by the design method ([genome-design-budget.md](genome-design-budget.md#efficiency-budget)). Measured on
-an Apple M4 Pro (14 cores), read 2026-11-01; they move with the host and the release, so
+one laptop-class machine, read once; they move with the host and the release, so
 re-measure with `get_runtime_metrics(measure_s=10)` before sizing a real run.
 
 - **Synapses per rule** (N = positions, D = depth): `block_to_block` one per voxel;
@@ -69,7 +69,7 @@ re-measure with `get_runtime_metrics(measure_s=10)` before sizing a real run.
   (`feagi-core/crates/feagi-npu/SCALABILITY_BOTTLENECK_ANALYSIS.md`). The plasticity pass also
   visits every plastic synapse each burst.
 - **Capacity** is read from `feagi_configuration.toml` (`neuron_space` 10M, `synapse_space`
-  25M when read on 2026-11-01), allocated at startup. Read it; do not hard-code it.
+  25M when read once), allocated at startup. Read it; do not hard-code it.
 - **Value planes are cheap, one-hot Z is not.** A 512x256 mask as `W x H x 19` one-hot needs
   about 2.49M neurons; as a value plane 131k.
 - FEAGI does not report burst duration or missed bursts: a rate above what the engine sustains
@@ -109,9 +109,9 @@ re-measure with `get_runtime_metrics(measure_s=10)` before sizing a real run.
 
 ## Layout facts
 
-Added 2026-11-01, after a walking-genome layout stacked circuit titles.
+Added after one layout stacked circuit titles.
 
-- **Do not outrun fixed-size titles (2026-11-01).** Region titles stay the same size on
+- **Do not outrun fixed-size titles.** Region titles stay the same size on
   screen, so no world pitch keeps them apart when the camera frames the whole brain.
   Spreading circuits by 40 voxels times the title length (720 and up) only empties the
   scene. Use one map step, about 120 voxels, between rows. If the next circuit on that Y
@@ -121,28 +121,27 @@ Added 2026-11-01, after a walking-genome layout stacked circuit titles.
 
 ## Behavior design facts
 
-Added 2026-10-27. Full method: [behavior-design.md](behavior-design.md).
+Full method: [behavior-design.md](behavior-design.md).
 
-- **Support must only help a standing stance (2026-10-27).** A harness that keeps helping
+- **Support must only help a standing stance.** A harness that keeps helping
   while a contact body is off the floor, or re-centres a lean, holds a crouch or lean and
   scores it as success. Weight support off when a contact body leaves the floor, re-centre a
   lean, and require standing time for success.
-- **R-STDP rewarded for upright-while-supported collapses or saturates weights
-  (2026-10-27).** The reward pays for the support, not the brain. Fix the credit (reward the
+- **R-STDP rewarded for upright-while-supported collapses or saturates weights.** The reward pays for the support, not the brain. Fix the credit (reward the
   brain's own contribution), not the LTD ratio.
-- **A sign-fixed one-to-one reflex cannot learn direction (2026-10-27).** R-STDP can mute a
+- **A sign-fixed one-to-one reflex cannot learn direction.** R-STDP can mute a
   wrong-sign path but never flip it. Wire the correct sign, or wire both directions as
   candidates with mutual inhibition.
-- **A frozen `plasticity_flag` left from a test run silently stops learning (2026-10-27).**
+- **A frozen `plasticity_flag` left from a test run silently stops learning.**
   Read it back on every plastic mapping before a training run. (`freeze_mapping_plasticity()`
   no longer clears the flag; it sets FEAGI's `plasticity_frozen`, which also survives save/load.)
 - **A sign-crossed rewire with initial weights above half the threshold fires both
-  directions at once (2026-10-27).** The opposing commands destabilize the body. Start
+  directions at once.** The opposing commands destabilize the body. Start
   candidate weights quiet, so several inputs must agree to fire.
-- **Work top-down (2026-10-27).** Synapse-level tuning with no circuit-level check wasted
+- **Work top-down.** Synapse-level tuning with no circuit-level check wasted
   runs. Test each region as a black box (sign, gain, lag) before touching weights.
 
-## Recording and building tools (2026-10-31)
+## Recording and building tools
 
 - **Per-burst data comes from the Fire Ledger, not the samplers.** `monitor_activity` and
   `get_fire_queue_detailed` see about one burst in five at 200 Hz (the fire queue holds only

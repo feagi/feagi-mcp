@@ -46,9 +46,11 @@ Once the controller connects, check it with `get_registered_agents()` and
 
 ## Driving joints
 
-`send_motor_command(agent_id, joint_name, target_value)` moves one joint to a target in its
-native units (degrees for servos). It looks up the OPU, maps the value to a voxel, and fires
-it. Prerequisites: the controller bridge is running, the agent is registered, and the burst
+`send_motor_command(agent_id, joint_name, fraction=... | value=...)` moves one joint. Pass
+exactly one of `fraction` (0..1, always accepted) or `value` (physical units; the channel must
+register a `physical_range`, otherwise the call is an error and there is no default range).
+It looks up the OPU, asks FEAGI's coder for the bin that decodes to the target, and fires that
+voxel. Read the bin, fraction and physical range of any channel with `convert_io_value`. Prerequisites: the controller bridge is running, the agent is registered, and the burst
 engine is running. Get joint names and ranges from `get_agent_joint_map()` first.
 
 To learn which OPU column moves a sensor in which direction before wiring a reflex, use
@@ -92,7 +94,7 @@ Motor targets on servo OPUs are absolute and hold until the next command; with s
 
 ## Actuator-force (MiscData) sensing: measured caveats
 
-Measured 2026-11-01 on the MuJoCo controller pack 1.0.146 at 200 Hz (root cause being traced):
+Measured once on one simulator controller pack at 200 Hz (root cause being traced; read the pack version from the live controller; derive your own):
 
 - The per-actuator force IPU arrives on about 86% of bursts at 200 Hz, all channels together.
   Cause: the controller loop and the burst clock are independent, so some bursts get no new

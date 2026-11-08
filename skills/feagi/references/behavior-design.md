@@ -1,6 +1,6 @@
 # Teach a robot a behavior (top-down)
 
-Part 1 of 2: analysis, capability checks, tuning, checklist. Training method fit, when to step back, run data: [behavior-design-training.md](behavior-design-training.md).
+Analysis, capability checks, tuning, checklist. The training method (method fit, when to step back, run data) ships with Neurorobotics Studio (`behavior-playbooks` skill).
 
 ## Contents
 
@@ -123,10 +123,10 @@ per-attempt holds from the cell's run data.
 
 Sweep a parameter that actually sets the gain. A mapping's PSC scales gain only when the
 target's threshold sits between the input values; into a target that fires on any input
-(threshold 1, PSP 100) the PSC is a no-op (measured 2026-11-01: a 3 x 3 PSC sweep gave the same
+(threshold 1, PSP 100) the PSC is a no-op (measured once: a 3 x 3 PSC sweep gave the same
 hold in every cell). For a reflex that drives positional servos the gain lives in the offset per
 command bin (adapter morphology rows). Do not use `neuron_excitability` on the command ports as a
-gain proxy: measured 2026-11-01, any excitability below 1 behaved exactly like a silent reflex
+gain proxy: measured once, any excitability below 1 behaved exactly like a silent reflex
 (1.07 s at 0.5, 0.33, 0.2 and 0.1 against 2.0 s at 1). Sweep the offset rows, or a lever upstream
 of the command threshold (a sense port's self-hold, which sets how many bursts it fires).
 
@@ -148,7 +148,7 @@ of the command threshold (a sense port's self-hold, which sets how many bursts i
 ## Motor targets are absolute and hold
 
 - A positional-servo absolute channel decodes the mean of its active z voxels into one
-  target, and the controller holds it until the next command (silence = keep last target).
+  target (bin rule: `convert_io_value`), and the controller holds it until the next command (silence = keep last target).
 - A stance command and a reflex on the same channel therefore average, not add: a reflex
   voxel at z moves the target only half as far as intended if one stance voxel is also active.
 - Build reflexes as small corrections around a stance that is commanded every burst, and

@@ -89,9 +89,10 @@ the spec's version.
 ## Workflow
 
 0. **Hub first** (when Studio is connected). `search_brain_hub_genomes` with the task's key
-   terms; show good matches with `show_in_studio` (kind `hub_genomes`), say in one line how
-   each could help, and prefer `augment_genome_from_hub` to building from scratch. None found:
-   say so in one line and build. Do not repeat the search for the same goal unless the plan
+   terms. Show matches with `show_in_studio` (kind `hub_genomes`) only when one is worth
+   acting on, and give the user the one-line reason with them; do not assume they saw it. Prefer
+   `augment_genome_from_hub` to building from scratch. No match worth acting on: say so in one
+   line and build. Do not repeat the search for the same goal unless the plan
    changes. Merge Hub genomes only with `augment_genome_from_hub` / `replace_genome_from_hub`
    so the download and ancestry are recorded.
 1. **Name the function** the user wants (`OR Gate`, `Walk CPG`, `Sit`, `Balance`).

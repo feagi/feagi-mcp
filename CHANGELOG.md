@@ -14,8 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **get_runtime_metrics(measure_s)**: `burst_timing` block naming the feagi-core gap (no burst duration or missed-burst counters) and a counter-vs-wall-clock rate measurement.
 - **get_region_circuit(compact)** / **get_cortical_map_detailed(compact)**: names, dimensions, rules and synapse counts only.
 - **validate_genome(file_path)**; **download_region_genome** keeps only referenced morphologies (`prune_morphologies`), including those of mappings entering the region, which are listed as `entering_mappings` because the core export cuts them.
+- **explain_motor_channel** / **lint_motor_channels**: writers, decoded destination voxels, inhibitory inputs and (with `burst`) the recorded command of an OPU channel; lint warns with evidence.
+- **convert_io_value** takes `fraction`; bins, fractions and physical values come from FEAGI's coder (`feagi_rust_py_libs >= 0.0.122`) and the channel's registered `physical_range`.
 
 ### Changed
+- **send_motor_command** takes `fraction` or `value` (not `target_value`); `value` needs the registered `physical_range`, there is no 0-180 default, and the voxel is `[channel, 0, bin]`.
+- **build_stance_relative_mapping** / `servo_channel_two_rest` read the OPU's registered coding; `z0_is_max` is removed.
+- **Skill**: the behavior playbooks (standing, standing tests, training method, measured lessons, adaptive circuit patterns, worked genome designs) moved to Neurorobotics Studio (`behavior-playbooks` skill); the open `feagi` skill keeps a short standing summary in `genome-design.md`.
 - **Development**: pre-commit now runs `mypy src/` on commit and `pytest` on push, matching CI; `mypy` pinned to `2.4.1` in the `dev` extra.
 
 ## [0.1.6] - 2026-11-06

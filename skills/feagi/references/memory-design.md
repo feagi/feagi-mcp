@@ -4,7 +4,7 @@ Read this before any circuit with a MEMORY area or an `associative_memory` mappi
 recipes, worked examples and the mistakes list: [memory-design-structures.md](memory-design-structures.md).
 Mechanics and parameter names: [memory-and-plasticity.md](memory-and-plasticity.md),
 [STDP and R-STDP](memory-plasticity-stdp.md). Labels: (code: path:line) from feagi-core,
-(measured 2026-11-01) from a live brain, (derived rule) reasoned from both.
+(measured once) from a live brain, (derived rule) reasoned from both.
 
 ## What a memory neuron is
 
@@ -18,7 +18,7 @@ Mechanics and parameter names: [memory-and-plasticity.md](memory-and-plasticity.
 - A memory neuron fires in two ways: its upstream pattern matches live fires (encoding), or a
   learned associative synapse drives it (recall, no input needed). One area alone classifies
   states; a sequence needs a chain or a hierarchy (below). (code: npu.rs:6880-6887,
-  sparse_memory_lif.rs:260-277; measured 2026-11-01)
+  sparse_memory_lif.rs:260-277; measured once)
 - A twin area is auto-created for each non-memory upstream. A firing memory neuron replays its
   stored frame onto the twin. (code: connectome_manager.rs:4878-4891; npu.rs:2505-2560)
 - `mp_learning` stores and averages membrane potentials. `mp_differential` and `mp_ratio` need
@@ -29,7 +29,7 @@ Mechanics and parameter names: [memory-and-plasticity.md](memory-and-plasticity.
 
 | Need | Structure | Use when | Do NOT use when |
 |---|---|---|---|
-| Name the current situation | One memory area, `temporal_depth` 1, coarse upstream | The upstream has a few dozen distinct patterns | Upstream is multi-column bins: one source minted 1,475 patterns in 60 s and never levelled (measured, [lessons-learning.md](lessons-learning.md)) |
+| Name the current situation | One memory area, `temporal_depth` 1, coarse upstream | The upstream has a few dozen distinct patterns | Upstream is multi-column bins: one source minted 1,475 patterns in 60 s and never levelled (measured; the measured lessons ship with Neurorobotics Studio, `behavior-playbooks` skill) |
 | Recognise a short temporal shape | Memory area with `temporal_depth` N, or `mp_differential` / `mp_ratio` (ECG cascade: [memory-and-plasticity.md](memory-and-plasticity.md)) | The shape is N bursts long and repeats | The input is held still: depth > 1 adds start-up neurons (below) |
 | Map a state to an action | Memory (state) -> plain output area, `associative_memory`, with a teacher or exploration | A teacher or reflex makes the output fire in the window | Nothing ever fires the output in the window: no co-firing, no synapse |
 | Shape that map by outcome | Same mapping with `rstdp` plus a `synaptic.reward` modulator | A hard-wired detector pays reward | No reward modulator: R=0 and nothing is learned |
@@ -57,11 +57,11 @@ Defaults: depth 1, init_lifespan 9, growth 1.0, long-term threshold 100, cap 0, 
 Temporal depth, measured: a held pattern at depth 1 gives 1 neuron; at depth 3 it gives 4 (3
 start-up windows plus 1 steady). A moving 3-step cycle gives 3 neurons at depth 1 and 3 steady at
 depth 3. A depth-2 hierarchy level over an A1-then-A2 sequence gives 3 neurons ({A1,-}, {A1,A2},
-{-,A2}); the reversed order gives different neurons. (measured 2026-11-01)
+{-,A2}); the reversed order gives different neurons. (measured once)
 
 ## Timing and the loop budget
 
-| Path | Latency (measured 2026-11-01) |
+| Path | Latency (measured once) |
 |---|---|
 | Input spike to memory neuron `last_activation_burst` | the input burst |
 | Input spike to memory spike in the fire ledger | +2 bursts |

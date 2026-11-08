@@ -134,7 +134,7 @@ locally with `interpret_cortical_id()`. Details: [references/concepts.md](refere
     `verdict` that `amends` the hypothesis. When a mechanism fails its check twice, append a
     `dead_end` saying why. Mirror each implementation gap as a notebook `gap`. Do not file a
     bug as a `gap`. Generic facts still go to
-    [references/lessons.md](references/lessons.md) (also [learning](references/lessons-learning.md), [embodiment](references/lessons-embodiment.md)). Entries are at most 5 lines, numbers and
+    [references/lessons.md](references/lessons.md). Entries are at most 5 lines, numbers and
     refs only, never pasted logs or traces. Subagents append their own stage results; the main
     session writes goals, hypotheses and verdicts. Never amend another author's entry except
     to set a hypothesis status.
@@ -178,10 +178,10 @@ independent calls together in one turn, and never poll physics or logs in a loop
 
 | Goal | Start with | Reference |
 |---|---|---|
-| Design a genome, brain or circuit architecture (modules, mechanisms, budget, schematic) | `get_brain_regions()`, `show_in_studio`, `get_runtime_metrics(measure_s=10)` | [genome-design.md](references/genome-design.md), [budget and build order](references/genome-design-budget.md), [template](references/genome-design-template.md), [patterns](references/genome-design-patterns.md), [adaptive patterns](references/genome-design-patterns-adaptive.md), [examples](references/genome-design-examples.md) |
+| Design a genome, brain or circuit architecture (modules, mechanisms, budget, schematic) | `get_brain_regions()`, `show_in_studio`, `get_runtime_metrics(measure_s=10)` | [genome-design.md](references/genome-design.md), [budget and build order](references/genome-design-budget.md), [template](references/genome-design-template.md), [patterns](references/genome-design-patterns.md), (adaptive patterns and worked designs ship with Neurorobotics Studio, `behavior-playbooks` skill) |
 | Teach a robot a behavior (stand, reach, walk), or a behavior goal stalls | `get_brain_regions()`, `measure_balance()` / `run_embodiment_trial` | [behavior-design.md](references/behavior-design.md) |
-| Make a biped (any body) stand and stay up; test or fix standing | `search_brain_hub_genomes`, `measure_balance()`, `check_live_state_drift` | [standing-guide.md](references/standing-guide.md), [testing and verifying](references/standing-testing.md) |
-| Train a behavior with the Trainer (support, reward, results) | `get_trainer_experiment`, `configure_trainer_run`, `get_trainer_balance_results` | [behavior-design-training.md](references/behavior-design-training.md#training-method-fit) |
+| Make a biped (any body) stand and stay up; test or fix standing | `search_brain_hub_genomes`, `measure_balance()`, `check_live_state_drift` | [standing blocks and innate first](references/genome-design.md#standing-blocks-and-innate-first); order of work and test method ship with Neurorobotics Studio (`behavior-playbooks` skill) |
+| Train a behavior with the Trainer (support, reward, results) | `get_trainer_experiment`, `configure_trainer_run`, `get_trainer_balance_results` | [behavior-design.md](references/behavior-design.md); the training method ships with Neurorobotics Studio (`behavior-playbooks` skill) |
 | Describe the genome, list circuits or areas | `get_genome_info()`, `get_brain_regions()`, `list_cortical_areas()` | [concepts.md](references/concepts.md) |
 | Explain one circuit's inputs, outputs, and edges | `get_region_circuit()` (`compact=True`: names, dimensions, rules, synapse counts only) | [concepts.md](references/concepts.md) |
 | Build a new circuit (gate, CPG, reflex, controller) | `create_brain_region()`, `suggest_cortical_anchor_positions()`, `create_cortical_area()` | [building-circuits.md](references/building-circuits.md), [placement, areas, examples](references/building-circuits-placement.md) |
@@ -208,10 +208,10 @@ For a multi-module genome, a new region or a new mechanism. A single pattern goe
 "Build a circuit". Method: [genome-design.md](references/genome-design.md) (its Design
 checklist is the 11-line version) and the document template
 [genome-design-template.md](references/genome-design-template.md): read these two by default.
-Blocks: [genome-design-patterns.md](references/genome-design-patterns.md)
-and [genome-design-patterns-adaptive.md](references/genome-design-patterns-adaptive.md), loaded by
-heading (`genome-design-patterns#<heading>`) when choosing a mechanism. Worked designs:
-[genome-design-examples.md](references/genome-design-examples.md), only when the task matches one.
+Blocks: [genome-design-patterns.md](references/genome-design-patterns.md), loaded by
+heading (`genome-design-patterns#<heading>`) when choosing a mechanism. The memory, learning and
+orchestration patterns and the worked designs ship with Neurorobotics Studio (`behavior-playbooks`
+skill).
 
 1. Intake: the goal as a number with a baseline, what must never happen (safety), the body's
    facts and the burst rate derived from it.
@@ -265,12 +265,11 @@ heading (`genome-design-patterns#<heading>`) when choosing a mechanism. Worked d
 
 ### Build a circuit
 
-0. Hub first (when Studio is connected). Call `search_brain_hub_genomes` with the task's key
-   terms. If there are good matches, show them (`show_in_studio` kind `hub_genomes`), say in
-   one line how each could help, and prefer `augment_genome_from_hub` over building from
-   scratch. If there are none, say so in one line and build. Do not search again for the same
-   goal unless the plan changes. Hub genomes are merged only through `augment_genome_from_hub`
-   / `replace_genome_from_hub`, which record the download and ancestry. When the function is new
+0. Hub first (when Studio is connected): search, show only a match worth acting on with its
+   one-line reason, and prefer `augment_genome_from_hub` over building from scratch; the rule
+   is in [building-circuits.md](references/building-circuits.md) step 0. Hub genomes are
+   merged only through `augment_genome_from_hub` / `replace_genome_from_hub`, which record
+   the download and ancestry. When the function is new
    or spans several modules, design it first ("Design a genome" above).
 1. Name the function. `get_brain_regions()` to reuse a matching region, otherwise
    `create_brain_region(title=<function>, coordinates_2d, coordinates_3d)` under the root, with

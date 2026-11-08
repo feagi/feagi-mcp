@@ -26,8 +26,8 @@ other. It does not keep circuit titles readable.
 (`REGION_TITLE`, `fixed_size = true` in `UI_BrainMonitor_SceneLabel3D.gd`). The glyphs stay
 the same size on screen, and their world width grows with camera distance. There is no
 world pitch that keeps those titles apart when the camera frames the whole brain. Do not
-spread circuits hundreds of voxels apart to chase that. Zoom in to read a title. Seen
-2026-11-01: a pitch of 40 voxels times the title length (720 and up) only hid the overlap
+spread circuits hundreds of voxels apart to chase that. Zoom in to read a title. One seen case:
+a pitch of 40 voxels times the title length (720 and up) only hid the overlap
 by leaving the brain empty.
 
 - One signal-flow layer per horizontal line. The camera looks toward +Z, so one Y is one line.
@@ -40,7 +40,7 @@ by leaving the brain empty.
 - Modulator drivers sit one map step above the circuit they gate.
 
 **Place by wiring, not by list order.** Read `get_connectivity_summary` before choosing
-positions; each circuit goes next to what it connects to. Seen 2026-11-01: all circuits
+positions; each circuit goes next to what it connects to. One seen case: all circuits
 stacked in one column beside the I/O, with the body adapter at the top, sent every motor
 wire across the whole scene.
 
@@ -124,8 +124,8 @@ These are starting shapes, not fixed recipes. Confirm rule names with
   rhythm. Two CPGs with mutual inhibition (negative PSC multiplier) lock in anti-phase for
   left/right or diagonal gaits.
 - **Pattern to motor**: CPG phases mapped onto joint drive areas, then onto OPU channels.
-  On positional servo OPUs, depth `z=0` is the maximum command (see
-  [connectivity.md](connectivity.md)).
+  On positional servo OPUs the bin direction comes from the registered coding: read it with
+  `convert_io_value` (see [connectivity.md](connectivity.md)).
 - **Sensorimotor loop**: IPU (joint position, IMU) to an error area to a controller area to
   the OPU.
 - **Trigger / gate**: a `[1,1,1]` trigger area that enables a behavior circuit; stimulate it

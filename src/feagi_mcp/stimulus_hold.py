@@ -21,6 +21,7 @@ from feagi_mcp.spike_record import MAX_GAPS_LISTED, LedgerCollector
 MAX_HOLD_S = 30.0
 MAX_START_DELAY_S = 30.0
 POSTS_PER_BURST = 2.0
+MAX_HOLD_RECORDS = 20
 SETTLE_BURSTS = 3
 
 
@@ -162,6 +163,23 @@ async def run_hold(
         if collector is not None:
             await collector.close()
     return hold_summary(state)
+
+
+ACTIVE_HOLD_STATES = ("pending", "running")
+
+
+def prune_finished_holds(holds: dict[str, dict[str, Any]], limit: int) -> None:
+    """Drop the oldest finished holds until at most ``limit`` remain.
+
+    A pending or running hold is never dropped, because its record carries the cancel handle
+    (``get_stimulus_hold(cancel=True)``). The registry can therefore exceed ``limit`` while more
+    than ``limit`` holds are active; each hold is bounded by ``MAX_START_DELAY_S + MAX_HOLD_S``.
+    """
+    for hold_id in list(holds):
+        if len(holds) <= limit:
+            return
+        if holds[hold_id]["state"] not in ACTIVE_HOLD_STATES:
+            del holds[hold_id]
 
 
 def new_hold_state(area_id: str, voxels: list[list[int]], duration_s: float) -> dict[str, Any]:

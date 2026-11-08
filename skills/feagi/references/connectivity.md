@@ -149,15 +149,21 @@ Authoring flow:
 ## Positional servo outputs
 
 On an absolute positional servo OPU (`opse`, subunit 0), X is the device channel, Y is 1, and
-Z is command depth. **`z=0` decodes to the maximum command** and `z=depth-1` to near zero.
-When several Z voxels fire, FEAGI averages them and flips the result:
-`value = 1 - mean(z) / (depth - 1)`. The mean is over **distinct** voxels: several sources
-firing the same voxel count once (measured 2026-10-31: a stance voxel fired by three areas
+Z is command depth. The bin rule is FEAGI's own coder for the unit the controller registered,
+so read it instead of assuming a direction: `convert_io_value(area, channel, bin=...)` (or
+`fraction=...`) returns the decoded `fraction`, the coding `variant` and, when the channel
+registers a `physical_range`, the physical value and unit. Measured on an unsigned linear
+servo coding: z=0 decodes to the maximum fraction, and when several Z voxels fire FEAGI
+averages them. The mean is over **distinct** voxels: several sources
+firing the same voxel count once (measured once: a stance voxel fired by three areas
 plus one offset voxel at z+9 decoded 4.5 bins, two offset voxels z+9 and z+18 decoded 9.0),
 so N sources on one channel scale each offset by 1/(distinct voxels). Mapping a drive to high destination Z (for example
 `?+17` on a depth-20 strip) produces about 0.05 of full scale. Select specific joints with an
 exact source-X filter (`source_x_channels` in `propose_connectivity_rule()`); wildcarding every
 muscle is refused. `send_motor_command()` handles this mapping for direct joint commands.
+To see what already writes a channel and which paths inhibit it, use
+`explain_motor_channel(opu_area, channel)`; `lint_motor_channels()` warns, with evidence, about
+channels with no writer or several.
 
 ## Changing and removing wiring
 

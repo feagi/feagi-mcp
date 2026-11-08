@@ -1,7 +1,7 @@
 # Memory design: associative tuning, worked examples, mistakes
 
 Part 2 of [memory-design.md](memory-design.md) (read that first). Labels: (code: path:line),
-(measured 2026-11-01), (derived rule).
+(measured once), (derived rule).
 
 ## Associative connections
 

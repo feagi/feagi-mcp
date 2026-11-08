@@ -37,6 +37,7 @@ from feagi_mcp.circuit_spec import (
     apply_property_schema,
     auto_region_2d,
     calls_for,
+    coding_areas_of,
     execute_plan,
     expand_spec,
 )
@@ -89,13 +90,27 @@ from feagi_mcp.io_naming_provenance import (
     summarize_motor_groups_from_registrations,
 )
 from feagi_mcp.io_passthrough import edge_voxel, evaluate_magnitude_passthrough
+from feagi_mcp.io_value_conversion import (
+    convert_channel_value,
+    plan_channel_command,
+    validate_command_input,
+    validate_conversion_input,
+)
 from feagi_mcp.memory_diagnostics import annotate_shared_edges
 from feagi_mcp.morphology_scaling import ScaleRowsError, plan_scaled_rows
+from feagi_mcp.motor_channel_explain import explain_channel, lint_areas
+from feagi_mcp.percentage_coding import UnitCoding
 from feagi_mcp.placement_policy import (
     check_min_separation_to_existing,
     check_origin_exclusion,
 )
 from feagi_mcp.region_circuit import summarize_region_circuit
+from feagi_mcp.registration_units import (
+    ChannelRegistration,
+    RegistrationError,
+    UnitMatch,
+    resolve_owner,
+)
 from feagi_mcp.runtime_diagnostics import (
     KIND_RING,
     LOG_READ_MAX_BYTES,
@@ -112,7 +127,14 @@ from feagi_mcp.runtime_diagnostics import (
 )
 from feagi_mcp.spike_record import expand_region_refs, record_spikes_window
 from feagi_mcp.stance_mapping import compile_stance_offset_rows
-from feagi_mcp.stimulus_hold import hold_summary, new_hold_state, run_hold, validate_hold_args
+from feagi_mcp.stimulus_hold import (
+    MAX_HOLD_RECORDS,
+    hold_summary,
+    new_hold_state,
+    prune_finished_holds,
+    run_hold,
+    validate_hold_args,
+)
 from feagi_mcp.synapse_counts import edge_synapse_counts
 from feagi_mcp.value_coding import (
     PROJECTOR_MORPHOLOGY,
@@ -3544,6 +3566,31 @@ class FeagiClient:
         except Exception as e:  # noqa: BLE001 - the subscription idles out on its own
             logger.warning("fire_history unsubscribe failed: %s", e)
 
+    async def resolve_spike_areas(
+        self, areas: Any
+    ) -> tuple[list[str], list[dict[str, Any]], str | None]:
+        """Resolve area ids, names and region ids to unique area ids.
+
+        Returns ``(ids, regions_expanded, error)``; shared by ``record_spikes`` and by callers
+        that record firing alongside other work.
+        """
+        if not isinstance(areas, list) or not areas:
+            return [], [], "areas must be a non-empty list"
+        refs = [a.strip() for a in areas if isinstance(a, str) and a.strip()]
+        regions = await self.get_regions_members()
+        expanded: list[dict[str, Any]] = []
+        if isinstance(regions, dict) and "error" not in regions:
+            try:
+                refs, expanded, problem = expand_region_refs(refs, regions)
+            except KeyError as e:
+                return [], [], f"region member {e} not found"
+            if problem:
+                return [], [], problem
+        ids, problem = await self._resolve_area_refs(*refs)
+        if problem:
+            return [], [], problem
+        return list(dict.fromkeys(ids)), expanded, None
+
     async def record_spikes(
         self,
         areas: list[str],
@@ -3557,22 +3604,9 @@ class FeagiClient:
         ``csv_path`` when given.
         """
         try:
-            if not isinstance(areas, list) or not areas:
-                return {"success": False, "error": "areas must be a non-empty list"}
-            refs = [a.strip() for a in areas if isinstance(a, str) and a.strip()]
-            regions = await self.get_regions_members()
-            expanded: list[dict[str, Any]] = []
-            if isinstance(regions, dict) and "error" not in regions:
-                try:
-                    refs, expanded, problem = expand_region_refs(refs, regions)
-                except KeyError as e:
-                    return {"success": False, "error": f"region member {e} not found"}
-                if problem:
-                    return {"success": False, "error": problem}
-            ids, problem = await self._resolve_area_refs(*refs)
+            ids, expanded, problem = await self.resolve_spike_areas(areas)
             if problem:
                 return {"success": False, "error": problem}
-            ids = list(dict.fromkeys(ids))
             result = await record_spikes_window(self, ids, bursts, csv_path, max_runs)
             if expanded:
                 result["regions_expanded"] = expanded
@@ -3601,8 +3635,7 @@ class FeagiClient:
                 return {"success": False, "error": problem}
             state = new_hold_state(area_id, clean, duration)
             self._holds[state["hold_id"]] = state
-            while len(self._holds) > 20:
-                self._holds.pop(next(iter(self._holds)))
+            prune_finished_holds(self._holds, MAX_HOLD_RECORDS)
             run = run_hold(self, state, area_id, clean, duration, delay, verify)
             if background:
                 state["_task"] = asyncio.create_task(run)
@@ -3760,13 +3793,42 @@ class FeagiClient:
             logger.error(f"get_stimulus_schedule failed: {e}")
             return {"error": str(e)}
 
+    async def _coders_for_spec(self, spec: Any) -> tuple[dict[str, UnitCoding], list[str]]:
+        """Registered unit coding of every existing OPU the spec's templates drive.
+
+        Returns ``(coders by area name, errors)``; an OPU that is not an existing, registered
+        area is an error naming the reason (nothing is assumed).
+        """
+        coders: dict[str, UnitCoding] = {}
+        errors: list[str] = []
+        for name in coding_areas_of(spec):
+            try:
+                (area_id,), problem = await self._resolve_known_areas(name)
+                if problem:
+                    errors.append(f"OPU '{name}': {problem}")
+                    continue
+                record = await self._area_record(area_id)
+                if record is None:
+                    errors.append(f"OPU '{name}': cortical area {area_id} not found")
+                    continue
+                _, match, _ = await self._registered_owner(record, None, None)
+                coders[name] = match.coding
+            except ValueError as e:
+                errors.append(f"OPU '{name}': {e}")
+        return coders, errors
+
     async def build_circuit_from_spec(self, spec_json: str, dry_run: bool = True) -> dict[str, Any]:
         """Build a circuit from one JSON spec (see :mod:`feagi_mcp.circuit_spec`)."""
         try:
             spec = json.loads(spec_json) if isinstance(spec_json, str) else spec_json
         except json.JSONDecodeError as e:
             return {"valid": False, "errors": [f"Invalid JSON: {e}"], "warnings": []}
-        report, plan = expand_spec(spec)
+        coders, coder_errors = await self._coders_for_spec(spec)
+        report, plan = expand_spec(spec, coders)
+        if coder_errors:
+            report["valid"] = False
+            report["errors"] = [*coder_errors, *report["errors"]]
+            report["calls"] = []
         report["dry_run"] = bool(dry_run)
         if report["valid"] and any(a["properties"] for a in [*plan.areas, *plan.edits]):
             schema = await self.get_area_parameter_schema()
@@ -7410,7 +7472,6 @@ class FeagiClient:
         src_center: float | None = None,
         joint_range: list[float] | None = None,
         dst_depth: int | None = None,
-        z0_is_max: bool = True,
         n_stance_voxels: int = 0,
         coactive_z: int | dict[Any, Any] | str | None = None,
         dry_run: bool = True,
@@ -7421,37 +7482,35 @@ class FeagiClient:
         """Compile stance-relative motor targets and (unless ``dry_run``) wire them.
 
         Joint units in, OPU z bins out (see ``stance_mapping.compile_stance_offset_rows``).
-        ``dst_depth`` defaults to the z size of the destination area from the geometry
-        endpoint when it can be read. Returns ``voxel_mappings``, ``table_text``, ``table``,
-        ``stance`` (the continuous stance voxel per channel) and ``warnings``; with
-        ``dry_run=False`` also the :meth:`build_reflex_mapping` result under ``build``.
+        The bin rule is the destination OPU's registered coding (FEAGI's coder through
+        ``feagi_rust_py_libs``), read from the agent device registrations; ``dst_depth``, when
+        given, must equal the area's z depth (it is read from the area record otherwise).
+        Returns ``voxel_mappings``, ``table_text``, ``table``, ``stance`` (the continuous
+        stance voxel per channel) and ``warnings``; with ``dry_run=False`` also the
+        :meth:`build_reflex_mapping` result under ``build``.
         """
         try:
-            depth = dst_depth
-            if depth is None:
-                geo = await self.get_cortical_area_geometry()
-                entry = geo.get(dst_area_id) if isinstance(geo, dict) else None
-                dims = None
-                if isinstance(entry, dict):
-                    dims = entry.get("dimensions") or entry.get("dimension") or entry.get("dims")
-                if isinstance(dims, dict):
-                    depth = dims.get("z") or dims.get("depth")
-                elif isinstance(dims, list) and len(dims) == 3:
-                    depth = dims[2]
-                if not isinstance(depth, int):
-                    return {"error": "dst_depth_unavailable", "message": "pass dst_depth"}
+            record = await self._area_record(dst_area_id)
+            if record is None:
+                return {"error": "invalid_stance_mapping", "message": "dst area not found"}
+            _, owner, _ = await self._registered_owner(record, None, None)
+            depth = owner.coding.depth
+            if dst_depth is not None and int(dst_depth) != depth:
+                return {
+                    "error": "invalid_stance_mapping",
+                    "message": f"dst_depth {dst_depth} differs from the area's z depth {depth}",
+                }
             compiled = compile_stance_offset_rows(
                 src_axis=src_axis,
                 src_bins=int(src_bins),
                 src_fixed=list(src_fixed) if src_fixed else ["*", "*", "*"],
                 channels=channels,
-                depth=int(depth),
+                coding=owner.coding,
                 gain=float(gain),
                 deadband=float(deadband),
                 max_offset=max_offset,
                 src_center=src_center,
                 joint_range=joint_range,
-                z0_is_max=bool(z0_is_max),
                 n_stance_voxels=int(n_stance_voxels),
                 coactive_z=coactive_z,
             )
@@ -8294,33 +8353,220 @@ class FeagiClient:
             "channel_kind_counts": kind_counts,
         }
 
+    async def _registration_agents(
+        self, group: str, agent_id: str | None
+    ) -> dict[str, dict[str, Any]]:
+        """Normalized device registrations per agent that drives IPU or OPU areas, one read.
+
+        Reads ``/v1/agent/capabilities/all`` once; with ``agent_id`` omitted every agent that
+        reports the direction (``motor`` for OPU, ``sensory`` for IPU) is included. Raises
+        :class:`~feagi_mcp.registration_units.RegistrationError` with the reason.
+        """
+        flag = "motor" if str(group).upper() == "OPU" else "sensory"
+        caps = await self.list_agent_capabilities_all(include_device_registrations=True)
+        if "error" in caps and not any(isinstance(v, dict) for v in caps.values()):
+            raise RegistrationError(f"agent capabilities could not be read: {caps['error']}")
+        agents: dict[str, dict[str, Any]] = {}
+        for candidate, data in caps.items():
+            if not isinstance(data, dict) or (agent_id is not None and candidate != agent_id):
+                continue
+            capabilities = data.get("capabilities")
+            if agent_id is None and not (
+                isinstance(capabilities, dict) and capabilities.get(flag) is True
+            ):
+                continue
+            agents[candidate] = collect_device_registrations(data)
+        if agent_id is not None and agent_id not in agents:
+            raise RegistrationError(f"agent {agent_id} is not registered")
+        return agents
+
+    async def _registered_owner(
+        self, area: dict[str, Any], channel: int | None, agent_id: str | None
+    ) -> tuple[str, UnitMatch, ChannelRegistration | None]:
+        """The agent registration that drives an IPU/OPU area (and channel).
+
+        Raises :class:`~feagi_mcp.registration_units.RegistrationError` with the reason.
+        """
+        agents = await self._registration_agents(str(area.get("cortical_group", "")), agent_id)
+        return resolve_owner(agents, area, channel)
+
+    async def _area_record(self, area_id: str) -> dict[str, Any] | None:
+        """The detailed cortical-area record for an id, or ``None`` when it is not listed."""
+        areas = await self.list_cortical_areas()
+        return next(
+            (a for a in areas if isinstance(a, dict) and a.get("cortical_id") == area_id), None
+        )
+
+    async def convert_io_value(
+        self,
+        area: str,
+        channel: int,
+        bin: int | None = None,  # noqa: A002 - public parameter name of the MCP tool
+        fraction: float | None = None,
+        value: float | None = None,
+        agent_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Convert one I/O channel's z bin, fraction or physical value into the others.
+
+        Exactly one of ``bin`` / ``fraction`` / ``value``. The bin rule is FEAGI's coder
+        (``feagi_rust_py_libs``, see :mod:`feagi_mcp.percentage_coding`) bound to the unit the
+        agent's device registration states for the area; the physical value uses the channel's
+        registered ``physical_range`` only, otherwise ``value`` is null and ``unit`` unknown.
+        """
+        try:
+            problem = validate_conversion_input(bin, fraction, value)
+            if problem:
+                return {"error": problem}
+            if isinstance(channel, bool) or not isinstance(channel, int) or channel < 0:
+                return {"error": "channel must be an integer >= 0"}
+            (area_id,), problem = await self._resolve_known_areas(area)
+            if problem:
+                return {"error": problem}
+            record = await self._area_record(area_id)
+            if record is None:
+                return {"error": f"cortical area {area_id} not found"}
+            used_agent, _, reg = await self._registered_owner(record, channel, agent_id)
+            if reg is None:
+                return {"error": "channel registration unavailable"}
+            result = convert_channel_value(
+                record, channel, reg, bin_value=bin, fraction=fraction, value=value
+            )
+            if "error" not in result:
+                result["agent_id"] = used_agent
+            return result
+        except ValueError as e:
+            return {"error": str(e)}
+        except Exception as e:
+            logger.error("convert_io_value failed: %s", e)
+            return {"error": str(e)}
+
+    async def explain_motor_channel(
+        self,
+        opu_area: str,
+        channel: int,
+        agent_id: str | None = None,
+        burst: int | None = None,
+    ) -> dict[str, Any]:
+        """What drives one OPU channel (read-only; see :mod:`feagi_mcp.motor_channel_explain`).
+
+        Lists every source area with synapses onto the channel's voxels (destination voxels
+        decoded to fraction and physical value when the registration allows), the incoming
+        mappings with a negative ``psc``, and with ``burst`` the command decoded from the
+        already-recorded fire-ledger frames of that burst.
+        """
+        try:
+            if isinstance(channel, bool) or not isinstance(channel, int) or channel < 0:
+                return {"error": "channel must be an integer >= 0"}
+            if burst is not None and (
+                isinstance(burst, bool) or not isinstance(burst, int) or burst < 0
+            ):
+                return {"error": "burst must be an integer >= 0"}
+            (area_id,), problem = await self._resolve_known_areas(opu_area)
+            if problem:
+                return {"error": problem}
+            record = await self._area_record(area_id)
+            if record is None:
+                return {"error": f"cortical area {area_id} not found"}
+            if str(record.get("cortical_group", "")).upper() != "OPU":
+                return {"error": "explain_motor_channel applies to OPU areas"}
+            agents: dict[str, dict[str, Any]] = {}
+            registration_error: str | None = None
+            try:
+                agents = await self._registration_agents("OPU", agent_id)
+            except RegistrationError as e:
+                if agent_id is not None:
+                    return {"error": str(e)}
+                registration_error = str(e)
+            result = await explain_channel(self, record, channel, agents, burst)
+            if registration_error:
+                result["registration"] = {"error": registration_error, "decode": "unavailable"}
+            return result
+        except ValueError as e:
+            return {"error": str(e)}
+        except Exception as e:
+            logger.error("explain_motor_channel failed: %s", e)
+            return {"error": str(e)}
+
+    async def lint_motor_channels(
+        self, opu_area: str | None = None, agent_id: str | None = None
+    ) -> dict[str, Any]:
+        """Warn, with evidence, about OPU channels with no or several writers (read-only).
+
+        One OPU area (id or name), or every OPU area when omitted. Never says a channel is
+        wrong; each warning carries the writers and inhibitory inputs found. Voxel reads are
+        bounded and anything left unread is reported (see :mod:`feagi_mcp.motor_channel_explain`).
+        """
+        try:
+            if opu_area is not None:
+                (area_id,), problem = await self._resolve_known_areas(opu_area)
+                if problem:
+                    return {"error": problem}
+                record = await self._area_record(area_id)
+                if record is None:
+                    return {"error": f"cortical area {area_id} not found"}
+                if str(record.get("cortical_group", "")).upper() != "OPU":
+                    return {"error": "lint_motor_channels applies to OPU areas"}
+                records = [record]
+            else:
+                listed = await self.list_cortical_areas()
+                records = [
+                    a
+                    for a in listed
+                    if isinstance(a, dict) and str(a.get("cortical_group", "")).upper() == "OPU"
+                ]
+            agents: dict[str, dict[str, Any]] = {}
+            registration_error: str | None = None
+            try:
+                agents = await self._registration_agents("OPU", agent_id)
+            except RegistrationError as e:
+                if agent_id is not None:
+                    return {"error": str(e)}
+                registration_error = str(e)
+            result = await lint_areas(self, records, agents)
+            if registration_error:
+                result["registration"] = {"error": registration_error, "decode": "unavailable"}
+            return result
+        except ValueError as e:
+            return {"error": str(e)}
+        except Exception as e:
+            logger.error("lint_motor_channels failed: %s", e)
+            return {"error": str(e)}
+
     async def send_motor_command(
         self,
         agent_id: str,
         joint_name: str,
-        target_value: float,
+        fraction: float | None = None,
+        value: float | None = None,
     ) -> dict[str, Any]:
-        """Stimulate an OPU cortical area to drive a specific joint to a target value.
+        """Stimulate the OPU voxel(s) that command one channel to a fraction or physical value.
 
-        Resolves the joint's OPU cortical area and channel from the agent's
-        device registrations, retrieves the OPU geometry to determine the
-        voxel resolution, maps the target value to a voxel X coordinate using
-        the joint's min/max range, and fires that voxel via manual stimulation.
+        Resolves the channel's OPU area and channel index from the agent's device
+        registrations, binds the registered unit to FEAGI's coder
+        (:mod:`feagi_mcp.percentage_coding`) and fires the voxel(s) of the target bin at
+        ``[channel * x_per_channel (+1 for the negative lobe), 0, z]``.
 
-        Requires the burst engine to be running and the controller bridge to
-        be connected for the stimulation to reach the physical actuator.
+        Pass exactly one of ``fraction`` (0..1, always accepted) or ``value`` (physical units;
+        needs the channel's registered ``physical_range``, otherwise an error names the
+        missing range). There is no default range.
+
+        Requires the burst engine to be running and the controller bridge to be connected
+        for the stimulation to reach the physical actuator.
 
         Args:
             agent_id: Agent identifier (from ``get_registered_agents``).
             joint_name: Channel name as reported by ``get_agent_joint_map``
                 (``joint_name``, ``actuator_name``, or ``source_entity``).
-            target_value: Target position/angle in the joint's native units
-                (degrees for servos, typically within ``min_value``..``max_value``).
+            fraction: Decoded fraction 0..1 to command.
+            value: Physical value to command, in the registered ``physical_range`` unit.
 
         Returns:
-            Stimulation result with the resolved cortical area, voxel
-            coordinate, and value mapping used.
+            Stimulation result with the resolved cortical area, voxels, the bin and the
+            fraction (and value) that bin decodes to.
         """
+        problem = validate_command_input(fraction, value)
+        if problem:
+            return {"error": problem}
         joint_map = await self.get_agent_joint_map(agent_id)
         if "error" in joint_map:
             return joint_map
@@ -8357,53 +8603,28 @@ class FeagiClient:
 
         joint = matched[0]
         cortical_id = joint.get("cortical_id", "")
-        channel_index = joint.get("channel_index", 0)
-        min_val = float(joint.get("min_value", 0))
-        max_val = float(joint.get("max_value", 180))
-
+        channel_index = joint.get("channel_index")
         if not cortical_id:
             return {"error": f"No OPU cortical_id mapped for joint '{joint_name}'"}
-
-        geom = await self.get_cortical_area_geometry()
-        if "error" in geom:
-            return {
-                "error": "Failed to retrieve cortical area geometry",
-                "detail": geom,
-            }
-
-        area_geom = geom.get(cortical_id, {})
-        if not area_geom:
-            return {"error": f"Geometry not found for OPU cortical area '{cortical_id}'"}
-
-        dim_x = int(area_geom.get("cortical_dimensions_per_axis", {}).get("x", 0))
-        if dim_x <= 0:
-            dim_x = int(area_geom.get("block_boundaries", [1, 1, 1])[0])
-        if dim_x <= 0:
-            return {"error": f"Cannot determine X dimension for OPU '{cortical_id}'"}
-
-        val_range = max_val - min_val
-        if val_range <= 0:
-            return {"error": f"Invalid value range [{min_val}, {max_val}] for joint '{joint_name}'"}
-
-        clamped = max(min_val, min(max_val, target_value))
-        normalized = (clamped - min_val) / val_range
-        voxel_x = int(round(normalized * (dim_x - 1)))
-        voxel_x = max(0, min(dim_x - 1, voxel_x))
-
-        y_coord = int(channel_index) if isinstance(channel_index, (int, float)) else 0
-        coordinates = [voxel_x, y_coord, 0]
-
-        stim_result = await self.stimulate_area(cortical_id, coordinates, 1.0)
-
+        if isinstance(channel_index, bool) or not isinstance(channel_index, int):
+            return {"error": f"channel index of '{joint_name}' is not an integer"}
+        record = await self._area_record(cortical_id)
+        if record is None:
+            return {"error": f"OPU cortical area '{cortical_id}' not found"}
+        try:
+            _, _, reg = await self._registered_owner(record, channel_index, agent_id)
+            if reg is None:
+                return {"error": "channel registration unavailable"}
+            command = plan_channel_command(record, reg, fraction=fraction, value=value)
+        except ValueError as e:
+            return {"error": str(e)}
+        stim_result = await self.stimulate_area_batch(cortical_id, command["voxels"])
         return {
             "success": stim_result.get("success", False),
             "joint_name": joint_name,
-            "target_value": target_value,
-            "clamped_value": clamped,
             "cortical_id": cortical_id,
-            "voxel_coordinate": coordinates,
-            "opu_x_resolution": dim_x,
-            "value_range": [min_val, max_val],
+            "channel": channel_index,
+            **command,
             "stimulation_detail": stim_result,
         }
 

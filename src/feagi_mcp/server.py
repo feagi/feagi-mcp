@@ -948,7 +948,8 @@ async def build_circuit_from_spec(spec_json: str, dry_run: bool = True) -> dict[
       flagged uncalibrated: check the period with ``record_spikes``.
     - ``servo_channel_two_rest``: two rest voxels per OPU channel (stance z+1 / z-1) from a
       ``tonic`` area, per-source offset rows with coactive-z compensation, sources inhibiting
-      their own rest neuron.
+      their own rest neuron. ``opu`` must be an existing area driven by a registered agent
+      (its registered coding decides the stance bins; ``depth`` must equal its z depth).
     - ``phase_window_gate``: gate area passing ``pulse`` to ``target`` only while the ``phase``
       area (``phase_bins`` z bins) is inside ``window`` (list or ``"a..b"``); optional tonic
       ``enable``; out-of-window phase bins inhibit. ``threshold``, ``leak``, ``accumulate``,
@@ -4049,7 +4050,6 @@ async def build_stance_relative_mapping(
     src_center: float | None = None,
     joint_range: list[float] | None = None,
     dst_depth: int | None = None,
-    z0_is_max: bool = True,
     n_stance_voxels: int = 0,
     coactive_z: int | dict[str, int] | str | None = None,
     dry_run: bool = True,
@@ -4064,7 +4064,10 @@ async def build_stance_relative_mapping(
     ``src_axis`` of ``src_fixed``) commands ``reference + gain * (i - src_center)`` joint
     units, bins within ``deadband`` of the center map to nothing, and the offset is clamped
     to ``max_offset``. Joint units become dst z bins using the joint range, ``dst_depth``
-    and direction (``z0_is_max``: z=0 decodes to the range maximum).
+    and the destination OPU's registered coding: FEAGI's own coder (``feagi_rust_py_libs``)
+    bound to the unit the agent's device registration states, so a connected controller is
+    needed. ``dst_depth`` is optional and must equal the area's z depth. Check any bin with
+    ``convert_io_value``.
 
     ``channels``: ``[{"channel": int, "reference": float, "range": [min, max]?,
     "src_fixed": [x, y, z]?, "gain": float?, "max_offset": float?, "deadband": float?}]``.
@@ -4098,7 +4101,6 @@ async def build_stance_relative_mapping(
         src_center=src_center,
         joint_range=joint_range,
         dst_depth=dst_depth,
-        z0_is_max=z0_is_max,
         n_stance_voxels=n_stance_voxels,
         coactive_z=coactive_z,
         dry_run=dry_run,
@@ -4404,19 +4406,107 @@ async def get_agent_joint_map(agent_id: str) -> dict[str, Any]:
     return await feagi.get_agent_joint_map(agent_id)
 
 
+@mcp.tool(annotations=READ_ONLY)
+async def convert_io_value(
+    area: str,
+    channel: int,
+    bin: int | None = None,  # noqa: A002 - tool parameter name
+    fraction: float | None = None,
+    value: float | None = None,
+    agent_id: str | None = None,
+) -> dict[str, Any]:
+    """Convert one I/O channel's z bin, fraction or physical value into the others (read-only).
+
+    Pass exactly one of ``bin``, ``fraction`` (0..1) or ``value``. The bin rule is FEAGI's own
+    coder (``feagi_rust_py_libs``) bound to the unit the agent's device registration states
+    for the area, for OPU and IPU areas and every percentage variant it supports; this is the
+    same rule ``build_stance_relative_mapping`` and ``send_motor_command`` use. The physical
+    ``value`` comes only from the channel's registered ``physical_range``; without one the
+    answer has ``value`` null and ``unit`` ``unknown``, and a ``value`` input is an error.
+    A registered controller is needed (no registration, no coding variant).
+
+    Args:
+        area: OPU or IPU area id or exact display name.
+        channel: Channel index (the x position of the channel in the area).
+        bin: z bin to convert (0..depth-1).
+        fraction: Decoded fraction 0..1 to convert to the nearest bin.
+        value: Physical value to convert (needs the registered ``physical_range``; clamped).
+        agent_id: Agent whose registration states the unit; when omitted, the one registered
+            agent that drives the area is used (several differing agents is an error).
+
+    Returns:
+        ``variant``, ``depth``, ``physical_range``, ``bin``, ``fraction`` (what the bin decodes
+        to), ``value`` and ``unit``; a ``fraction`` or ``value`` input also returns
+        ``requested_fraction`` / ``requested_value``. Two-lobe variants return ``z_positive`` /
+        ``z_negative`` instead of one bin.
+    """
+    return await feagi.convert_io_value(
+        area, channel, bin=bin, fraction=fraction, value=value, agent_id=agent_id
+    )
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def explain_motor_channel(
+    opu_area: str,
+    channel: int,
+    agent_id: str | None = None,
+    burst: int | None = None,
+) -> dict[str, Any]:
+    """Show what drives one OPU channel: its writers, their targets and inhibitory inputs.
+
+    Lists every source area with synapses onto the channel's voxels, with the destination
+    voxels decoded (fraction, plus physical value when the registration states a
+    ``physical_range``), and the incoming mappings with a negative ``psc``. About one internal
+    read per voxel of the channel; truncated listings are reported explicitly. ``burst`` reads
+    only already-recorded fire-ledger frames (an error when the areas are untracked or the burst
+    is outside the window) and returns the command the channel's fired voxels decode to.
+
+    Args:
+        opu_area: OPU area id or exact display name.
+        channel: Channel index.
+        agent_id: Agent whose registration states the unit; default: the one driving the area.
+        burst: A recorded burst index to decode, or omitted.
+    """
+    return await feagi.explain_motor_channel(opu_area, channel, agent_id=agent_id, burst=burst)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def lint_motor_channels(
+    opu_area: str | None = None,
+    agent_id: str | None = None,
+) -> dict[str, Any]:
+    """Warn about OPU channels with no writer or several writers, with the evidence (read-only).
+
+    One OPU area, or every OPU area when omitted. A warning lists the writers and inhibitory
+    inputs found; it never says a channel is wrong. Voxel reads are bounded: channels left
+    unread and truncated scans are reported explicitly.
+
+    Args:
+        opu_area: OPU area id or exact display name; omit for all OPU areas.
+        agent_id: Agent whose registration names the channels; default: the driving agents.
+    """
+    return await feagi.lint_motor_channels(opu_area, agent_id=agent_id)
+
+
 @mcp.tool()
 async def send_motor_command(
     agent_id: str,
     joint_name: str,
-    target_value: float,
+    fraction: float | None = None,
+    value: float | None = None,
 ) -> dict[str, Any]:
-    """Drive a specific robot joint to a target angle/position via OPU stimulation.
+    """Command one robot channel to a fraction or a physical value via OPU stimulation.
 
     This is a high-level convenience tool that:
-    1. Looks up the joint's OPU cortical area from the agent's device registrations.
-    2. Retrieves the OPU geometry to determine voxel resolution.
-    3. Maps the target value to a voxel X coordinate using the joint's range.
-    4. Fires that voxel via ``stimulate_area``.
+    1. Looks up the channel's OPU area and index from the agent's device registrations.
+    2. Binds the registered unit to FEAGI's coder (``feagi_rust_py_libs``) to get the z bin
+       that decodes to the target.
+    3. Fires that voxel (``[channel x per-channel width, 0, z]``) via ``stimulate_area_batch``.
+
+    Pass exactly one of ``fraction`` (0..1, always accepted) or ``value`` (physical units; the
+    channel must state a ``physical_range`` in its registration, otherwise the call is an error
+    naming the missing range; there is no default range). Out-of-range values are clamped and
+    flagged.
 
     **Prerequisites:**
     - The experiment must be running in Studio (``_experiment.state`` in the
@@ -4425,23 +4515,23 @@ async def send_motor_command(
     - The agent must be registered (check with ``get_registered_agents``).
     - The burst engine must be running (check with ``get_burst_engine_status``).
 
-    Use ``get_agent_joint_map`` first to discover available joint names and
-    their value ranges.
+    Use ``get_agent_joint_map`` first to discover available joint names, and
+    ``convert_io_value`` to see a channel's ``physical_range``.
 
     Args:
         agent_id: Agent identifier (from ``get_registered_agents``).
         joint_name: Channel name as reported by ``get_agent_joint_map``
             (``joint_name``, ``actuator_name``, or ``source_entity``;
             case-insensitive match).
-        target_value: Target angle/position in the joint's native units
-            (degrees for servo motors).
+        fraction: Decoded fraction 0..1 to command.
+        value: Physical value to command, in the registered ``physical_range`` unit.
 
     Returns:
-        Stimulation result with resolved cortical area, voxel coordinate,
-        and the value-to-voxel mapping used.
+        Stimulation result with resolved cortical area, voxels, the bin, and the fraction
+        (and value) that bin decodes to.
     """
     return annotate_with_experiment_status(
-        await feagi.send_motor_command(agent_id, joint_name, target_value)
+        await feagi.send_motor_command(agent_id, joint_name, fraction=fraction, value=value)
     )
 
 
@@ -4683,6 +4773,8 @@ async def record_aligned_trace(
     burst N, nudge voxel at N+2, pitch changed at N+6" is readable without the file.
     ``bursts_missed_by_sampler`` counts engine bursts the FEAGI sampler did not
     publish (it runs near 30 Hz).
+    For burst-exact firing recorded from a body/brain reset, use Studio's
+    ``run_embodiment_trial(areas=...)``.
     """
     url, _descriptor = feagi._resolve_introspection_url(introspection_url, controller_id)
     if url is None:

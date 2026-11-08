@@ -4,8 +4,17 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
+
 from feagi_mcp.feagi_client import FeagiClient
-from feagi_mcp.stimulus_hold import landing_report, new_hold_state, run_hold, validate_hold_args
+from feagi_mcp.stimulus_hold import (
+    MAX_HOLD_RECORDS,
+    landing_report,
+    new_hold_state,
+    prune_finished_holds,
+    run_hold,
+    validate_hold_args,
+)
 
 AREA = "area_a"
 VOXELS = [[0, 0, 1], [0, 0, 2]]
@@ -152,6 +161,78 @@ async def test_client_background_hold_and_status() -> None:
     assert "error" in await client.get_stimulus_hold("nope")
     bad = await client.hold_stimulus(AREA, [], 1.0)
     assert bad["success"] is False
+
+
+# ------------------------------------------------------------- hold registry pruning
+
+
+def _record(state: str) -> dict[str, Any]:
+    return {"state": state}
+
+
+def test_prune_finished_holds_keeps_active_holds_over_the_limit() -> None:
+    holds = {f"h{i}": _record("running" if i % 2 == 0 else "done") for i in range(8)}
+    prune_finished_holds(holds, 5)
+    assert len(holds) == 5
+    assert all(holds[f"h{i}"]["state"] == "running" for i in (0, 2, 4, 6))  # none active dropped
+    assert list(holds) == ["h0", "h2", "h4", "h6", "h7"]  # the oldest finished went first
+
+    all_active = {f"a{i}": _record("pending") for i in range(7)}
+    prune_finished_holds(all_active, 3)
+    assert len(all_active) == 7  # nothing finished, so nothing is dropped
+
+    under = {"x": _record("done")}
+    prune_finished_holds(under, 3)
+    assert list(under) == ["x"]
+
+
+def _hold_transport() -> httpx.MockTransport:
+    """FEAGI HTTP surface a background hold touches (recorded response shapes)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/v1/cortical_area/cortical_id_name_mapping":
+            return httpx.Response(200, json={AREA_ID: "Pulse"})
+        if path == "/v1/burst_engine/config":
+            return httpx.Response(200, json={"burst_interval_seconds": 0.01})
+        if path == "/v1/burst_engine/burst_counter":
+            return httpx.Response(200, json=1000)
+        if path == "/v1/agent/manual_stimulation":
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "unique_neuron_ids": 1,
+                    "matched_coordinates": 1,
+                    "mode": "force_fire",
+                },
+            )
+        return httpx.Response(404, text=f"unexpected {path}")
+
+    return httpx.MockTransport(handler)
+
+
+async def test_oldest_running_hold_keeps_its_cancel_handle_past_the_record_limit() -> None:
+    client = FeagiClient()
+    await client._client.aclose()
+    client._client = httpx.AsyncClient(transport=_hold_transport())
+    ids: list[str] = []
+    for _ in range(MAX_HOLD_RECORDS + 3):
+        started = await client.hold_stimulus(
+            AREA_ID, [[0, 0, 1]], 5.0, background=True, verify=False
+        )
+        assert started["background"] is True
+        ids.append(started["hold_id"])
+    oldest = await client.get_stimulus_hold(ids[0])
+    assert oldest.get("error") is None and oldest["state"] in ("pending", "running")
+    cancelled = await client.get_stimulus_hold(ids[0], cancel=True)
+    assert cancelled["state"] == "cancelled"
+    for hold_id in ids[1:]:
+        await client.get_stimulus_hold(hold_id, cancel=True)
+    # every hold is finished now: the next hold prunes back down to the record limit
+    await client.hold_stimulus(AREA_ID, [[0, 0, 1]], 0.05, verify=False)
+    assert len(client._holds) == MAX_HOLD_RECORDS
+    await client.close()
 
 
 # ------------------------------------------------------------- stimulus schedule (mocked HTTP)

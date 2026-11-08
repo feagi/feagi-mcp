@@ -11,6 +11,7 @@ Part 1 of 2: checklist, intake, modules, mechanisms, modulators. Efficiency budg
 - Decompose into modules
 - Choose the mechanism per module
 - Orchestrate with modulators
+- Standing: blocks and innate first
 
 ## Design checklist
 
@@ -22,7 +23,7 @@ straight to "Build a circuit" (act with defaults).
 2. **Safety:** list what must never happen (a fall wired to Death, servo range, runaway or
    silent population, reward wireheading, memory pool full) and the hard-wired veto for each.
 3. **Facts:** embodiment, burst rate derived from the body, neuron and synapse budget.
-4. **Hub first:** search_brain_hub_genomes, prefer augment_genome_from_hub, record ancestry.
+4. **Hub first:** search_brain_hub_genomes, show only a match worth acting on, prefer augment_genome_from_hub, record ancestry.
 5. **Blocks:** behaviors are Lego blocks for Brain Hub ("Decompose into modules"); one region per function, each with its own acceptance number and tool; a
    port contract row (shape, code, sign, latency, driver) per port.
 6. **Mechanism:** innate wiring first; memory only for few patterns; plasticity only with a
@@ -38,7 +39,7 @@ straight to "Build a circuit" (act with defaults).
     failed checks; end with Bugs and Gaps and the cost line.
 
 Detail: the sections below. Template: genome-design-template. Blocks: genome-design-patterns.
-Worked designs: genome-design-examples.
+Worked designs and the adaptive patterns ship with Neurorobotics Studio (`behavior-playbooks` skill).
 
 ## What a design produces
 
@@ -72,8 +73,8 @@ genome needs the same steps.
 
 ## Hub first
 
-Reuse beats building. In Studio: search_brain_hub_genomes with the task's key terms, then
-`show_in_studio` kind `hub_genomes`. Same rules as [building-circuits.md](building-circuits.md) step 0.
+Reuse beats building. In Studio: search_brain_hub_genomes with the task's key terms, then show
+only a match worth acting on. Same rules as [building-circuits.md](building-circuits.md) step 0.
 
 | Judge a hit by | Meaning |
 |---|---|
@@ -140,3 +141,28 @@ A driver firing on burst t modulates burst t+1, for `effect_duration_bursts`, th
 `rest_bursts`. Reward modulators on one rule sum (correct +100 with error -100 gives 0).
 **Wireheading rule:** reward and punishment detectors take only hard-wired, non-plastic input;
 FEAGI rejects genomes where learning can feed its own reward. Check subscribers with `modulator_usage()`.
+
+## Standing: blocks and innate first
+
+Standing is a closed loop from sensed tilt to corrective joint commands. Build it as blocks that
+meet only at named ports:
+
+| Block | Does | Body-specific |
+|---|---|---|
+| Body adapter | Maps this body's joints, stance rows and sensor channels to the generic ports | Yes, the only one |
+| Tilt sensing | Torso tilt (and its rate) to graded tilt ports per axis | No |
+| Posture hold | Holds the rest stance through the servo rest and offset rows | No, rows come from the adapter |
+| Balance reflex | Tilt ports to correcting command ports, correct sign, innate | No |
+| Safety gate | Vetoes or limits commands in unsafe states | No |
+| Contact sensing | Foot load to a stance flag, for single support and walking | No |
+| Gait generator | Rhythm gated by contact, walking only | No |
+| Learning or healing | Reward-gated gain tuning, homeostasis, optional | No |
+
+A new body needs a new adapter only. Document each block's ports (name, meaning, encoding, timing,
+assumed burst rate, dependencies) as in [hub-block-datasheet.md](hub-block-datasheet.md).
+
+**Innate first.** Get a sensed, correct-sign reflex holding the body, proven by behavior, before any
+learning on top; treat learning as tuning around a working reflex (design rule, held on the bodies
+tried so far). Add one block at a time and re-check the earlier ones. A fall is never wired to
+Death. The full order of work and the standing test method ship with Neurorobotics Studio
+(`behavior-playbooks` skill).

@@ -24,7 +24,7 @@ Synapses, not neurons, set the cost: every active synapse is one event per burst
 
 - **Events per burst** = active fraction x synapses. Measured: 0.37 us per synaptic event (CI
   microbench). A brain of about 270k neurons and 924k synapses at 40% activity took 278 to 333
-  ms per burst against a 66.67 ms budget at 15 Hz. Host Apple M4 Pro, 14 cores, read 2026-11-01
+  ms per burst against a 66.67 ms budget at 15 Hz. Host: one laptop-class machine, read once
   from `feagi-core/crates/feagi-npu/SCALABILITY_BOTTLENECK_ANALYSIS.md` and
   `feagi-core/perf/ci_microbench_baseline.json`. Re-measure with `get_runtime_metrics(measure_s=10)`.
 - Caps read from `feagi_configuration.toml`: 10M neurons, 25M synapses (check, do not assume).

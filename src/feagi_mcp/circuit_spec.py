@@ -42,7 +42,8 @@ from collections.abc import Callable
 from typing import Any
 
 from feagi_mcp.connectivity_rules import validate_morphology_parameters
-from feagi_mcp.stance_mapping import compile_stance_offset_rows, value_to_z_bin
+from feagi_mcp.percentage_coding import UnitCoding
+from feagi_mcp.stance_mapping import compile_stance_offset_rows, range_fraction
 
 GRID_COLUMNS = 6
 DEFAULT_STEP = 40
@@ -490,6 +491,8 @@ class Plan:
         self.edits: list[dict[str, Any]] = []
         self.sizing: dict[str, Any] = {}
         self.warnings: list[str] = []
+        # registered unit coding per existing OPU area name (see ``servo_channel_two_rest``)
+        self.coders: dict[str, UnitCoding] = {}
 
     def add_area(
         self,
@@ -791,7 +794,22 @@ def _tpl_servo_two_rest(t: dict[str, Any], plan: Plan) -> None:
     tonic = _ref(t, "tonic")
     assert opu is not None and tonic is not None
     depth = _inum(t, "depth", minimum=4)
-    z0_is_max = bool(t.get("z0_is_max", True))
+    if "z0_is_max" in t:
+        raise SpecError(
+            f"servo_channel_two_rest '{name}': 'z0_is_max' is not accepted; the bin direction "
+            "comes from the OPU's registered coding"
+        )
+    coding = plan.coders.get(opu)
+    if coding is None:
+        raise SpecError(
+            f"servo_channel_two_rest '{name}': no registered coding for OPU '{opu}'; the OPU "
+            "must be an existing area driven by a registered agent"
+        )
+    if coding.depth != depth:
+        raise SpecError(
+            f"servo_channel_two_rest '{name}': depth {depth} differs from OPU '{opu}' z depth "
+            f"{coding.depth}"
+        )
     channels = t.get("channels")
     if not isinstance(channels, list) or not channels:
         raise SpecError(f"servo_channel_two_rest '{name}': 'channels' must be a non-empty list")
@@ -819,7 +837,7 @@ def _tpl_servo_two_rest(t: dict[str, Any], plan: Plan) -> None:
     stance: dict[int, int] = {}
     for c, ch in by_channel.items():
         lo, hi = float(ch["range"][0]), float(ch["range"][1])
-        z = value_to_z_bin(float(ch["reference"]), lo, hi, depth, z0_is_max)
+        z = coding.bin_for_fraction(range_fraction(float(ch["reference"]), lo, hi))
         if z < 1 or z > depth - 2:
             raise SpecError(
                 f"'{name}': channel {c} stance z={z} leaves no room for rest voxels at z+1 / z-1"
@@ -878,11 +896,10 @@ def _tpl_servo_two_rest(t: dict[str, Any], plan: Plan) -> None:
                     "range": by_channel[c]["range"],
                 }
             ],
-            depth=depth,
+            coding=coding,
             gain=_fnum(src, "gain"),
             deadband=_fnum(src, "deadband", 0.0, minimum=0.0),
             max_offset=src.get("max_offset"),
-            z0_is_max=z0_is_max,
             coactive_z=None if exclusive else {c: rest_z[other][c]},
         )
         clamped = [w for w in compiled["warnings"] if "clamped" in w]
@@ -1256,10 +1273,29 @@ def calls_for(plan: Plan) -> list[dict[str, Any]]:
     return calls
 
 
-def expand_spec(spec: Any) -> tuple[dict[str, Any], Plan]:
-    """Validate and expand a spec into ``(report, plan)``; errors come back in ``report``."""
+def coding_areas_of(spec: Any) -> list[str]:
+    """Names of the existing OPU areas whose registered coding the spec's templates need."""
+    templates = spec.get("templates") if isinstance(spec, dict) else None
+    names: list[str] = []
+    for t in templates if isinstance(templates, list) else []:
+        if isinstance(t, dict) and t.get("template") == "servo_channel_two_rest":
+            opu = t.get("opu")
+            if isinstance(opu, str) and opu.strip() and opu.strip() not in names:
+                names.append(opu.strip())
+    return names
+
+
+def expand_spec(
+    spec: Any, coders: dict[str, UnitCoding] | None = None
+) -> tuple[dict[str, Any], Plan]:
+    """Validate and expand a spec into ``(report, plan)``; errors come back in ``report``.
+
+    ``coders`` maps an existing OPU area name (see :func:`coding_areas_of`) to its registered
+    unit coding; ``servo_channel_two_rest`` needs it for the OPU it drives.
+    """
     errors: list[str] = []
     plan = Plan()
+    plan.coders = dict(coders or {})
     if not isinstance(spec, dict):
         return {"valid": False, "errors": ["spec must be a JSON object"], "warnings": []}, plan
     unknown = sorted(

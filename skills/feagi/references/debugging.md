@@ -138,7 +138,7 @@ without a read.
 | Hidden area drifts to runaway or silence while weights learn | No rate regulation | `rate_modulated_leak` (memory-and-plasticity.md); it cannot stop single-burst threshold crossings |
 | CPG does not oscillate | Leak or PSC too low | Raise leak or self-mapping PSC |
 | CPG oscillates too fast | Leak too high | Lower leak |
-| Servo barely moves | Drive mapped to high Z on a positional servo | Map to `z=0` side (see [connectivity.md](connectivity.md)) |
+| Servo barely moves | Drive mapped to high Z on a positional servo | Map to the bins `convert_io_value` shows as the high command (see [connectivity.md](connectivity.md)) |
 | Memory area stays empty | No `episodic_memory` upstream, or area is CUSTOM (`c` ID) | `get_memory_area_runtime_config()` |
 | Learning does nothing | Plasticity off, window too short, or no co-activation | `diagnose_mapping_plasticity()` |
 | Classifier does not stamp output | Scan blockers | `inspect_classifier()` |

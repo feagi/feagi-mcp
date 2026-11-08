@@ -112,6 +112,9 @@ TOOL_CATEGORIES: dict[str, tuple[str, ...]] = {
         "list_opu_areas_with_metadata",
         "compute_io_cortical_id",
         "create_io_area_for_unit",
+        "convert_io_value",
+        "explain_motor_channel",
+        "lint_motor_channels",
     ),
     "Connectivity: read": (
         "get_connectivity_summary",

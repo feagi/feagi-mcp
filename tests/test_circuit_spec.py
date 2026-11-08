@@ -9,13 +9,22 @@ import pytest
 
 from feagi_mcp.circuit_spec import (
     apply_property_schema,
+    coding_areas_of,
     execute_plan,
-    expand_spec,
     predicted_step_bursts,
 )
+from feagi_mcp.circuit_spec import expand_spec as _expand_spec
 from feagi_mcp.feagi_client import FeagiClient
+from tests.io_fixtures import servo_coding
 
 REGION = {"title": "Test Circuit", "coordinates_2d": [0, 0], "coordinates_3d": [100, 100, 100]}
+# registered unit coding of the template OPU "Opu" (91 bins), as the client resolves it
+CODERS = {"Opu": servo_coding(91)}
+
+
+def expand_spec(spec: Any) -> Any:
+    """``expand_spec`` with the registered coding of the fixture OPU."""
+    return _expand_spec(spec, CODERS)
 
 
 def _all_templates_spec() -> dict[str, Any]:
@@ -1278,3 +1287,50 @@ def test_exclusive_mixed_with_non_exclusive_and_mutual_exclusion_warning() -> No
     assert any("mutual exclusion" in w for w in expand_spec(two)[0]["warnings"])
     two["templates"][3]["sources"][-1]["mutually_exclusive_with"] = ["CmdX"]
     assert not any("mutual exclusion" in w for w in expand_spec(two)[0]["warnings"])
+
+
+def test_servo_template_needs_the_registered_coding_of_an_existing_opu() -> None:
+    spec = _all_templates_spec()
+    assert coding_areas_of(spec) == ["Opu"]
+    report, _ = _expand_spec(spec)
+    assert not report["valid"] and "no registered coding for OPU 'Opu'" in report["errors"][0]
+    wrong_depth, _ = _expand_spec(spec, {"Opu": servo_coding(60)})
+    assert "depth 91 differs from OPU 'Opu' z depth 60" in wrong_depth["errors"][0]
+    spec["templates"][3]["z0_is_max"] = False
+    flagged, _ = expand_spec(spec)
+    assert "z0_is_max' is not accepted" in flagged["errors"][0]
+
+
+def test_servo_stance_bins_come_from_the_binding() -> None:
+    report, _ = expand_spec(_all_templates_spec())
+    coding = CODERS["Opu"]
+    assert report["sizing"]["Servo"]["stance_z"]["0"] == coding.bin_for_fraction(0.5)
+    assert report["sizing"]["Servo"]["stance_z"]["1"] == coding.bin_for_fraction(100 / 180)
+
+
+async def test_client_resolves_the_opu_coding_from_the_registration() -> None:
+    from tests.io_fixtures import FakeFeagi, opu_area, registration
+
+    fake = FakeFeagi()
+    fake.areas = [
+        opu_area(
+            cortical_name="Opu",
+            cortical_dimensions=[3, 1, 91],
+            cortical_dimensions_per_device=[1, 1, 91],
+        )
+    ]
+    fake.add_agent("agent-a", registration())
+    client = fake.client()
+    spec = json.dumps(_all_templates_spec())
+    report = await client.build_circuit_from_spec(spec, dry_run=True)
+    assert report["valid"], report["errors"]
+    coding = CODERS["Opu"]
+    assert report["sizing"]["Servo"]["stance_z"]["0"] == coding.bin_for_fraction(0.5)
+    fake.agents.clear()
+    unregistered = await client.build_circuit_from_spec(spec, dry_run=True)
+    assert not unregistered["valid"]
+    assert "OPU 'Opu': no registered agent drives Opu" in unregistered["errors"][0]
+    fake.areas = []
+    missing = await client.build_circuit_from_spec(spec, dry_run=True)
+    assert "OPU 'Opu': unknown cortical area" in missing["errors"][0]
+    await client.close()

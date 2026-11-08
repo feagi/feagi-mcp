@@ -60,7 +60,7 @@ Part 2 of 2. Other parts: [tool-index.md](tool-index.md).
 - `list_agent_capabilities_all()`: Raw multi-agent capabilities payload (`/v1/agent/capabilities/all`).
 - `compare_device_registration_store()`: Compare session vs descriptor device-registration stores (compact).
 - `get_agent_connection_endpoints()`: Get the live FEAGI agent connection endpoints (ZMQ/WebSocket) and burst rate.
-- `send_motor_command()`: Drive a specific robot joint to a target angle/position via OPU stimulation.
+- `send_motor_command()`: Command one robot channel to a fraction or a physical value via OPU stimulation.
 - `auto_polarity_probe()`: Empirically discover OPU column -> sensor direction by force-firing each column.
 - `list_controller_bridges()`: List all active controller bridges (xARM, MuJoCo, ROS2, etc.) discovered on this machine.
 - `get_embodiment_status()`: Get status of connected embodiment controllers (GET /v1/embodiment/status when available).

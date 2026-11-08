@@ -18,7 +18,7 @@ payload is each firing voxel's membrane potential, not a Z index. Never size the
 a class count or depth bins in Z. Potential 0 always means "nothing here" (unlabeled, silent,
 or no depth return).
 
-Why: a 512x256 Cityscapes mask as a one-hot Z volume needed 512x256x19, about 2.49M neurons,
+Why: a 512x256 segmentation mask as a one-hot Z volume needed 512x256x19, about 2.49M neurons,
 for the teacher and again for the output. As value planes both are 131k.
 
 ## Class map and depth encoding

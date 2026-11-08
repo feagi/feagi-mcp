@@ -42,8 +42,8 @@ the release artifact; the author supplies meaning (code, sign, function) and mea
 - **Without Studio:** `get_block_datasheet` and `check_port_contract` run only through Studio. Without it,
   ask the user for the block's datasheet and compare each port with `list_io_areas_compact` by hand,
   and say the contract was not machine-checked.
-- **After merging:** the block works alone and combined: [standing-testing.md](standing-testing.md)
-  ("Works alone and combined") describes the check.
+- **After merging:** test that the block works alone and combined: loaded without the blocks it does not
+  depend on, it passes its acceptance check; then the same check passes with all blocks combined.
 
 ## Publish a block with its datasheet
 

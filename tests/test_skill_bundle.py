@@ -212,3 +212,33 @@ def test_reference_check_accepts_studio_only_but_not_unknown_tools() -> None:
     assert is_known_tool("append_design_note", server_tools)
     assert is_known_tool("health_check", server_tools)
     assert not is_known_tool("made_up_tool", server_tools)
+
+
+# These playbooks ship with Neurorobotics Studio (the closed `behavior-playbooks` skill), not here.
+MOVED_TO_STUDIO = (
+    "standing-guide.md",
+    "standing-testing.md",
+    "behavior-design-training.md",
+    "lessons-embodiment.md",
+    "lessons-learning.md",
+    "genome-design-patterns-adaptive.md",
+    "genome-design-examples.md",
+)
+
+
+def test_behavior_playbooks_are_not_in_the_open_skill() -> None:
+    present = [n for n in MOVED_TO_STUDIO if (SKILL_DIR / "references" / n).exists()]
+    assert present == []
+    # A moved file may be named in text, never linked.
+    linked = {Path(t).name for p in SKILL_FILES for t in _LINK.findall(p.read_text("utf-8"))}
+    assert linked.isdisjoint(MOVED_TO_STUDIO)
+
+
+def test_every_relative_markdown_link_resolves_to_a_file() -> None:
+    missing = [
+        f"{p.relative_to(SKILL_DIR)} -> {target}"
+        for p in SKILL_FILES
+        for target in _LINK.findall(p.read_text("utf-8"))
+        if "://" not in target and not (p.parent / target).resolve().is_file()
+    ]
+    assert missing == []

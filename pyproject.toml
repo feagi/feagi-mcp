@@ -30,6 +30,7 @@ dependencies = [
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
     "feagi-core==2.6.14",
+    "feagi-rust-py-libs>=0.0.122",
 ]
 
 [project.optional-dependencies]

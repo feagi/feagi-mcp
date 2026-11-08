@@ -1,9 +1,10 @@
 """Compile stance-relative motor targets into ``patterns`` voxel rows (local, no HTTP).
 
 A PositionalServo absolute OPU channel decodes the *mean* of the active z voxels of the
-channel into one absolute target (z=0 is the range maximum, z=depth-1 the minimum).
-This module turns "reference value + gain * source bin" into the dst z voxel that holds
-that target, using the caller's joint range and the OPU depth and direction.
+channel into one absolute target. This module turns "reference value + gain * source bin"
+into the dst z voxel that holds that target, using the caller's joint range for the unit
+conversion and the OPU's :class:`~feagi_mcp.percentage_coding.UnitCoding` (the registered
+unit bound to ``feagi_rust_py_libs``) for the bin rule. The rule itself is never computed here.
 """
 
 from __future__ import annotations
@@ -12,34 +13,28 @@ import json
 import math
 from typing import Any
 
+from feagi_mcp.percentage_coding import UnitCoding
+
 CHANNEL_KEYS = frozenset(
     {"channel", "reference", "range", "src_fixed", "gain", "max_offset", "deadband"}
 )
 
 
-def value_to_z_bin(
-    value: float, range_min: float, range_max: float, depth: int, z0_is_max: bool = True
-) -> int:
-    """Convert a joint-unit value to the OPU z bin that decodes to it (clamped to the range)."""
-    if depth < 2:
-        raise ValueError("OPU depth must be >= 2")
+def range_fraction(value: float, range_min: float, range_max: float) -> float:
+    """Fraction of ``[range_min, range_max]`` at which ``value`` sits (clamped to the range).
+
+    This is the unit conversion of a joint range (``physical_range`` semantics: ``range_min``
+    at fraction 0, ``range_max`` at fraction 1); the z bin for the fraction comes from the
+    binding.
+    """
     if not range_max > range_min:
         raise ValueError("range max must be greater than range min")
-    pos01 = (min(max(value, range_min), range_max) - range_min) / (range_max - range_min)
-    frac = 1.0 - pos01 if z0_is_max else pos01
-    return int(round(frac * (depth - 1)))
+    return (min(max(value, range_min), range_max) - range_min) / (range_max - range_min)
 
 
-def z_bin_to_value(
-    z: float, range_min: float, range_max: float, depth: int, z0_is_max: bool = True
-) -> float:
-    """Inverse of :func:`value_to_z_bin` (the target the decoder yields for one active z).
-
-    ``z`` may be fractional, e.g. the mean z of several active voxels.
-    """
-    frac = z / (depth - 1)
-    pos01 = 1.0 - frac if z0_is_max else frac
-    return range_min + (range_max - range_min) * pos01
+def value_at_fraction(fraction: float, range_min: float, range_max: float) -> float:
+    """Joint-unit value at ``fraction`` of ``[range_min, range_max]``."""
+    return range_min + (range_max - range_min) * fraction
 
 
 def _coactive_z_by_channel(
@@ -72,17 +67,20 @@ def compile_stance_offset_rows(
     src_bins: int,
     src_fixed: list[Any],
     channels: list[dict[str, Any]],
-    depth: int,
+    coding: UnitCoding,
     gain: float,
     deadband: float = 0.0,
     max_offset: float | None = None,
     src_center: float | None = None,
     joint_range: list[float] | None = None,
-    z0_is_max: bool = True,
     n_stance_voxels: int = 0,
     coactive_z: int | dict[Any, Any] | str | None = None,
 ) -> dict[str, Any]:
     """Compile ``voxel_mappings`` rows for stance-relative offsets.
+
+    ``coding`` is the destination OPU area's registered unit coding (see
+    :mod:`feagi_mcp.registration_units`); its depth is the dst z extent and its variant decides
+    which bin holds a target. Joint ranges only convert joint units to a 0..1 fraction.
 
     Source bin ``i`` has signed distance ``d = i - src_center`` (default: middle bin). Bins
     with ``abs(d) <= deadband`` map to nothing. Otherwise the offset is ``gain * d`` joint
@@ -93,9 +91,9 @@ def compile_stance_offset_rows(
     (optional), "max_offset": float (optional), "deadband": float (optional)}``. A channel's
     ``gain``, ``max_offset`` and ``deadband`` override the top-level values for that channel
     only; any other channel key is rejected with ``ValueError``. When ``abs(gain)`` is
-    smaller than one dst z bin in joint units (``(max - min) / (depth - 1)``) the offsets
-    quantize (neighbouring source bins share a z bin, small ones round to the stance) and a
-    warning is added.
+    smaller than one dst z bin in joint units (``(max - min) / (depth - 1)``, depth from
+    ``coding``) the offsets quantize (neighbouring source bins share a z bin, small ones
+    round to the stance) and a warning is added.
 
     ``n_stance_voxels`` is how many stance voxels are active on the same channel in the
     same burst; the decoder averages all active z, so the reflex voxel is placed at
@@ -108,6 +106,9 @@ def compile_stance_offset_rows(
     decoded mean is ``(coactive_z + z_w) / 2``. Passing it together with ``n_stance_voxels``
     is an error; channels missing from a mapping keep the ``n_stance_voxels`` behaviour.
     """
+    depth = coding.depth
+    if depth < 2:
+        raise ValueError("OPU depth must be >= 2")
     axis = {"x": 0, "y": 1, "z": 2}.get(str(src_axis).lower())
     if axis is None:
         raise ValueError("src_axis must be 'x', 'y' or 'z'")
@@ -155,13 +156,13 @@ def compile_stance_offset_rows(
                 f"channel {channel}: offset per bin {abs(ch_gain):.4g} is smaller than one dst z "
                 f"bin ({z_step:.4g}); offsets quantize (some neighbouring bins share a z)"
             )
-        z_ref = value_to_z_bin(ref, lo, hi, depth, z0_is_max)
+        z_ref = coding.bin_for_fraction(range_fraction(ref, lo, hi))
         stance.append(
             {
                 "channel": channel,
                 "reference": ref,
                 "stance_dst": [channel, 0, z_ref],
-                "stance_value": z_bin_to_value(z_ref, lo, hi, depth, z0_is_max),
+                "stance_value": value_at_fraction(coding.decode_fraction([z_ref]), lo, hi),
             }
         )
         fixed = list(ch.get("src_fixed") or src_fixed)
@@ -178,7 +179,7 @@ def compile_stance_offset_rows(
             if ch_max is not None:
                 off = max(-abs(float(ch_max)), min(abs(float(ch_max)), off))
             tgt = min(max(ref + off, lo), hi)
-            z_t = value_to_z_bin(tgt, lo, hi, depth, z0_is_max)
+            z_t = coding.bin_for_fraction(range_fraction(tgt, lo, hi))
             z_w = z_t
             co_z = co_per_channel.get(channel, co_default)
             if co_z is not None:
@@ -190,7 +191,7 @@ def compile_stance_offset_rows(
                         "than requested)"
                     )
                     z_w = min(max(z_w, 0), depth - 1)
-                mean_z = (co_z + z_w) / 2
+                active = [co_z, z_w]
             else:
                 if n_stance_voxels:
                     z_w = (n_stance_voxels + 1) * z_t - n_stance_voxels * z_ref
@@ -200,8 +201,8 @@ def compile_stance_offset_rows(
                             f"0..{depth - 1}; clamped (offset is smaller than requested)"
                         )
                         z_w = min(max(z_w, 0), depth - 1)
-                mean_z = (n_stance_voxels * z_ref + z_w) / (n_stance_voxels + 1)
-            achieved = z_bin_to_value(mean_z, lo, hi, depth, z0_is_max)
+                active = [z_ref] * n_stance_voxels + [z_w]
+            achieved = value_at_fraction(coding.decode_fraction(active), lo, hi)
             src = list(fixed)
             src[axis] = i
             rows.append({"src": src, "dst": [channel, 0, int(z_w)]})
