@@ -90,7 +90,7 @@ Registration never resizes an existing motor or sensor area, in either direction
 
 After a `motor_z_resolution` change, rebuild every z pattern that feeds a servo OPU angle-preserving: a source z maps to `z * (N_new - 1) / (N_old - 1)` (rounded), and trim the stance bin by `atan(dx / h)` expressed in bins of the new resolution (`dx` the horizontal offset, `h` the height of the link). Rewrite the patterns (`build_circuit_from_spec` with `delete`, or `servo_channel_two_rest` with the new `depth`) rather than leaving the old z values, which now mean other angles.
 
-Motor targets on servo OPUs are absolute and hold until the next command; with several active z on a channel the decoder takes the mean.
+How servo, motor and sensor channels decode (absolute, incremental and speed areas, the mean of active z, held targets): [io-encodings.md](io-encodings.md).
 
 ## Actuator-force (MiscData) sensing: measured caveats
 

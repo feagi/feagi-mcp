@@ -60,7 +60,8 @@ potentiation while the reward driver is silent. Confirm learning with
    `get_cortical_mapping()` so the edge's other rules are kept:
    `plasticity_mode: "rstdp"`, `plasticity_flag: true`, `modulators: [reward_id, punish_id]`,
    `ltp_multiplier`, `ltd_multiplier` (0 also turns punishment off and stops one-sided depression, so
-   it is not a way to keep weights from wearing), `plasticity_constant`,
+   it is not a way to keep weights from wearing), `one_sided_firing` (see Credit assignment),
+   `plasticity_constant`,
    `plasticity_eta`, `max_weight`, `plasticity_window`, `eligibility_decay_bursts`,
    `synaptic_delay_bursts` (at least 1).
    Send `eligibility_decay_bursts` only together with `plasticity_mode: "rstdp"`. On a rule that is
@@ -110,6 +111,14 @@ and see per-area ledger windows with `get_fire_ledger_areas_window_config()`.
   weight. Reward that arrives while the postsynaptic area is quiet wears weights down.
 - With LTD 0, `e` never goes negative, so every reward potentiates co-firing until
   `max_weight`. The weights saturate, and punishment cannot lower them.
+- `one_sided_firing` (plastic rule field, set with `update_cortical_mapping`;
+  `build_reflex_mapping` cannot set it): `"decrement"` (default) is the -1 rule above. `"ignore"`
+  leaves `e` unchanged on one-sided bursts; co-firing still adds 1, commit rules are unchanged, so
+  reward only potentiates co-fired links and punishment with `e` > 0 applies LTD. Associative-memory
+  mappings never decrement either way. Unknown values are rejected. Choose `"ignore"` for a tonically
+  active source (e.g. a sensor port firing every burst) paired with a sparse destination (e.g.
+  exploration), where `"decrement"` drives `e` negative before reward arrives. Evidence: implemented,
+  unit-tested; not yet measured on a body.
 - On associative mappings the commit needs a co-firing burst. Delayed punishment (pain
   arriving after the co-firing) does not commit; pain must precede or coincide with a
   co-firing burst.
@@ -118,8 +127,9 @@ and see per-area ledger windows with `get_fire_ledger_areas_window_config()`.
 - A reward that pays for an outcome produced by external support teaches dependence on the
   support.
 - Before training, read `plasticity_flag` back on the plastic mappings, and resume a mapping
-  a test run froze with `freeze_mapping_plasticity(frozen=False)` (`plasticity_frozen` stays on
-  the rule until then). A leftover freeze and a flag left off both stop all learning.
+  a test run froze with `freeze_mapping_plasticity(frozen=False)`, and resume frozen memory areas with
+  `set_memory_area_learning_frozen(area, False)`. A leftover freeze and a flag left off both stop
+  all learning. Freeze overview: [memory-and-plasticity.md](memory-and-plasticity.md).
 - `eligibility_decay_bursts` sets the credit window. Match it to the reward latency in
   bursts.
 

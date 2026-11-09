@@ -375,6 +375,28 @@ class TestNeuronInspection:
         }
 
     @pytest.mark.asyncio
+    async def test_list_memory_neurons_detail_flag_is_sent_only_when_set(self, mock_client):
+        mock_client._client.get.return_value = _ok({"memory_neuron_ids": []})
+        await mock_client.list_memory_neurons("bWVtb3J5", detail=True)
+        assert mock_client._client.get.call_args.kwargs["params"]["detail"] == "true"
+
+    @pytest.mark.asyncio
+    async def test_delete_memory_neurons_sends_body_and_validates(self, mock_client):
+        mock_client._client.request.return_value = _ok({"deleted": 2})
+        result = await mock_client.delete_memory_neurons("bWVtb3J5", [50000001, 50000002])
+        assert result == {"deleted": 2}
+        call = mock_client._client.request.call_args
+        assert call.args[0] == "DELETE"
+        assert call.args[1].endswith("/v1/connectome/memory_neuron")
+        assert call.kwargs["json"] == {
+            "cortical_id": "bWVtb3J5",
+            "neuron_ids": [50000001, 50000002],
+        }
+        for bad in ([], [0], [True], ["x"]):
+            assert (await mock_client.delete_memory_neurons("bWVtb3J5", bad))["error"]
+        assert (await mock_client.delete_memory_neurons(" ", [1]))["error"]
+
+    @pytest.mark.asyncio
     async def test_list_memory_neurons_rejects_invalid_pagination(self, mock_client):
         result = await mock_client.list_memory_neurons("bWVtb3J5", page=-1)
 

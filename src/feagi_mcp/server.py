@@ -38,7 +38,12 @@ from feagi_mcp.genome_artifact import (
 from feagi_mcp.genome_tools import read_genome_file
 from feagi_mcp.io_cortical_id_encode import encode_io_cortical_id
 from feagi_mcp.live_state_drift import gather_live_state_drift
-from feagi_mcp.memory_diagnostics import CODE_CREATION_FAILED, memory_area_diagnostics
+from feagi_mcp.memory_diagnostics import (
+    CODE_CREATION_FAILED,
+    lifecycle_totals,
+    memory_area_diagnostics,
+    rematch_rate,
+)
 from feagi_mcp.mujoco_scene_control import MujocoSceneControl, scene_object_payload
 from feagi_mcp.placement_policy import (
     LAYOUT_XY_PLANE,
@@ -48,6 +53,7 @@ from feagi_mcp.placement_policy import (
 )
 from feagi_mcp.run_analysis import analyze_spikes_csv
 from feagi_mcp.snapshots import SnapshotManager, validate_label
+from feagi_mcp.spike_record import FOREGROUND_BUDGET_S
 from feagi_mcp.studio_handoff import (
     handoff_message,
     snapshot_handoff,
@@ -56,6 +62,7 @@ from feagi_mcp.studio_handoff import (
 )
 from feagi_mcp.weight_watch import (
     freeze_mapping,
+    freeze_memory_area,
     reset_mapping_native_first,
     watch_weights,
     weight_cap_from_area,
@@ -95,7 +102,24 @@ class _StudioAwareFastMCP(FastMCP):
         hint = getattr(getattr(tool, "annotations", None), "readOnlyHint", None)
         return hint is True
 
+    def _unknown_arguments(self, name: str, arguments: dict[str, Any]) -> list[str]:
+        """Argument names the tool does not declare (FastMCP's argument model drops them)."""
+        tool = self._tool_manager.get_tool(name)
+        properties = (getattr(tool, "parameters", None) or {}).get("properties")
+        if tool is None or not isinstance(properties, dict):
+            return []
+        return sorted(str(key) for key in (arguments or {}) if key not in properties)
+
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+        unknown = self._unknown_arguments(name, arguments)
+        if unknown:
+            tool = self._tool_manager.get_tool(name)
+            properties = (tool.parameters or {}).get("properties", {}) if tool is not None else {}
+            declared = sorted(properties)
+            raise ToolError(
+                f"Unknown argument(s) for {name}: {', '.join(unknown)}. Nothing ran. "
+                f"Declared arguments: {', '.join(declared) or 'none'}."
+            )
         if not self._is_read_only(name) and studio_manages_feagi(config.host, config.port):
             raise ToolError(handoff_message(name))
         arguments = await resolve_area_arguments(
@@ -249,7 +273,9 @@ def _memory_mp_encoding(
 
 
 @mcp.tool(annotations=READ_ONLY)
-async def get_memory_area_runtime_config(cortical_id: str, page_size: int = 1) -> dict[str, Any]:
+async def get_memory_area_runtime_config(
+    cortical_id: str, page_size: int = 1, interval_s: float | None = None
+) -> dict[str, Any]:
     """Get effective runtime lifecycle config for one memory cortical area.
 
     This closes the MCP visibility gap where users otherwise must infer memory
@@ -264,7 +290,14 @@ async def get_memory_area_runtime_config(cortical_id: str, page_size: int = 1) -
       ``formation_suppressed_total`` (creations skipped by a subscribed ``memory.formation``
       modulator; not failures) from health_check (``null`` on older FEAGI). ``findings``
       adds an info entry when the area subscribes to ``memory.formation`` and that count
-      is above 0.
+      is above 0. ``reactivated_total`` counts how often an existing neuron was matched
+      again (any path); ``null`` on older FEAGI.
+    - ``rematch``: only with ``interval_s``. The tool samples the counters, waits
+      ``interval_s`` seconds, samples again and returns ``rate = d_reactivated /
+      (d_reactivated + d_created + d_creation_failed + d_formation_suppressed)`` plus the
+      deltas (``rate`` is ``null`` when nothing was presented in the window). Present
+      the stimulus during the wait. ``interval_s`` above ``FOREGROUND_BUDGET_S`` (50 s)
+      is rejected before any wait; for longer windows call twice and diff ``lifecycle_totals``.
     - ``memory_pool``: the shared pool all memory areas draw from (``pool_capacity``,
       ``pool_in_use``, ``pool_ltm``). ``findings`` flags use above 90% and any failed creation.
     - ``effective_lifecycle.memory_neuron_cap`` (0 = no per-area cap) and ``ltm_eviction``
@@ -283,6 +316,9 @@ async def get_memory_area_runtime_config(cortical_id: str, page_size: int = 1) -
     Args:
         cortical_id: Memory cortical area ID (base64 wire ID).
         page_size: Memory endpoint page size for neuron IDs (default 1; max 50).
+        interval_s: Optional window in seconds (> 0, at most ``FOREGROUND_BUDGET_S``, the
+            same foreground budget as ``record_spikes``) for the ``rematch`` rate. A longer
+            window is rejected: call twice and compare ``lifecycle_totals``.
 
     Returns:
         Normalized runtime memory config and diagnostics for this area.
@@ -306,6 +342,20 @@ async def get_memory_area_runtime_config(cortical_id: str, page_size: int = 1) -
             "cortical_id": cortical_id,
             "cortical_type": area.get("cortical_type"),
             "message": "Tool is only valid for memory cortical areas.",
+        }
+
+    if interval_s is not None and (
+        isinstance(interval_s, bool) or not isinstance(interval_s, (int, float)) or interval_s <= 0
+    ):
+        return {"error": "interval_s must be a number greater than 0"}
+    if interval_s is not None and interval_s > FOREGROUND_BUDGET_S:
+        return {
+            "error": (
+                f"interval_s={interval_s:g} is longer than one tool call may wait "
+                f"(~{FOREGROUND_BUDGET_S:g} s; MCP clients cut longer calls). Call this tool "
+                "twice, spaced as long as you need, and compute the rate from the change in "
+                "`lifecycle_totals` between the two results."
+            )
         }
 
     normalized_page_size = max(1, min(int(page_size), 50))
@@ -379,7 +429,12 @@ async def get_memory_area_runtime_config(cortical_id: str, page_size: int = 1) -
         formation_subscribed,
     )
     # Per-area counters can also arrive on the memory endpoint itself.
-    for counter in ("evicted_total", "creation_failed_total", "formation_suppressed_total"):
+    for counter in (
+        "evicted_total",
+        "creation_failed_total",
+        "formation_suppressed_total",
+        "reactivated_total",
+    ):
         if diagnostics[counter] is None:
             diagnostics[counter] = _positive_or_zero_int(memory_runtime.get(counter))
     if diagnostics["creation_failed_total"] and not any(
@@ -396,6 +451,21 @@ async def get_memory_area_runtime_config(cortical_id: str, page_size: int = 1) -
                 ),
             }
         )
+
+    rematch: dict[str, Any] | None = None
+    if interval_s is not None:
+        before = lifecycle_totals(
+            memory_area_stats if isinstance(memory_area_stats, dict) else None, cortical_id
+        )
+        await asyncio.sleep(float(interval_s))
+        health_after = await feagi.health_check()
+        stats_after = (
+            health_after.get("memory_area_stats") if isinstance(health_after, dict) else None
+        )
+        after = lifecycle_totals(
+            stats_after if isinstance(stats_after, dict) else None, cortical_id
+        )
+        rematch = {"interval_s": float(interval_s), **rematch_rate(before, after)}
 
     # Missing on older FEAGI: report null, never error. A cap of 0 is a real value.
     runtime_cap = _positive_or_zero_int(runtime_params_dict.get("memory_neuron_cap"))
@@ -426,8 +496,10 @@ async def get_memory_area_runtime_config(cortical_id: str, page_size: int = 1) -
             "evicted_total": diagnostics["evicted_total"],
             "creation_failed_total": diagnostics["creation_failed_total"],
             "formation_suppressed_total": diagnostics["formation_suppressed_total"],
+            "reactivated_total": diagnostics["reactivated_total"],
             "source": "health_check.memory_area_stats[cortical_id]",
         },
+        "rematch": rematch,
         "memory_pool": diagnostics["memory_pool"],
         "episodic_upstream": diagnostics["episodic_upstream"],
         "scan_sources": diagnostics["scan_sources"],
@@ -779,16 +851,19 @@ async def hold_stimulus(
     ``run_stimulus_protocol`` hold, which also reads the ~100 KB fire queue per burst). With
     ``verify`` the area's Fire Ledger frames are read back and every burst in
     ``(first_post_burst, last_post_burst + 1]`` is checked for all held voxels: ``landed``
-    reports checked/landed/missed bursts. The result is under 2 KB. Max 30 s.
+    reports checked/landed/missed bursts. The result is under 2 KB. Max 30 s in the
+    foreground (one tool call), 600 s with ``background=True``.
 
     ``background=True`` returns at once with a ``hold_id`` and keeps holding, so a trace or
-    ``record_spikes`` can run beside it; read the outcome with ``get_stimulus_hold``.
+    ``record_spikes`` can run beside it; read the outcome with ``get_stimulus_hold``. A
+    background hold keeps firing after the caller leaves; ``get_stimulus_hold(cancel=True)``
+    stops it.
     ``start_delay_s`` delays the first post (a trace-relative start).
 
     Args:
         area: Area id or name
         voxels: ``[[x, y, z], ...]`` to force-fire every burst
-        duration_s: Hold length in seconds (0 < d <= 30)
+        duration_s: Hold length in seconds (0 < d <= 30; <= 600 with ``background``)
         start_delay_s: Seconds to wait before the first post (default 0)
         background: Return immediately and hold in the background (default False)
         verify: Read back the ledger and report which bursts landed (default True)
@@ -852,7 +927,11 @@ async def get_stimulus_schedule() -> dict[str, Any]:
 
 @mcp.tool(annotations=READ_ONLY)
 async def record_spikes(
-    areas: list[str], bursts: int = 200, csv_path: str | None = None, max_runs: int = 20
+    areas: list[str],
+    bursts: int = 200,
+    csv_path: str | None = None,
+    max_runs: int = 20,
+    background: bool = False,
 ) -> dict[str, Any]:
     """Burst-exact firing of up to 64 areas over the next ``bursts`` bursts.
 
@@ -861,6 +940,11 @@ async def record_spikes(
     ``get_fire_queue_detailed`` see about one burst in five). The areas are subscribed for
     the recording and released after it. Starts now and returns when ``bursts`` bursts have
     passed (max 20000); start a ``hold_stimulus(background=True)`` first to drive the areas.
+
+    A call waits ``bursts`` x the burst interval. One that would wait longer than about 50 s
+    is refused (MCP clients cut long tool calls): pass ``background=True`` to get a
+    ``recording_id`` at once and read the same summary with ``get_spike_recording`` once the
+    window has passed.
 
     Returns a compact summary, never rows: per area ``fired_bursts``, ``fire_fraction``,
     ``total_spikes`` (memory neurons included), ``memory_spikes`` and ``top_memory_neurons``
@@ -876,8 +960,27 @@ async def record_spikes(
         csv_path: Optional CSV file for the spike rows
         max_runs: Fire runs listed per area (default 20; ``runs_truncated`` says if more exist;
             ``run_count`` is always the full count)
+        background: Return a ``recording_id`` at once and record in the background
+            (default False)
     """
-    return await feagi.record_spikes(areas, bursts, csv_path, max_runs)
+    return await feagi.record_spikes(areas, bursts, csv_path, max_runs, background)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def get_spike_recording(
+    recording_id: str | None = None, cancel: bool = False
+) -> dict[str, Any]:
+    """State of a ``record_spikes(background=True)`` recording, or the list of recordings.
+
+    ``state`` is running, done, cancelled or failed. Once finished, ``result`` holds the same
+    summary a foreground ``record_spikes`` returns. ``cancel=True`` ends a running recording
+    early: ``result`` then covers the bursts recorded so far (``cancelled`` true).
+
+    Args:
+        recording_id: Id returned by ``record_spikes``; omit to list recent recordings
+        cancel: Stop a running recording first
+    """
+    return await feagi.get_spike_recording(recording_id, cancel)
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -960,7 +1063,7 @@ async def build_circuit_from_spec(spec_json: str, dry_run: bool = True) -> dict[
     Memory and plasticity: an area may set ``cortical_type: "MEMORY"`` (id must come back with
     prefix ``m``), memory ``properties`` (``temporal_depth``, ``neuron_init_lifespan``,
     ``neuron_lifespan_growth_rate``, ``neuron_longterm_mem_threshold``, ``memory_neuron_cap``,
-    ``ltm_eviction``), ``mp_encoding`` (mode or {mode, delta_quantization?,
+    ``ltm_eviction``, ``replay_trigger``), ``mp_encoding`` (mode or {mode, delta_quantization?,
     ratio_quantization?}) and ``modulators`` ([ids], area-level, e.g. ``memory.formation``).
     Rules take ``morphology: episodic_memory`` (must end in a MEMORY area) or
     ``associative_memory`` (must start in one), and ``plasticity_mode`` stdp/rstdp with
@@ -968,7 +1071,8 @@ async def build_circuit_from_spec(spec_json: str, dry_run: bool = True) -> dict[
     ``ltp_multiplier``/``ltd_multiplier``, ``eligibility_decay_bursts`` (rstdp only; rstdp needs
     ``modulators``) and ``delay`` >= 1. A mapping may carry ``modulators`` (applied to rules
     without their own) and ``frozen: true`` (frozen through FEAGI's ``plasticity_frozen`` route
-    after its rules are written and read back; flag and mode kept; needs a plastic rule).
+    after its rules are written and read back; flag and mode kept; needs a plastic rule). The
+    freeze is a brain-instance switch, not part of the genome: a genome reload clears it.
     Illegal mixes fail the dry run.
 
     Also: ``delete`` ([{src, dst}]: remove those mappings before the new ones are written) and
@@ -1433,8 +1537,9 @@ async def create_modulator(modulator_id: str, definition: dict[str, Any]) -> dic
     """Create a modulator instance and its 1x1x1 driver area, or adopt an existing area.
 
     ``definition`` fields: ``type`` (see ``list_modulator_types``; includes
-    ``memory.formation``, subscribed on memory areas, driver at -100% stops new memory
-    neurons forming), ``magnitude_percent`` (>= -100),
+    ``memory.formation`` and ``memory.freeze``, subscribed on memory areas: formation at
+    -100% stops new memory neurons forming, freeze at magnitude > 0 snapshots the area and
+    its learning), ``magnitude_percent`` (>= -100),
     ``effect_duration_bursts`` (>= 1), ``rest_bursts``, ``graded``,
     and ``full_scale_potential`` when graded. Optional ``driver_cortical_id`` adopts that
     existing area as the driver instead of creating one: it keeps its own timing, so
@@ -1473,7 +1578,7 @@ async def delete_modulator(modulator_id: str, force: bool = False) -> dict[str, 
 @mcp.tool()
 async def set_area_modulators(cortical_id: str, modulator_ids: list[str]) -> dict[str, Any]:
     """Replace the area-level modulator subscriptions (``neuro.*`` kinds, and
-    ``memory.formation`` on memory areas) on a cortical area."""
+    ``memory.formation`` and ``memory.freeze`` on memory areas) on a cortical area."""
     return await feagi.update_cortical_area(cortical_id, {"modulators": modulator_ids})
 
 
@@ -2685,7 +2790,8 @@ async def update_cortical_mapping(
 
     For plastic rules, optional fields include ``max_weight`` (cap on positive weight
     commits) and ``plasticity_eta`` (scales ``w += eta * R * e``). LTP/LTD
-    multipliers are ``i8`` in the runtime. See ``build_reflex_mapping`` and
+    multipliers are ``i8`` in the runtime. ``one_sided_firing`` (``"decrement"`` or
+    ``"ignore"``) sets how one-sided bursts change the trace. See ``build_reflex_mapping`` and
     ``docs/FAQ.md`` (Circuit design & plasticity).
 
     Args:
@@ -3715,6 +3821,7 @@ async def list_memory_neurons(
     cortical_id: str,
     page: int = 0,
     page_size: int = 50,
+    detail: bool = False,
 ) -> dict[str, Any]:
     """List runtime memory neurons in one memory cortical area.
 
@@ -3726,8 +3833,31 @@ async def list_memory_neurons(
         cortical_id: Base64 cortical ID of a memory area.
         page: Zero-based result page.
         page_size: Number of neuron IDs to return (1..50).
+        detail: When true, also return ``memory_neuron_details`` for the page: per neuron
+            ``creation_burst``, ``last_activation_burst``, ``activation_count``,
+            ``lifespan`` (remaining bursts) and ``is_long_term``. Off by default.
     """
-    return await feagi.list_memory_neurons(cortical_id, page, page_size)
+    return await feagi.list_memory_neurons(cortical_id, page, page_size, detail)
+
+
+@mcp.tool()
+async def delete_memory_neurons(area: str, neuron_ids: list[int]) -> dict[str, Any]:
+    """Delete specific memory neurons of one memory area by id. Destructive.
+
+    A cleanup tool for test residue, not a learning mechanism. Removes each neuron with
+    its synapses, replay frames and runtime state; the area's other neurons are untouched.
+    Calls ``DELETE /v1/connectome/memory_neuron``. Every id must be an active neuron of
+    ``area`` (ids from ``list_memory_neurons``); otherwise nothing is deleted and the error
+    names the ids that are not.
+
+    Args:
+        area: Memory cortical area ID or exact display name.
+        neuron_ids: Memory neuron ids to delete (positive integers).
+
+    Returns:
+        ``{"deleted": n}`` on success, or an error.
+    """
+    return await feagi.delete_memory_neurons(area, neuron_ids)
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -4438,7 +4568,11 @@ async def convert_io_value(
         ``variant``, ``depth``, ``physical_range``, ``bin``, ``fraction`` (what the bin decodes
         to), ``value`` and ``unit``; a ``fraction`` or ``value`` input also returns
         ``requested_fraction`` / ``requested_value``. Two-lobe variants return ``z_positive`` /
-        ``z_negative`` instead of one bin.
+        ``z_negative`` instead of one bin. An Incremental servo area (``coding_behavior`` of the
+        area) is not a position: it returns ``framing`` and ``semantics`` ``step``, ``p`` (the
+        column magnitude; ``fraction`` repeats it), ``columns`` (role, x, ``step_fraction`` =
+        +/-p*step, ``step_value``), ``step_size_0_1`` and ``step_size_source``, with ``value``
+        and ``unit`` null. Incremental pointer areas add ``framing`` and ``semantics`` velocity.
     """
     return await feagi.convert_io_value(
         area, channel, bin=bin, fraction=fraction, value=value, agent_id=agent_id
@@ -4456,7 +4590,8 @@ async def explain_motor_channel(
 
     Lists every source area with synapses onto the channel's voxels, with the destination
     voxels decoded (fraction, plus physical value when the registration states a
-    ``physical_range``), and the incoming mappings with a negative ``psc``. About one internal
+    ``physical_range``), and for each writer the areas whose mapping into it has a negative
+    ``psc`` (names and psc), plus the inhibitory relations found between writers. About one internal
     read per voxel of the channel; truncated listings are reported explicitly. ``burst`` reads
     only already-recorded fire-ledger frames (an error when the areas are untracked or the burst
     is outside the window) and returns the command the channel's fired voxels decode to.
@@ -4474,18 +4609,25 @@ async def explain_motor_channel(
 async def lint_motor_channels(
     opu_area: str | None = None,
     agent_id: str | None = None,
+    max_voxel_reads: int | None = None,
 ) -> dict[str, Any]:
-    """Warn about OPU channels with no writer or several writers, with the evidence (read-only).
+    """Warn about OPU channels with no writer, or writers nothing arbitrates (read-only).
 
-    One OPU area, or every OPU area when omitted. A warning lists the writers and inhibitory
-    inputs found; it never says a channel is wrong. Voxel reads are bounded: channels left
-    unread and truncated scans are reported explicitly.
+    One OPU area (exact id or name), or every OPU area when omitted. Several writers on a
+    channel are flagged per unarbitrated pair: neither writer inhibits the other and no common
+    area inhibits both. The pairs and the inhibitory relations found are the evidence; it
+    never says a channel is wrong.
+    Voxel reads are bounded (``max_voxel_reads``, default 8000, about one read per voxel of a
+    channel): channels left unread and truncated scans are reported explicitly.
 
     Args:
         opu_area: OPU area id or exact display name; omit for all OPU areas.
         agent_id: Agent whose registration names the channels; default: the driving agents.
+        max_voxel_reads: Voxel read budget for this call; raise it to lint many areas at once.
     """
-    return await feagi.lint_motor_channels(opu_area, agent_id=agent_id)
+    return await feagi.lint_motor_channels(
+        opu_area, agent_id=agent_id, max_voxel_reads=max_voxel_reads
+    )
 
 
 @mcp.tool()
@@ -4860,14 +5002,32 @@ async def freeze_mapping_plasticity(
     """Stop (or resume) learning on one mapping while keeping its synapses and weights.
 
     Calls FEAGI's ``PUT /v1/cortical_mapping/plasticity_frozen`` (``frozen=True`` freezes,
-    ``False`` resumes) and reads the state back with the GET route. FEAGI sets
-    ``plasticity_frozen`` on the mapping's plastic rules: no weight commits, eligibility
-    updates or associative synapse synthesis while frozen; the rules (``plasticity_flag``
-    and mode), synapses and weights are untouched. The mapping must hold a plastic rule
-    (``freeze_failed`` otherwise). Returns ``frozen`` as read back, ``requested``, weight
-    statistics before and after and ``weights_preserved``.
+    ``False`` resumes) and reads the state back with the GET route. The switch belongs to
+    the running brain, not the genome: it is kept in brain snapshots (full and lite),
+    cleared when a genome is reloaded and kept across mapping edits. While frozen there are
+    no weight commits, eligibility updates (paused, not cleared) or associative synapse
+    synthesis; the rules (``plasticity_flag`` and mode), synapses and weights are untouched.
+    The mapping must hold a plastic rule (``freeze_failed`` otherwise). Returns ``frozen`` as
+    read back, ``requested``, weight statistics before and after and ``weights_preserved``.
     """
     return await freeze_mapping(feagi, src_area.strip(), dst_area.strip(), bool(frozen))
+
+
+@mcp.tool()
+async def set_memory_area_learning_frozen(area: str, frozen: bool = True) -> dict[str, Any]:
+    """Freeze (or resume) learning on one memory area: a full snapshot of what it holds.
+
+    Calls FEAGI's ``PUT /v1/cortical_area/learning_frozen`` and reads the state back from
+    ``GET /v1/connectome/learning_frozen``. While frozen the area forms no new memory
+    neurons, ages and expires none, grows no lifespans, converts nothing to long term, is
+    never evicted by other areas, and learns nothing on mappings into or out of it.
+    Existing memory neurons still fire (recognition, recall, replay). The switch belongs to
+    the running brain: kept in brain snapshots, cleared when a genome is reloaded, not in the
+    genome. The ``memory.freeze`` modulator gives the same behavior driven by a circuit.
+    ``area`` is a name or id. Memory areas only (``not_a_memory_area`` otherwise). Returns
+    ``frozen`` as read back, ``requested`` and ``frozen_memory_areas``.
+    """
+    return await freeze_memory_area(feagi, area.strip(), bool(frozen))
 
 
 @mcp.tool()

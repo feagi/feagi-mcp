@@ -15,6 +15,7 @@ server's idle TTL runs out, then merged by burst number.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import csv
 import logging
 import time
@@ -25,6 +26,10 @@ logger = logging.getLogger("feagi_mcp")
 
 MAX_AREAS = 64
 MAX_BURSTS = 20_000
+# MCP clients cut a tool call that runs too long (one client was measured once cutting at
+# about 60 s with "Request timed out"). A foreground recording longer than this is refused
+# and pointed at ``background=True``, which returns at once.
+FOREGROUND_BUDGET_S = 50.0
 READ_WINDOW = 500
 WINDOW_SLACK = 100
 RE_READ_FRACTION = 0.8
@@ -289,30 +294,58 @@ def write_spikes_csv(collector: LedgerCollector, first: int, last: int, path: st
     return rows
 
 
+def validate_record_args(area_ids: list[str], bursts: Any, max_runs: Any) -> str | None:
+    """Error message for bad ``record_spikes`` arguments, or None."""
+    if not isinstance(max_runs, int) or isinstance(max_runs, bool) or max_runs < 0:
+        return "max_runs must be an int >= 0"
+    if not area_ids:
+        return "areas must be non-empty"
+    if len(area_ids) > MAX_AREAS:
+        return f"at most {MAX_AREAS} areas per recording"
+    if not isinstance(bursts, int) or isinstance(bursts, bool) or not 1 <= bursts <= MAX_BURSTS:
+        return f"bursts must be an int in 1..{MAX_BURSTS}"
+    return None
+
+
+def budget_error(bursts: int, interval_s: float, budget_s: float) -> str:
+    """Why a foreground recording of ``bursts`` is refused at ``interval_s`` per burst."""
+    return (
+        f"{bursts} bursts at {interval_s:g} s per burst take about {bursts * interval_s:.0f} s, "
+        f"longer than one tool call may wait (~{budget_s:g} s); pass background=True and read "
+        "the result with get_spike_recording"
+    )
+
+
 async def record_spikes_window(
     client: Any,
     area_ids: list[str],
     bursts: int,
     csv_path: str | None = None,
     max_runs: int = MAX_RUNS_LISTED,
+    cancel: asyncio.Event | None = None,
+    budget_s: float | None = None,
 ) -> dict[str, Any]:
-    """Record ``bursts`` bursts of ``area_ids`` and return the compact summary."""
-    if not isinstance(max_runs, int) or isinstance(max_runs, bool) or max_runs < 0:
-        return {"success": False, "error": "max_runs must be an int >= 0"}
-    if not area_ids:
-        return {"success": False, "error": "areas must be non-empty"}
-    if len(area_ids) > MAX_AREAS:
-        return {"success": False, "error": f"at most {MAX_AREAS} areas per recording"}
-    if not isinstance(bursts, int) or isinstance(bursts, bool) or not 1 <= bursts <= MAX_BURSTS:
-        return {"success": False, "error": f"bursts must be an int in 1..{MAX_BURSTS}"}
+    """Record ``bursts`` bursts of ``area_ids`` and return the compact summary.
+
+    ``cancel`` (optional) ends the wait early; the summary then covers the bursts recorded so
+    far and reports ``cancelled``. ``budget_s`` (optional) refuses a window that would take
+    longer than that many seconds at the current burst rate. The subscription is always
+    released.
+    """
+    problem = validate_record_args(area_ids, bursts, max_runs)
+    if problem:
+        return {"success": False, "error": problem}
     # slack: the last read happens a little after the target burst and must still reach c0 + 1
     collector = LedgerCollector(client, area_ids, window=min(bursts + WINDOW_SLACK, READ_WINDOW))
     err = await collector.start()
     if err is not None:
         return {"success": False, "error": "fire_history subscription failed", "detail": err}
+    if budget_s is not None and bursts * collector.interval_s > budget_s:
+        await collector.close()
+        return {"success": False, "error": budget_error(bursts, collector.interval_s, budget_s)}
     c0 = collector.start_burst or 0
     target = c0 + bursts
-    timed_out = False
+    timed_out = cancelled = False
     try:
         collector.begin_pump()
         deadline = time.monotonic() + bursts * collector.interval_s * 2 + 5.0
@@ -322,22 +355,31 @@ async def record_spikes_window(
                 return {"success": False, "error": "burst_counter unavailable"}
             if counter >= target:
                 break
+            if cancel is not None and cancel.is_set():
+                cancelled = True
+                break
             if time.monotonic() > deadline:
                 timed_out = True
                 break
             remaining_s = (target - counter) * collector.interval_s
-            await asyncio.sleep(min(max(remaining_s, 0.002), 0.1))
+            pause = min(max(remaining_s, 0.002), 0.1)
+            if cancel is None:
+                await asyncio.sleep(pause)
+            else:
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(cancel.wait(), timeout=pause)
     finally:
         await collector.finish()
     last_seen = max((b for frames in collector.frames.values() for b in frames), default=c0)
     first, last = c0 + 1, min(target, last_seen)
     summary = summarize_frames(collector, first, last, max_runs)
     result: dict[str, Any] = {
-        "success": not timed_out and summary["gap_count"] == 0,
+        "success": not timed_out and not cancelled and summary["gap_count"] == 0,
         "first_burst": first,
         "last_burst": last,
         "bursts_requested": bursts,
         "timed_out": timed_out,
+        "cancelled": cancelled,
         **summary,
         "csv_path": None,
     }

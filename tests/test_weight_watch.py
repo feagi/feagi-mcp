@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 from feagi_mcp.weight_watch import (
     MAX_WATCH_S,
     freeze_mapping,
+    freeze_memory_area,
     reset_mapping,
     reset_mapping_native_first,
     watch_weights,
@@ -212,3 +213,31 @@ async def test_reset_native_first_reports_real_mapping_error() -> None:
     result = await reset_mapping_native_first(client, SRC, DST)
     assert result["error"] == "native_reset_failed"
     client.delete_cortical_mapping.assert_not_awaited()
+
+
+async def test_freeze_memory_area_reads_back_from_bulk_get() -> None:
+    client = AsyncMock()
+    client.set_memory_area_learning_frozen.return_value = {"frozen": True}
+    client.get_learning_frozen.return_value = {"memory_areas": ["m_a"], "mappings": []}
+    out = await freeze_memory_area(client, "m_a", True)
+    client.set_memory_area_learning_frozen.assert_awaited_once_with("m_a", True)
+    assert out["requested"] is True and out["frozen"] is True
+    assert out["frozen_memory_areas"] == ["m_a"]
+    client.get_learning_frozen.return_value = {"memory_areas": [], "mappings": []}
+    out = await freeze_memory_area(client, "m_a", False)
+    assert out["requested"] is False and out["frozen"] is False
+    client.get_learning_frozen.return_value = {"memory_areas": ["m_a"]}
+    assert (await freeze_memory_area(client, "m_a", False))["frozen"] is True
+
+
+async def test_freeze_memory_area_errors() -> None:
+    client = AsyncMock()
+    client.set_memory_area_learning_frozen.return_value = {"error": "HTTP 400", "message": "x"}
+    out = await freeze_memory_area(client, "c_a", True)
+    assert out["error"] == "not_a_memory_area"
+    client.get_learning_frozen.assert_not_awaited()
+    client.set_memory_area_learning_frozen.return_value = {"error": "HTTP 500"}
+    assert (await freeze_memory_area(client, "m_a", True))["error"] == "freeze_failed"
+    client.set_memory_area_learning_frozen.return_value = {"frozen": True}
+    client.get_learning_frozen.return_value = {"error": "HTTP 500"}
+    assert (await freeze_memory_area(client, "m_a", True))["error"] == "readback_failed"

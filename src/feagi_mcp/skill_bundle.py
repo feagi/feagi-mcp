@@ -37,6 +37,7 @@ DESTRUCTIVE_TOOLS = frozenset(
         "delete_genome_snapshot",
         "reset_mapping_weights",
         "reset_area_incoming_weights",
+        "delete_memory_neurons",
     }
 )
 
@@ -147,11 +148,13 @@ TOOL_CATEGORIES: dict[str, tuple[str, ...]] = {
         "get_memory_area_runtime_config",
         "set_memory_mp_encoding",
         "list_memory_neurons",
+        "delete_memory_neurons",
         "inspect_memory_neuron",
         "diagnose_memory_twin_mapping",
         "diagnose_mapping_plasticity",
         "watch_mapping_weights",
         "freeze_mapping_plasticity",
+        "set_memory_area_learning_frozen",
         "reset_mapping_weights",
         "get_fire_ledger_areas_window_config",
     ),
@@ -191,6 +194,7 @@ TOOL_CATEGORIES: dict[str, tuple[str, ...]] = {
         "cancel_stimulus",
         "get_stimulus_schedule",
         "record_spikes",
+        "get_spike_recording",
         "analyze_run",
         "monitor_activity",
         "monitor_activity_batch",

@@ -69,7 +69,8 @@ segmented vision, `idpt` depth map, `iseg` object segmentation mask, `iten` text
 `icnt` count input, `imis` miscellaneous input, `opse` positional servo, `omot` motor, `oimg`
 image output, `oseg` object segmentation output, `oten` text output, `ocnt` count output, and
 `omis` miscellaneous output. Ask
-`get_area_semantic_info()` what an unfamiliar subtype means. `list_io_areas_compact()` gives the inventory by subtype, along with `dev_count`, and
+`get_area_semantic_info()` what an unfamiliar subtype means. How each I/O template lays out
+and encodes its values (percentages, servo, IMU, vision, audio, text): [io-encodings.md](io-encodings.md). `list_io_areas_compact()` gives the inventory by subtype, along with `dev_count`, and
 flags `dimension_dev_count_mismatch` when the width is not `per_device_x * dev_count`.
 
 ## Cortical area IDs
@@ -95,20 +96,25 @@ for several. Change them with `update_cortical_area(cortical_id, updates)`.
 
 | Key (as returned and as passed in `updates`) | Meaning |
 |---|---|
-| `neuron_fire_threshold` | Membrane potential needed to fire. `neuron_fire_threshold_increment` raises it per voxel along an axis. |
-| `neuron_leak_coefficient` | How fast membrane potential decays between bursts (0 = no leak). |
-| `neuron_post_synaptic_potential` | Charge a spike delivers (`neuron_post_synaptic_potential_max` caps it). |
+| `neuron_fire_threshold` | Membrane potential needed to fire. `neuron_fire_threshold_increment` adds `x·ix + y·iy + z·iz` by voxel position (fixed; firing does not raise it). |
+| `neuron_firing_threshold_limit` | Upper edge of the firing window: a neuron fires only when threshold <= potential <= limit; above it the spike is blocked and the charge kept. Default: no bound. |
+| `neuron_leak_coefficient` | Fraction 0..1 of membrane potential removed per burst (0 = no leak; Brain Visualizer shows a percent). `neuron_leak_variability` spreads it across neurons when they are built. |
+| `neuron_post_synaptic_potential` | Strength of this area's **outgoing** synapses: each delivers `weight x PSP x sign`. `neuron_post_synaptic_potential_max` is stored but the burst engine does not read it. `neuron_degeneracy_coefficient` subtracts from the source's PSP each time it fires (floored at 0). |
 | `neuron_mp_driven_psp` | A spike delivers the sender's own potential instead of a fixed PSP. |
 | `neuron_psp_uniform_distribution` | Keeps the PSP undivided when it fans out. |
 | `neuron_excitability` | Fraction in 0..=1 of bursts a neuron above threshold actually fires (1 = always, 0.25 = one in four). Percent values such as 25 are rejected. |
-| `neuron_refractory_period`, `neuron_snooze_period` | Bursts a neuron stays silent after firing. |
-| `neuron_consecutive_fire_count` | Limit on back-to-back firing (0 = no limit). |
-| `neuron_mp_charge_accumulation` | Whether potential carries over between bursts. |
+| `neuron_refractory_period` | Bursts after a fire in which the neuron neither integrates nor fires (membrane unchanged). |
+| `neuron_consecutive_fire_count`, `neuron_snooze_period` | Limit on back-to-back fires (0 = no limit); on reaching it the neuron rests refractory + snooze bursts. |
+| `neuron_mp_charge_accumulation` | On: negative input is clipped to 0, so inhibition cannot lower the potential. Off: negative input subtracts. Potential carries over between bursts (minus leak) either way. |
 | `neuron_burst_engine_active` | Whether the area is processed at all. An area with it off never fires. |
 | `rate_modulated_leak` | Homeostatic leak that tunes itself toward a target firing rate (dense custom areas). `target_mode` is `area` (one target for all neurons) or `per_neuron`; `arm_bursts`, `arm_tau_bursts`, `min_target_firing_per_burst` and `arm_epoch` control per-neuron arming. Partial updates merge into the stored object (given keys override, absent keys are kept, a null key deletes it; a top-level null clears it), so `{"arm_epoch": n}` alone re-arms and keeps `target_mode`/`gain`. When to use it, sizing, arming and checks: [memory-and-plasticity.md](memory-and-plasticity.md#homeostatic-plasticity-rate_modulated_leak). Scheduled mapping PSC multipliers in the Trainer may be negative. |
 
 `list_cortical_areas()` rows name their shape `cortical_dimensions` and their anchor
 `coordinates_3d`.
+
+`synapse_attractivity` (0..100) is read as a percent chance of forming each candidate synapse by
+some core morphologies (for example tile); most rules ignore it. Evidence for this table: code-read in
+the burst engine and genome services.
 
 Mapping rules add their own gain: `postsynaptic_current_multiplier` (PSC multiplier) scales
 the weight of every synapse the rule creates.

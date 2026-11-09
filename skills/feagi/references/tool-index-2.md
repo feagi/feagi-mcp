@@ -4,6 +4,21 @@
 
 Part 2 of 2. Other parts: [tool-index.md](tool-index.md).
 
+## Modulators
+
+- `list_modulator_types()`: List the fixed modulator types.
+- `list_modulators()`: List modulator instances in the loaded genome.
+- `get_modulator()`: Read one modulator instance.
+- `create_modulator()`: Create a modulator instance and its 1x1x1 driver area, or adopt an existing area.
+- `update_modulator()`: Update a modulator instance. Type changes are rejected while subscribers exist.
+- `rename_modulator()`: Rename a modulator and rewrite subscriber references.
+- `modulator_usage()`: List areas and mapping rules subscribed to a modulator.
+- `delete_modulator()`: Delete a modulator and its own driver; subscribers reject it unless forced. **Destructive.**
+- `set_area_modulators()`: Replace the area-level modulator subscriptions (`neuro.*` kinds, and
+- `unsubscribe_area_modulator()`: Remove one neuromodulator subscription from a cortical area.
+- `set_mapping_modulators()`: Replace synaptic modulator subscriptions on the mapping from src to dst.
+- `unsubscribe_mapping_modulator()`: Remove one synaptic modulator subscription from a mapping.
+
 ## Value planes and classifiers
 
 - `list_classifiers()`: List first-class genome classifiers.
@@ -28,6 +43,7 @@ Part 2 of 2. Other parts: [tool-index.md](tool-index.md).
 - `cancel_stimulus()`: Cancel the entries of a `schedule_stimulus` schedule that have not fired yet.
 - `get_stimulus_schedule()`: Active `schedule_stimulus` schedules: ids, burst range, remaining entries, next burst.
 - `record_spikes()`: Burst-exact firing of up to 64 areas over the next `bursts` bursts.
+- `get_spike_recording()`: State of a `record_spikes(background=True)` recording, or the list of recordings.
 - `analyze_run()`: Acceptance metrics from a spikes CSV, as compact JSON (never rows).
 - `monitor_activity()`: Monitor real-time neural activity, plus lifetime fire-count enrichment.
 - `monitor_activity_batch()`: Monitor multiple cortical areas concurrently.

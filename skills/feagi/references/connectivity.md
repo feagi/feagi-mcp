@@ -104,6 +104,19 @@ current rules first with `get_cortical_mapping()` and include any you want to ke
 
 ## Custom rules and the pattern language
 
+A custom rule (morphology) has one of four types (code-read, `MorphologyType`):
+
+- `patterns`: per-axis source filter and destination expansion, below.
+- `vectors`: a list of `[dx, dy, dz]` offsets; each source voxel connects to `src + offset`
+  (times the mapping's `scalar`). An offset that leaves the destination makes no synapse;
+  nothing wraps. `[0, 0, 0]` is identity. Use it for uniform shifts, not as a list of pairs.
+- `composite`: a source seed, a source pattern, and a second rule that maps from there.
+- `functions`: a built-in algorithm chosen by name, with no editable parameters.
+
+Pattern expansion: each axis expands on its own and the destinations are their Cartesian
+product; relative tokens clamp to `[0, dimension)` (edge neurons get fewer targets); several
+rows union; an inverted range (`98..1`) matches nothing.
+
 A custom `patterns` rule is a list of `[src_x, src_y, src_z] -> [dst_x, dst_y, dst_z]` rows.
 Tokens per axis:
 
@@ -123,8 +136,10 @@ Constraints:
 
 - On the source side only `*`, exact integers, and `N..M` filter which neurons the row
   applies to. `?`, `!`, and relative tokens do not filter.
-- Never send an unknown token: FEAGI treats unrecognized strings as `*` and silently
-  over-connects. There is no modulo or even/odd filter.
+- Never send an unknown token, or a plain number as a string (`"5"`; send `5`). The API
+  currently accepts such a `patterns` rule but stores it without patterns, so the mapping
+  silently grows zero synapses (code-read). Check the synapse count after every new rule.
+  There is no modulo or even/odd filter.
 - Never enumerate exact voxel pairs for a regular transform. Express it with `*`, `?`, and
   `?+N`. The server rejects enumerated dumps that share one offset.
 

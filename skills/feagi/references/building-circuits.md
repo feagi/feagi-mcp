@@ -78,22 +78,21 @@ need `temporal_depth` >= 2) and `modulators` (area ids, e.g. `memory.formation`)
 `plasticity_mode` `stdp`/`rstdp` with `plasticity_window`, `plasticity_eta`, `max_weight`,
 `ltp_multiplier`, `ltd_multiplier`, `eligibility_decay_bursts` (rstdp only; rstdp needs
 `modulators`) and `delay` >= 1. A mapping can carry `modulators` and `frozen: true`
-(frozen through FEAGI's `plasticity_frozen` route after its rules are written and read back;
-flag and mode kept; the mapping needs a plastic rule). Illegal combinations fail the dry run; live source/destination
+(frozen through FEAGI's freeze switch after its rules are written, then read back; flag and
+mode kept; needs a plastic rule; the switch is brain state, so a genome reload clears it). Illegal combinations fail the dry run; live source/destination
 areas are checked for the `m` prefix before anything is created.
 
 Limits: the builder makes CUSTOM and MEMORY areas in one region, sets neuron parameters through
-the create path, and does not make IPU/OPU areas (those stay external names). A morphology that already exists is reported `morphologies_reused` and not compared with
-the spec's version.
+the create path, and does not make IPU/OPU areas (those stay external names). An existing morphology is reported `morphologies_reused`, not compared with the spec's.
 
 ## Workflow
 
 0. **Hub first** (when Studio is connected). `search_brain_hub_genomes` with the task's key
-   terms. Show matches with `show_in_studio` (kind `hub_genomes`) only when one is worth
-   acting on, and give the user the one-line reason with them; do not assume they saw it. Prefer
+   terms. On a staging build the same call includes public production genomes, each labeled
+   by catalog; pass that catalog to augment. Show matches with `show_in_studio` (kind `hub_genomes`) only when worth acting on, with a
+   one-line reason; do not assume they saw it. Prefer
    `augment_genome_from_hub` to building from scratch. No match worth acting on: say so in one
-   line and build. Do not repeat the search for the same goal unless the plan
-   changes. Merge Hub genomes only with `augment_genome_from_hub` / `replace_genome_from_hub`
+   line and build. Do not repeat the search unless the plan changes. Merge Hub genomes only with `augment_genome_from_hub` / `replace_genome_from_hub`
    so the download and ancestry are recorded.
 1. **Name the function** the user wants (`OR Gate`, `Walk CPG`, `Sit`, `Balance`).
 2. **Find or create the region.** `get_brain_regions()`; reuse a region already titled for
@@ -120,12 +119,7 @@ the spec's version.
 6. **Verify** with `probe_area_response()` (see [debugging.md](debugging.md)). With Studio,
    append a `measurement` with `metrics`, then a `verdict` that amends the hypothesis.
 7. **Report** what you created, by name, and offer `save_genome_to_filesystem()`.
-8. **Sharing nudge** (rare): only after a verified acceptance check, or a finished, verified,
-   self-contained circuit (a region with clear inputs and outputs). One sentence naming what
-   would be shared (genome or connectome, which region), at most once per goal or session,
-   never after a decline or while troubleshooting. Published versions cannot be edited or
-   deleted but can be superseded; connectomes carry learned data and need two-step consent.
-   The user publishes in Studio (Publish version…); you never publish.
+8. **Sharing nudge** (rare): when a check just passed, follow "Propose publishing what just worked" in `hub-block-datasheet.md` (see [hub-block-datasheet.md](hub-block-datasheet.md)).
 
 To rescale a pattern morphology's destination z rows by a gain (new morphology, original and mappings untouched), use `scale_morphology_rows(..., dry_run=True)` first: it lists old/new z, clamped rows and the largest gain with no clamp over the used bins.
 

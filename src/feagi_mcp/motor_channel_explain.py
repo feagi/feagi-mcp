@@ -3,8 +3,9 @@
 A channel of an OPU area is a block of voxels (``x`` = channel, ``z`` = bin). What a controller
 reads is the decode of the channel's active voxels, so every source area with synapses onto the
 channel's voxels is a *writer*. The route is per voxel: ``get_voxel_neurons`` (raw edges, one
-``synapse_page`` at a time) for each voxel of the channel, then the incoming mappings of the
-area for inhibitory (negative ``psc``) inputs. Nothing is stimulated and nothing is changed.
+``synapse_page`` at a time) for each voxel of the channel (only the channel's own columns).
+Inhibition is read per *writer*: the incoming mappings of each writer area with a negative
+``psc``, read once per writer and cached. Nothing is stimulated and nothing is changed.
 
 ``burst=`` reads Fire Ledger frames that are *already recorded*: an area that is not tracked, or
 a burst outside the tracked window, is an error, and the frames are requested with each area's
@@ -38,7 +39,9 @@ VOXEL_CONCURRENCY = 16
 MAX_SYNAPSE_PAGES = 20
 #: Decoded destination voxels listed per writer (the count and z runs are always complete).
 MAX_VOXELS_LISTED = 12
-#: Voxel reads one ``lint_motor_channels`` call may spend before it reports the rest unchecked.
+#: Inhibitory inputs listed per writer and relations listed per kind (counts are always given).
+MAX_INHIBITORS_LISTED = 8
+#: Default voxel reads one ``lint_motor_channels`` call may spend (``max_voxel_reads`` raises it).
 LINT_VOXEL_BUDGET = 8000
 
 
@@ -146,27 +149,129 @@ async def scan_channel(client: ExplainClient, area: dict[str, Any], channel: int
     return scan
 
 
-async def incoming_inhibition(
-    client: ExplainClient, area_id: str
-) -> tuple[dict[str, list[dict[str, Any]]], dict[str, str], str | None]:
-    """Incoming mapping rules with a negative ``psc``: ``(by source id, names, error)``."""
-    mapping = await client.get_cortical_map_detailed(cortical_id=area_id)
-    if mapping.get("error"):
-        return {}, {}, str(mapping["error"])
-    names = await client.get_cortical_id_name_mapping()
-    name_by_id = (
-        {k: v for k, v in names.items() if isinstance(v, str)} if "error" not in names else {}
-    )
-    found: dict[str, list[dict[str, Any]]] = {}
-    for src_id, dst_map in mapping.items():
-        rules = dst_map.get(area_id) if isinstance(dst_map, dict) else None
-        for rule in rules if isinstance(rules, list) else []:
-            psc = rule.get("postSynapticCurrent_multiplier") if isinstance(rule, dict) else None
-            if isinstance(psc, (int, float)) and psc < 0:
-                found.setdefault(src_id, []).append(
-                    {"morphology": rule.get("morphology_id"), "psc": psc}
+class InhibitionIndex:
+    """Incoming mappings with a negative ``psc`` per area, read once and cached.
+
+    One ``cortical_map_detailed`` read per area (plus one name table), shared by every channel
+    of a lint run.
+    """
+
+    def __init__(self, client: ExplainClient) -> None:
+        self._client = client
+        self._names: dict[str, str] | None = None
+        self._inputs: dict[str, tuple[list[dict[str, Any]], str | None]] = {}
+        self.reads = 0
+
+    async def names(self) -> dict[str, str]:
+        """Area id -> display name (empty when the table cannot be read)."""
+        if self._names is None:
+            table = await self._client.get_cortical_id_name_mapping()
+            self._names = (
+                {k: v for k, v in table.items() if isinstance(v, str)}
+                if "error" not in table
+                else {}
+            )
+        return self._names
+
+    async def inputs_of(self, area_id: str) -> tuple[list[dict[str, Any]], str | None]:
+        """Areas whose mapping into ``area_id`` has a negative ``psc``: ``(inputs, error)``.
+
+        Each input is ``{"area", "area_id", "psc": [...], "morphologies": [...]}``.
+        """
+        if area_id not in self._inputs:
+            self.reads += 1
+            mapping = await self._client.get_cortical_map_detailed(cortical_id=area_id)
+            if mapping.get("error"):
+                self._inputs[area_id] = ([], str(mapping["error"]))
+            else:
+                self._inputs[area_id] = (await self._negative_inputs(mapping, area_id), None)
+        return self._inputs[area_id]
+
+    async def _negative_inputs(self, mapping: dict[str, Any], area_id: str) -> list[dict[str, Any]]:
+        names = await self.names()
+        found: list[dict[str, Any]] = []
+        for src_id, dst_map in sorted(mapping.items()):
+            rules = dst_map.get(area_id) if isinstance(dst_map, dict) else None
+            negative = [
+                r
+                for r in (rules if isinstance(rules, list) else [])
+                if isinstance(r, dict)
+                and isinstance(r.get("postSynapticCurrent_multiplier"), (int, float))
+                and r["postSynapticCurrent_multiplier"] < 0
+            ]
+            if negative:
+                found.append(
+                    {
+                        "area": names.get(src_id, src_id),
+                        "area_id": src_id,
+                        "psc": [r["postSynapticCurrent_multiplier"] for r in negative],
+                        "morphologies": [r.get("morphology_id") for r in negative],
+                    }
                 )
-    return found, name_by_id, None
+        return found
+
+
+def writer_relations(
+    writers: list[Writer], inhibitors: dict[str, list[dict[str, Any]]]
+) -> dict[str, Any]:
+    """Inhibitory relations between a channel's writers, pair by pair.
+
+    A pair of writers is arbitrated when either inhibits the other directly, or one common
+    area inhibits both members (an area inhibiting only one of them does not count).
+    ``direct`` and ``shared_gates`` list the relations found (mutual pairs named as such);
+    ``unarbitrated_pairs`` lists the pairs with neither, by name. Lists are capped at
+    :data:`MAX_INHIBITORS_LISTED`; ``counts`` gives the full sizes when anything is cut.
+    """
+    names = {w.area_id: w.name for w in writers}
+    sources = {
+        w.area_id: {
+            e["area_id"] for e in inhibitors.get(w.area_id, []) if e["area_id"] != w.area_id
+        }
+        for w in writers
+    }
+    edges = {(src, dst) for dst, srcs in sources.items() for src in srcs if src in names}
+    direct: list[str] = []
+    for src, dst in sorted(edges, key=lambda e: (names[e[0]], names[e[1]])):
+        if (dst, src) in edges:
+            if names[src] <= names[dst]:
+                direct.append(f"{names[src]} and {names[dst]} inhibit each other")
+        else:
+            direct.append(f"{names[src]} inhibits {names[dst]}")
+    gate_names: dict[str, str] = {}
+    hits: dict[str, list[str]] = {}
+    for w in writers:
+        for entry in inhibitors.get(w.area_id, []):
+            if entry["area_id"] not in names:
+                gate_names[entry["area_id"]] = entry["area"]
+                hits.setdefault(entry["area_id"], []).append(w.name)
+    shared = sorted(
+        f"{gate_names[g]} inhibits {', '.join(sorted(hit))}"
+        for g, hit in hits.items()
+        if len(hit) > 1
+    )
+    ids = [w.area_id for w in writers]
+    unarbitrated: list[str] = []
+    for i, first in enumerate(ids):
+        for second in ids[i + 1 :]:
+            if (first, second) in edges or (second, first) in edges:
+                continue
+            if sources[first] & sources[second]:
+                continue
+            unarbitrated.append(" / ".join(sorted((names[first], names[second]))))
+    unarbitrated.sort()
+    out: dict[str, Any] = {
+        "unarbitrated_pairs": unarbitrated[:MAX_INHIBITORS_LISTED],
+        "direct": direct[:MAX_INHIBITORS_LISTED],
+        "shared_gates": shared[:MAX_INHIBITORS_LISTED],
+    }
+    if max(len(unarbitrated), len(direct), len(shared)) > MAX_INHIBITORS_LISTED:
+        out["counts"] = {
+            "unarbitrated_pairs": len(unarbitrated),
+            "direct": len(direct),
+            "shared_gates": len(shared),
+        }
+    out["unarbitrated_count"] = len(unarbitrated)
+    return out
 
 
 def decode_voxel(coding: UnitCoding, x_offset: int, z: int) -> dict[str, Any]:
@@ -184,9 +289,9 @@ def writer_row(
     area: dict[str, Any],
     channel: int,
     reg: ChannelRegistration | None,
-    inhibitory: dict[str, list[dict[str, Any]]],
+    inhibited_by: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Compact row of one writer: synapses, destination z runs and decoded voxels."""
+    """Compact row of one writer: synapses, destination z runs, decoded voxels, inhibitors."""
     per_device = area["cortical_dimensions_per_device"]
     voxels = sorted(writer.dst_voxels, key=lambda v: (v[2], v[0], v[1]))
     row: dict[str, Any] = {
@@ -196,8 +301,9 @@ def writer_row(
         "dst_voxel_count": len(voxels),
         "dst_z_runs": runs_of(sorted({v[2] for v in voxels})),
     }
-    if writer.area_id in inhibitory:
-        row["also_inhibits_area"] = inhibitory[writer.area_id]
+    row["inhibited_by"] = inhibited_by[:MAX_INHIBITORS_LISTED]
+    if len(inhibited_by) > MAX_INHIBITORS_LISTED:
+        row["inhibited_by_count"] = len(inhibited_by)
     if reg is None:
         row["dst_voxels"] = [list(v) for v in voxels[:MAX_VOXELS_LISTED]]
         return row
@@ -309,12 +415,11 @@ async def explain_channel(
     channel: int,
     agents: dict[str, dict[str, Any]],
     burst: int | None = None,
-    inhibition: tuple[dict[str, list[dict[str, Any]]], dict[str, str], str | None] | None = None,
+    inhibition: InhibitionIndex | None = None,
 ) -> dict[str, Any]:
-    """Writers, inhibitory inputs and (with ``burst``) the recorded command of one channel.
+    """Writers, each writer's inhibitory inputs and (with ``burst``) the recorded command.
 
-    ``inhibition`` is the :func:`incoming_inhibition` result when the caller already read it
-    for the area (the lint reads it once per area).
+    ``inhibition`` is a shared :class:`InhibitionIndex` (the lint passes one for all channels).
     """
     area_id = str(area["cortical_id"])
     out: dict[str, Any] = {
@@ -335,21 +440,20 @@ async def explain_channel(
         if reg.friendly_name:
             out["channel_name"] = reg.friendly_name
     scan = await scan_channel(client, area, channel)
-    inhibitory, names, inhibition_error = inhibition or await incoming_inhibition(client, area_id)
+    index = inhibition or InhibitionIndex(client)
     out["voxels_read"] = scan.voxels_read
     writers = sorted(scan.writers.values(), key=lambda w: (-w.synapses, w.name))
-    out["writers"] = [writer_row(w, area, channel, reg, inhibitory) for w in writers]
-    out["inhibitory_inputs"] = [
-        {
-            "area": names.get(src, src),
-            "area_id": src,
-            "rules": rules,
-            "writes_channel": src in scan.writers,
-        }
-        for src, rules in sorted(inhibitory.items())
-    ]
-    if inhibition_error:
-        out["inhibitory_inputs_error"] = inhibition_error
+    inhibitors: dict[str, list[dict[str, Any]]] = {}
+    unread: dict[str, str] = {}
+    for w in writers:
+        inhibitors[w.area_id], error = await index.inputs_of(w.area_id)
+        if error:
+            unread[w.name] = error
+    out["writers"] = [writer_row(w, area, channel, reg, inhibitors[w.area_id]) for w in writers]
+    if len(writers) > 1:
+        out["writer_relations"] = writer_relations(writers, inhibitors)
+    if unread:
+        out["inhibition_unread"] = unread
     truncation = _truncation(scan)
     if truncation:
         out["truncated"] = truncation
@@ -361,7 +465,12 @@ async def explain_channel(
 
 
 def lint_channel(explained: dict[str, Any]) -> list[dict[str, Any]]:
-    """Evidence-backed warnings for one explained channel (never a verdict)."""
+    """Evidence-backed warnings for one explained channel (never a verdict).
+
+    Several writers are flagged when some pair of them is unarbitrated (neither inhibits the
+    other, and no common area inhibits both); the pairs and the relations found are the
+    evidence.
+    """
     warnings: list[dict[str, Any]] = []
     writers = explained["writers"]
     where = {"area": explained["area"], "channel": explained["channel"]}
@@ -373,41 +482,64 @@ def lint_channel(explained: dict[str, Any]) -> list[dict[str, Any]]:
                 "detail": "no source area has synapses onto this channel's voxels",
             }
         )
-    elif len(writers) > 1:
-        inhibitory = explained["inhibitory_inputs"]
+        return warnings
+    if len(writers) < 2:
+        return warnings
+    relations = explained["writer_relations"]
+    evidence = {
+        "writers": [
+            {
+                "area": w["area"],
+                "dst_z_runs": w["dst_z_runs"],
+                "inhibited_by": [i["area"] for i in w["inhibited_by"]],
+            }
+            for w in writers
+        ],
+        "relations": relations,
+    }
+    if "inhibition_unread" in explained:
+        warnings.append(
+            {
+                **where,
+                "code": "inhibition_unread",
+                "detail": "the incoming mappings of some writers could not be read, so "
+                "inhibition between the writers is unknown",
+                "evidence": {**evidence, "unread": explained["inhibition_unread"]},
+            }
+        )
+    elif relations["unarbitrated_count"]:
+        count = relations["unarbitrated_count"]
         warnings.append(
             {
                 **where,
                 "code": "multiple_writers",
                 "detail": (
-                    f"{len(writers)} source areas write this channel's voxels; the command is "
-                    "the decode of all active voxels together"
-                    + (
-                        f"; {len(inhibitory)} inhibitory input area(s) found"
-                        if inhibitory
-                        else "; no inhibitory input found"
-                    )
+                    f"{len(writers)} source areas write this channel's voxels and {count} "
+                    "pair(s) of them have no inhibition between them and no common inhibiting "
+                    "area; the command is the decode of all active voxels together: "
+                    + "; ".join(relations["unarbitrated_pairs"])
+                    + (" ..." if count > len(relations["unarbitrated_pairs"]) else "")
                 ),
-                "evidence": {
-                    "writers": [
-                        {"area": w["area"], "dst_z_runs": w["dst_z_runs"]} for w in writers
-                    ],
-                    "inhibitory_inputs": [i["area"] for i in inhibitory],
-                },
+                "evidence": evidence,
             }
         )
     return warnings
 
 
 async def lint_areas(
-    client: ExplainClient, areas: list[dict[str, Any]], agents: dict[str, dict[str, Any]]
+    client: ExplainClient,
+    areas: list[dict[str, Any]],
+    agents: dict[str, dict[str, Any]],
+    budget: int = LINT_VOXEL_BUDGET,
 ) -> dict[str, Any]:
     """Lint every channel of the given OPU areas; compact warnings with their evidence.
 
     A warning is evidence ("these writers and inhibitory inputs were found"), never a verdict
-    that a channel is wrong. Voxel reads are bounded by :data:`LINT_VOXEL_BUDGET`; channels
+    that a channel is wrong. Voxel reads are bounded by ``budget`` (default
+    :data:`LINT_VOXEL_BUDGET`); channels
     left unread are listed, and so are channels whose scan was cut short (``truncated``).
     """
+    inhibition = InhibitionIndex(client)
     used = 0
     checked = 0
     warnings: list[dict[str, Any]] = []
@@ -420,10 +552,9 @@ async def lint_areas(
         if count is None or channel_depth(area) is None:
             skipped.append({"area": label, "reason": "dimensions do not state channels and depth"})
             continue
-        inhibition = await incoming_inhibition(client, str(area["cortical_id"]))
         for channel in range(count):
             cost = len(channel_voxels(area, channel))
-            if used + cost > LINT_VOXEL_BUDGET:
+            if used + cost > budget:
                 unchecked.append({"area": label, "channel": channel})
                 continue
             used += cost
@@ -438,13 +569,14 @@ async def lint_areas(
         "areas_checked": len(areas) - len(skipped),
         "channels_checked": checked,
         "voxel_reads": used,
+        "inhibition_reads": inhibition.reads,
         "warnings": warnings,
     }
     if skipped:
         result["skipped"] = skipped
     if unchecked:
         result["not_checked"] = {
-            "reason": f"voxel read budget of {LINT_VOXEL_BUDGET} reached",
+            "reason": f"voxel read budget of {budget} reached (pass max_voxel_reads to raise it)",
             "channels": unchecked[:MAX_VOXELS_LISTED],
             "count": len(unchecked),
         }

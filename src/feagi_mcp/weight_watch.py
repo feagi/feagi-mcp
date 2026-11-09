@@ -1,9 +1,10 @@
 """Learning observability: weight series, plasticity freeze and weight reset for one mapping.
 
 * **freeze** calls ``PUT /v1/cortical_mapping/plasticity_frozen`` (body ``src_cortical_area``,
-  ``dst_cortical_area``, ``frozen``) and reads the state back with the GET route. FEAGI sets
-  ``plasticity_frozen`` on the mapping's plastic rules: the rule, its ``plasticity_flag``,
-  the synapses and the weights stay as they are. (``POST
+  ``dst_cortical_area``, ``frozen``) and reads the state back with the GET route. FEAGI keeps
+  the switch on the running brain (kept in brain snapshots, cleared on genome reload, never
+  in the genome): the rule, its ``plasticity_flag``, the synapses and the weights stay as
+  they are. (``POST
   /v1/neuroplasticity/{enable,disable}/{area_id}`` only log and are not used.)
 * **reset** deletes the mapping and recreates it with the same rules. FEAGI keeps the
   weight of a synapse whose neuron pair already existed (verified live), so the tool
@@ -189,6 +190,39 @@ async def freeze_mapping(client: Any, src: str, dst: str, frozen: bool) -> dict[
         and before.get("avg") == after.get("avg"),
         "method": "PUT /v1/cortical_mapping/plasticity_frozen, read back with GET; "
         "rules are not rewritten.",
+    }
+
+
+async def freeze_memory_area(client: Any, area: str, frozen: bool) -> dict[str, Any]:
+    """Freeze (or resume) learning on one memory area; read the state back from the bulk GET.
+
+    ``frozen`` in the result is read back from ``GET /v1/connectome/learning_frozen``
+    (``memory_areas``), ``requested`` the value asked for. A non-memory area is refused by
+    FEAGI (HTTP 400) and reported as ``not_a_memory_area``.
+    """
+    put = await client.set_memory_area_learning_frozen(area, frozen)
+    if not isinstance(put, dict) or put.get("error"):
+        details = put if isinstance(put, dict) else {"error": str(put)}
+        if details.get("error") == "HTTP 400":
+            return {
+                "error": "not_a_memory_area",
+                "area": area,
+                "message": "Learning freeze applies to memory areas only; use "
+                "freeze_mapping_plasticity() for a mapping.",
+                "details": details,
+            }
+        return {"error": "freeze_failed", "area": area, "details": details}
+    read = await client.get_learning_frozen()
+    if not isinstance(read, dict) or read.get("error"):
+        return {"error": "readback_failed", "area": area, "details": read}
+    areas = read.get("memory_areas") or []
+    return {
+        "area": area,
+        "requested": frozen,
+        "frozen": area in areas,
+        "frozen_memory_areas": areas,
+        "method": "PUT /v1/cortical_area/learning_frozen, read back with "
+        "GET /v1/connectome/learning_frozen.",
     }
 
 

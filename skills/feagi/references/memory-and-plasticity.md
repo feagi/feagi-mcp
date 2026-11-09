@@ -7,7 +7,9 @@ Part 1 of 3: memory areas, encoding, `memory.formation`, time series, modulators
 - Memory areas
 - Membrane-potential encoding modes
 - Inspecting memory
+- Counters, re-match rate and cleanup
 - Stop new memories forming (`memory.formation`)
+- Freezing learning
 - Time-series memory cascade (ECG and similar signals)
 - Modulators
 
@@ -38,8 +40,7 @@ Create memory areas with `create_cortical_area(cortical_type="MEMORY", dimension
 brain_region_id=...)`. The ID must start with `m`; a `c` ID will never form memory neurons.
 
 Memory neurons have an initial lifespan, growth per re-match, and a long-term threshold
-after which they become permanent. A working ECG cascade used init lifespan 9,
-lifespan growth 1, and long-term threshold 100. Tune these with `update_cortical_area()`
+after which they become permanent. Tune these with `update_cortical_area()`
 (keys `neuron_init_lifespan`, `neuron_lifespan_growth_rate`, `neuron_longterm_mem_threshold`;
 the window length is `temporal_depth`). Two more keys bound growth: `memory_neuron_cap` (int,
 most memory neurons this area may hold; 0 = no per-area cap) and `ltm_eviction` (`lru` or
@@ -48,11 +49,15 @@ is full, `lru` evicts that area's least recently reactivated neuron, `none` fail
 `get_memory_area_runtime_config()` shows both, `evicted_total`, `creation_failed_total` and the
 `memory_pool`.
 
+`replay_trigger` (circuit design, per memory area) sets which fires replay a neuron's stored
+frames onto its twin: `any_fire` (default) or `recall_only` (associative-recall fires only;
+live pattern-match and encoding fires do not replay). Design intent, not yet measured.
+
 **Measured.** A memory neuron fires in the same burst as its matching input, on creation and
 on reactivation. `temporal_depth` N makes one neuron per window position. `neuron_init_lifespan`
 defaults to 9 bursts, +1 per reactivation. A neuron created at burst b and never matched
-again expires at the end of burst b + init lifespan, and can still be reactivated in that
-burst (matching runs before aging); a longer gap loses the neuron and its synapses.
+again expires at the end of burst b + init lifespan (still reactivatable in that burst, as
+matching runs before aging); a longer gap loses the neuron and its synapses.
 `neuron_lifespan_growth_rate` is truncated to an integer on each reactivation (1.9 grows by 1,
 0.5 by 0). A self-held input reactivates it EVERY burst, so long-term thresholds count bursts of
 presence.
@@ -60,8 +65,8 @@ presence.
 **Reward consolidates.** On a reward-gated `associative_memory` mapping, a positive reward
 that creates or strengthens a synapse between two memory neurons promotes both to long-term at
 once, through the normal long-term path (cap and `ltm_eviction` apply). Expiry of a short-term
-memory neuron deletes every synapse touching it, so without reward a learned association lasts
-only as long as its neurons. Classifier use: [value-planes-and-classifiers.md](value-planes-and-classifiers.md).
+memory neuron deletes every synapse touching it, so unrewarded associations last only as long
+as their neurons. Classifiers: [value-planes-and-classifiers.md](value-planes-and-classifiers.md).
 
 ## Membrane-potential encoding modes
 
@@ -75,8 +80,7 @@ memory area treats membrane potentials (MP), and reports what FEAGI actually run
 | `mp_differential` | The same MP *change* across the window (2 to 4 matches 7 to 9) | Needs `temporal_depth` of at least 2. `delta_quantization` is in MP units and must match the sample scale. No replay. |
 | `mp_ratio` | The same *growth ratio* (2 to 4 matches 7 to 14) | Needs `temporal_depth` of at least 2. `ratio_quantization` is percent per compounding step. No replay. |
 
-Set `temporal_depth` (with `update_cortical_area()`) before choosing a change mode. Confirm
-with `get_memory_area_runtime_config()`, whose `mp_encoding.effective_mode` shows what FEAGI
+Set `temporal_depth` (`update_cortical_area()`) before choosing a change mode. Confirm with `get_memory_area_runtime_config()`, whose `mp_encoding.effective_mode` shows what FEAGI
 runs; a `warning` from the set call means FEAGI disabled the change mode.
 
 Changing `temporal_depth`, upstream set or MP mode removes memory neurons that no longer fit
@@ -87,53 +91,74 @@ Changing `temporal_depth`, upstream set or MP mode removes memory neurons that n
 - `get_memory_area_runtime_config(cortical_id)`: lifecycle settings, encoding, and findings
   such as `memory_no_episodic_upstream` (error) and `memory_neurons_expire_unmatched`
   (neurons were created but none survived).
-- `list_memory_neurons()` and `inspect_memory_neuron()`: the neurons an area has grown, their
-  lifecycle, and their realized synapses.
+- `list_memory_neurons()`, `inspect_memory_neuron()`: an area's neurons, lifecycle, synapses.
 - `diagnose_memory_twin_mapping(src_area, dst_area)`: why an episodic mapping did or did not
   create a twin area.
+
+## Counters, re-match rate and cleanup
+
+Each memory area counts, since it was created: `created_total`, `deleted_total`,
+`evicted_total`, `creation_failed_total`, `formation_suppressed_total` and
+`reactivated_total` (an existing neuron matched again, whichever path matched it). They
+come back in `get_memory_area_runtime_config` under `lifecycle_totals`.
+
+- **Re-match rate**: pass `interval_s` and present the stimulus during the wait. The tool
+  samples twice and returns `rematch.rate = d_reactivated / (d_reactivated + d_created +
+  d_creation_failed + d_formation_suppressed)` with the deltas. A rate near 1 means
+  presentations land on stored neurons; near 0 means every presentation looks new. It is
+  `null` when nothing was presented or the counters are absent. `interval_s` is capped at the
+  foreground tool-call budget (50 s); for a longer window diff `lifecycle_totals` yourself.
+- **Per-neuron history**: `list_memory_neurons(cortical_id, detail=true)` adds, for the page,
+  `creation_burst`, `last_activation_burst`, `activation_count`, `lifespan` (remaining
+  bursts), `is_long_term`. Default off.
+- **Cleanup**: `delete_memory_neurons(area, neuron_ids)` removes the listed neurons with their
+  synapses and replay frames; the area's other neurons are untouched, and ids not in that
+  area are refused (nothing is deleted). Cleanup for test residue, not a learning mechanism.
+  Destructive: confirm first.
 
 ## Stop new memories forming (`memory.formation`)
 
 `memory.formation` is an area-level modulator for memory areas. With its driver active at
 -100% the area forms no new memory neurons (other magnitudes do not block: -50 and any positive
-value change nothing). Pattern detection still runs, so a known pattern
-still reactivates its neuron. Recall and firing of existing memory neurons, short-term aging,
-long-term conversion and eviction continue unchanged. Skipped creations are not failures:
-they count in `formation_suppressed_total`, not `creation_failed_total`. With no
-subscription or a silent driver the area forms memories as usual. Non-memory areas reject it.
+value change nothing). A known pattern still reactivates its neuron; recall, ageing,
+long-term conversion and eviction continue unchanged. Skipped creations count in
+`formation_suppressed_total`, not `creation_failed_total`. A silent driver forms memories as
+usual. Non-memory areas reject it.
 
-**When to use it**
-- Hold memory fixed while you measure or test a brain.
-- Stop storing patterns during states you do not want remembered (fallen, reset, idle).
-- Gate encoding to salient moments: keep the driver active except when something worth
-  remembering happens.
+**When to use it:** states you do not want remembered, or encoding gated to salient moments.
+To hold a whole area fixed for a test, use a freeze (next section).
 
 **How to wire it**
 1. `create_modulator("no_new_memory", {"type": "memory.formation", "magnitude_percent": -100,
    "effect_duration_bursts": 1, "rest_bursts": 0, "graded": false})`. Read the driver area
    id from `get_modulator()`.
-2. Pick the signal that should suppress formation (or create a small `1x1x1` area for it) and
-   wire it into the driver area with `apply_connectivity_rule()`, the same way the reward
-   detector is wired into a `synaptic.reward` driver. The driver counts as active on every
-   burst its neuron fires. For a manual hold during a test, a large `effect_duration_bursts`
-   keeps the driver on after one `stimulate_area()` (see Model in [modulators.md](modulators.md));
-   it stops after that many bursts and then rests `rest_bursts`.
+2. Wire the suppressing signal (or a small `1x1x1` area) into the driver area with
+   `apply_connectivity_rule()`, as a reward detector is wired into a `synaptic.reward` driver.
+   The driver counts as active on every burst its neuron fires. A large
+   `effect_duration_bursts` keeps it on after one `stimulate_area()` (Model in
+   [modulators.md](modulators.md)).
 3. `set_area_modulators(memory_area_id, ["no_new_memory"])` on each memory area to suppress.
    The call replaces the list, so include the area's existing modulator ids.
 4. Verify with `get_memory_area_runtime_config(memory_area_id)`:
    `lifecycle_totals.formation_suppressed_total` rises while `created_total` stays flat, and
    a `memory_formation_suppressed` finding appears. `modulator_usage()` lists the subscribers.
 
-**Pairing with plastic mappings.** A memory area is not the only learner. For plastic
-mappings (`stdp` / `rstdp`) subscribe the rule to a `synaptic.learning_rate` modulator at
--100% on the same driver area (a second `create_modulator()` whose driver is that area, then
-`set_mapping_modulators()`). One driver then stops both memory formation and the weight
-commits of those mappings; a plain `stdp` associative rule can still create synapses
-([modulators.md](modulators.md), recipe 2).
+Suppressing is the genome designer's call; the Trainer does not drive `memory.formation`.
 
-**Design choice.** Whether to suppress is the genome designer's call. The Trainer does not
-drive `memory.formation`, and learning on-line during a test may be what you want. Do not add
-the modulator to freeze a brain unless the task says to.
+## Freezing learning (switch vs modulator)
+
+`memory.formation` only blocks new memory neurons. To stop all learning use a freeze
+(feagi-core behavior, not re-measured):
+- `memory.freeze` (area modulator, memory areas, m > 0): frozen while the driver's combined
+  signal is > 0. No new neurons, ageing, expiry, lifespan growth, long-term conversion,
+  consolidation or eviction by other areas, and no learning on mappings into or out of the
+  area. Existing memory neurons still fire (recognition, recall, replay).
+- `synaptic.learning_rate` with a combined factor <= 0: no commits, synapse synthesis or
+  trace growth (traces pause, not cleared) on the subscribed plastic mappings.
+- Manual switches `set_memory_area_learning_frozen(area)` and `freeze_mapping_plasticity(src,
+  dst)` belong to the running brain: kept in brain snapshots (a Hub connectome carries them),
+  cleared on genome load, never in the genome. A circuit that must stay frozen is a modulator
+  in the genome; a switch is for tests. Recipe: [modulators.md](modulators.md).
 
 ## Time-series memory cascade (ECG and similar signals)
 

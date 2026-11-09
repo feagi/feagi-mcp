@@ -191,7 +191,10 @@ def validate_pattern_element(value: Any) -> str | None:
     if _OFFSET_RE.fullmatch(token) or _RANGE_RE.fullmatch(token) or _ABS_RANGE_RE.fullmatch(token):
         return None
     if re.fullmatch(r"-?\d+", token):
-        return None
+        return (
+            f"numeric string {value!r}: FEAGI stores a pattern with string numerals as empty; "
+            f"write the integer {int(token)} (exact coordinates are JSON ints)"
+        )
     return f"unknown pattern token {value!r}; FEAGI would silently treat this as *"
 
 

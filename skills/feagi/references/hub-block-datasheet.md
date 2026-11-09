@@ -45,6 +45,10 @@ the release artifact; the author supplies meaning (code, sign, function) and mea
 - **After merging:** test that the block works alone and combined: loaded without the blocks it does not
   depend on, it passes its acceptance check; then the same check passes with all blocks combined.
 
+## Propose publishing what just worked
+
+When a check in the conversation passes (an acceptance check, a probe or a trial that meets its goal), propose publishing the region or regions that produced that result, and only those. Never propose a region that has no passed result behind it. In one or two sentences, say what passed with its numbers, which region did it, what someone else could use it for (read from its ports), and whether Brain Hub already has a similar block (from `search_brain_hub_genomes`). If robot-specific rows sit inside that region, say the adapter has to be split off first, and offer to do that. Offer to package it with a measured datasheet (steps below). Propose once per result. Don't propose while troubleshooting, and don't propose a region again after the user said no to it. Published versions cannot be edited or deleted, only superseded. The creator can make the work private later, but copies people already made cannot be taken back. Connectomes carry learned data and need two-step consent. The user publishes in Studio (Publish version…); never publish for them.
+
 ## Publish a block with its datasheet
 
 1. Make sure the region has designated inputs and outputs (a published block needs at least one port).

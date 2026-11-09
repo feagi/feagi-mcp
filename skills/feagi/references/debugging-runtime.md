@@ -29,13 +29,15 @@ IPU width vs the columns present in the last sensor snapshot.
   mapping's weight statistics over time (min, max, avg, count at 0, count at the
   destination's PSP cap, the five largest and five smallest synapses) and reports
   `avg_delta` and `max_delta`. A flat series while the pair co-fires means no learning:
-  check reward modulators, `plasticity_flag` and a left-over freeze (`plasticity_frozen`) with `diagnose_mapping_plasticity()`.
+  check reward modulators and `plasticity_flag` with `diagnose_mapping_plasticity()`, and a left-over freeze switch (it is not in that report; `freeze_mapping_plasticity(frozen=False)` resumes and reads back).
 - For memory-to-memory mappings `diagnose_mapping_plasticity()` splits
   `memory_neuron_synapse_count` (learned links) from `placeholder_synapse_count`.
 - `freeze_mapping_plasticity(src_area, dst_area, frozen=True)` stops learning on one
   mapping through FEAGI's `PUT /v1/cortical_mapping/plasticity_frozen` (`frozen=False`
-  resumes) and reads the state back. FEAGI sets `plasticity_frozen` on the plastic rules;
-  the rule, `plasticity_flag`, synapses and weights are untouched. It needs a plastic rule
+  resumes) and reads the state back. The switch belongs to the running brain (kept in brain
+  snapshots, cleared on genome reload, not in the genome); the rule, `plasticity_flag`, synapses
+  and weights are untouched. `set_memory_area_learning_frozen(area)` does the same for a memory
+  area. It needs a plastic rule
   (`freeze_failed` otherwise). `frozen` is the read-back state; `weights_preserved` is false
   if the weight statistics changed.
 - `reset_mapping_weights(src_area, dst_area)` resets weights in place via FEAGI's native route

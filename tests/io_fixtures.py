@@ -54,10 +54,12 @@ def unit_definition(
 
 
 def registration(
-    unit_key: str = "PositionalServo", **kwargs: Any
+    unit_key: str = "PositionalServo",
+    properties: dict[str, Any] | None = None,
+    **kwargs: Any,
 ) -> dict[str, dict[str, list[list[Any]]]]:
     """``device_registrations`` with one motor unit, as ``[definition, properties]``."""
-    return {OUTPUT_SECTION: {unit_key: [[unit_definition(**kwargs), {}]]}}
+    return {OUTPUT_SECTION: {unit_key: [[unit_definition(**kwargs), properties or {}]]}}
 
 
 def opu_area(**over: Any) -> dict[str, Any]:
@@ -75,6 +77,12 @@ def opu_area(**over: Any) -> dict[str, Any]:
         "subunit_id": 0,
     }
     return {**area, **over}
+
+
+INCREMENTAL_LINEAR = {
+    "frame_change_handling": "Incremental",
+    "percentage_neuron_positioning": "Linear",
+}
 
 
 def servo_coding(depth: int = DEPTH, *, unit_key: str = "PositionalServo") -> UnitCoding:
@@ -98,6 +106,8 @@ class FakeFeagi:
         self.fail_voxel: set[tuple[int, int, int]] = set()
         self.seen: list[str] = []
         self.voxel_calls = 0
+        self.voxel_keys: list[tuple[str, int, int, int]] = []
+        self.fail_mapping = False
         self.ledger_reads: list[tuple[list[str], int]] = []
 
     def add_agent(
@@ -142,6 +152,7 @@ class FakeFeagi:
         self.voxel_calls += 1
         q = request.url.params
         key = (q["cortical_id"], int(q["x"]), int(q["y"]), int(q["z"]))
+        self.voxel_keys.append(key)
         if key[1:] in self.fail_voxel:
             return httpx.Response(500, text="voxel boom")
         page = int(q.get("synapse_page", "0"))
@@ -192,6 +203,8 @@ class FakeFeagi:
         if path == "/v1/cortical_area/voxel_neurons":
             return self._voxel_response(request)
         if path == "/v1/cortical_area/cortical_map_detailed":
+            if self.fail_mapping:
+                return httpx.Response(500, text="map boom")
             return httpx.Response(200, json=self.mappings)
         if path == "/v1/burst_engine/fire_ledger/areas_window_config":
             return httpx.Response(

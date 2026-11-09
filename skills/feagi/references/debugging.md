@@ -75,13 +75,19 @@ returns a summary, never rows: per area `fire_fraction`, `fired_bursts`, `first_
 `last_fire_burst`, fire `runs` (the first 20 per area; `max_runs` raises the limit, `run_count` is
 the full count, `runs_truncated` says if more exist), `top_voxels`, and for the window `gaps` (bursts with no frame;
 `success` is false if any). Rows go to `csv_path` as `burst,area_id,area_name,x,y,z,
-memory_neuron_id`. Up to 64 areas and 20000 bursts; it returns after `bursts` bursts have passed.
+memory_neuron_id`. Up to 64 areas and 20000 bursts. A plain call waits `bursts` × the burst
+interval, and one that would wait longer than about 50 s is refused, because MCP clients cut
+long tool calls. For a longer window pass `background=True`: it returns a `recording_id` at
+once, and `get_spike_recording(recording_id)` returns the same summary under `result` once
+`state` is `done` (`cancel=True` ends it early with what was recorded). Drive the areas
+with `hold_stimulus(background=True)`.
 
 `hold_stimulus(area, voxels, duration_s, background=False)` posts the stimulus on a wall-clock
 schedule (twice per burst; the pending queue dedupes) and reads nothing per burst. With
 `verify` (default) it reads the area's ledger afterwards and reports `landed`: of the bursts in
 `(first_post_burst, last_post_burst + 1]`, how many fired every held voxel, which did not, and
 which have no ledger frame. A hold is only trusted with that line: `landed == checked`.
+A foreground hold lasts at most 30 s (one tool call), a background hold at most 600 s.
 `background=True` returns a `hold_id` and keeps holding while you trace or record; read the
 outcome with `get_stimulus_hold(hold_id)`, and stop it early with
 `get_stimulus_hold(hold_id, cancel=true)`. For pulses on exact bursts use

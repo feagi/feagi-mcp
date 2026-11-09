@@ -57,6 +57,7 @@ _SCALARS: dict[str, tuple[str, ...]] = {
     "get_sensor_snapshot_last": ("cortical_id",),
     "inspect_neuron_state_at": ("cortical_id",),
     "list_memory_neurons": ("cortical_id",),
+    "delete_memory_neurons": ("area",),
     "get_voxel_neurons": ("cortical_id",),
     "list_area_synapses": ("cortical_area_id",),
     "list_area_neuron_states": ("area_id",),
@@ -66,6 +67,7 @@ _SCALARS: dict[str, tuple[str, ...]] = {
     "watch_mapping_weights": ("src_area", "dst_area"),
     "freeze_mapping_plasticity": ("src_area", "dst_area"),
     "reset_mapping_weights": ("src_area", "dst_area"),
+    "set_memory_area_learning_frozen": ("area",),
 }
 
 #: List-of-string arguments per tool.

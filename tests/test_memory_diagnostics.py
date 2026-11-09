@@ -9,6 +9,7 @@ from feagi_mcp.memory_diagnostics import (
     inbound_sources,
     lifecycle_totals,
     memory_area_diagnostics,
+    rematch_rate,
 )
 
 
@@ -35,6 +36,7 @@ def test_lifecycle_totals_absent_area_is_unknown_not_zero() -> None:
         "evicted_total": None,
         "creation_failed_total": None,
         "formation_suppressed_total": None,
+        "reactivated_total": None,
     }
     stats = {"kmem": {"created_total": 7, "deleted_total": 5, "neuron_count": 2}}
     assert lifecycle_totals(stats, "kmem") == {
@@ -44,6 +46,7 @@ def test_lifecycle_totals_absent_area_is_unknown_not_zero() -> None:
         "evicted_total": None,
         "creation_failed_total": None,
         "formation_suppressed_total": None,
+        "reactivated_total": None,
     }
     stats = {"kmem": {"evicted_total": 4, "creation_failed_total": 1}}
     out = lifecycle_totals(stats, "kmem")
@@ -116,3 +119,36 @@ def test_pool_at_or_below_ninety_percent_and_missing_fields_are_quiet() -> None:
         "pool_ltm": None,
         "pool_use_fraction": None,
     }
+
+
+def test_rematch_rate_is_reactivations_over_all_presentations() -> None:
+    before = {
+        "reactivated_total": 10,
+        "created_total": 5,
+        "creation_failed_total": 0,
+        "formation_suppressed_total": 1,
+    }
+    after = {
+        "reactivated_total": 16,
+        "created_total": 7,
+        "creation_failed_total": 1,
+        "formation_suppressed_total": 2,
+    }
+    out = rematch_rate(before, after)
+    # 6 / (6 + 2 + 1 + 1)
+    assert out["rate"] == 0.6
+    assert (out["delta_reactivated"], out["delta_created"]) == (6, 2)
+    assert (out["delta_creation_failed"], out["delta_formation_suppressed"]) == (1, 1)
+
+
+def test_rematch_rate_unknown_when_idle_or_counter_missing() -> None:
+    same = {
+        "reactivated_total": 3,
+        "created_total": 3,
+        "creation_failed_total": 0,
+        "formation_suppressed_total": 0,
+    }
+    assert rematch_rate(same, dict(same))["rate"] is None
+    older = {**same, "reactivated_total": None}
+    out = rematch_rate(older, older)
+    assert out["rate"] is None and out["delta_reactivated"] is None

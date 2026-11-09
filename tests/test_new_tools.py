@@ -220,6 +220,54 @@ class TestMemoryAreaRuntimeConfigTool:
         ]
 
     @pytest.mark.asyncio
+    async def test_interval_over_foreground_budget_rejected_before_sleep(self, monkeypatch):
+        from feagi_mcp import server
+
+        patched = self._patch_memory_endpoints(monkeypatch, {}, None)
+        slept = []
+
+        async def fake_sleep(s):
+            slept.append(s)
+
+        monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+        over = await patched.get_memory_area_runtime_config(
+            "mem_id", interval_s=server.FOREGROUND_BUDGET_S + 1
+        )
+        assert "lifecycle_totals" in over["error"]
+        assert f"{server.FOREGROUND_BUDGET_S:g}" in over["error"]
+        assert slept == []
+        ok = await patched.get_memory_area_runtime_config(
+            "mem_id", interval_s=server.FOREGROUND_BUDGET_S
+        )
+        assert slept == [server.FOREGROUND_BUDGET_S] and "error" not in ok
+
+    @pytest.mark.asyncio
+    async def test_interval_returns_rematch_rate_over_two_samples(self, monkeypatch):
+        """Two health samples interval_s apart give the re-match rate and its deltas."""
+        from feagi_mcp import server
+
+        patched = self._patch_memory_endpoints(monkeypatch, {}, None)
+        samples = [
+            {"created_total": 4, "reactivated_total": 10},  # tool's initial read
+            {"created_total": 5, "reactivated_total": 13},  # after the wait
+        ]
+
+        async def fake_health():
+            stats = samples.pop(0) if len(samples) > 1 else samples[0]
+            return {"status": "ok", "memory_area_stats": {"mem_id": dict(stats)}}
+
+        monkeypatch.setattr(server.feagi, "health_check", fake_health)
+        result = await patched.get_memory_area_runtime_config("mem_id", interval_s=0.001)
+        assert result["lifecycle_totals"]["reactivated_total"] == 10
+        assert result["rematch"]["rate"] == 0.75  # 3 / (3 + 1)
+        assert result["rematch"]["delta_reactivated"] == 3
+        assert result["rematch"]["delta_created"] == 1
+        bad = await patched.get_memory_area_runtime_config("mem_id", interval_s=0)
+        assert bad["error"]
+        plain = await patched.get_memory_area_runtime_config("mem_id")
+        assert plain["rematch"] is None
+
+    @pytest.mark.asyncio
     async def test_healthy_wiring_has_no_findings(self, monkeypatch):
         """An episodic_memory source and no stats yield no findings and unknown totals."""
         server = self._patch_memory_endpoints(monkeypatch, {}, None)
@@ -1500,7 +1548,7 @@ class TestMemoryNeuronTools:
         result = await server.list_memory_neurons("memory_area", page=2, page_size=10)
 
         assert result["memory_neuron_ids"] == [50000001]
-        list_memory_neurons.assert_awaited_once_with("memory_area", 2, 10)
+        list_memory_neurons.assert_awaited_once_with("memory_area", 2, 10, False)
 
     @pytest.mark.asyncio
     async def test_server_inspect_memory_neuron_tool(self, monkeypatch):
@@ -2876,6 +2924,29 @@ class TestResetWeightsRoutes:
         assert call.kwargs["params"] == {"src_cortical_area": "A", "dst_cortical_area": "B"}
         mock_client._client.get.return_value = _put_response(400, text="bad")
         assert (await mock_client.get_mapping_plasticity_frozen("A", "B"))["error"] == "HTTP 400"
+
+    @pytest.mark.asyncio
+    async def test_set_memory_area_learning_frozen_puts_body(self, mock_client):
+        mock_client._client.put.return_value = _put_response(
+            200, {"cortical_area": "m_a", "frozen": True}
+        )
+        result = await mock_client.set_memory_area_learning_frozen("m_a", True)
+        assert result["frozen"] is True
+        call = mock_client._client.put.await_args
+        assert call.args[0].endswith("/v1/cortical_area/learning_frozen")
+        assert call.kwargs["json"] == {"cortical_area": "m_a", "frozen": True}
+        mock_client._client.put.return_value = _put_response(400, text="not memory")
+        assert (await mock_client.set_memory_area_learning_frozen("c_a", True))["error"] == (
+            "HTTP 400"
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_learning_frozen_reads_bulk_route(self, mock_client):
+        body = {"memory_areas": ["m_a"], "mappings": [["A", "B"]]}
+        mock_client._client.get.return_value = _put_response(200, body)
+        result = await mock_client.get_learning_frozen()
+        assert result == body
+        assert mock_client._client.get.await_args.args[0].endswith("/v1/connectome/learning_frozen")
 
     @pytest.mark.asyncio
     async def test_area_incoming_weights(self, mock_client):

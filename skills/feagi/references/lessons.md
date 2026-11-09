@@ -133,8 +133,9 @@ Full method: [behavior-design.md](behavior-design.md).
   wrong-sign path but never flip it. Wire the correct sign, or wire both directions as
   candidates with mutual inhibition.
 - **A frozen `plasticity_flag` left from a test run silently stops learning.**
-  Read it back on every plastic mapping before a training run. (`freeze_mapping_plasticity()`
-  no longer clears the flag; it sets FEAGI's `plasticity_frozen`, which also survives save/load.)
+  Read it back on every plastic mapping before a training run. A freeze is a separate
+  brain-instance switch (`freeze_mapping_plasticity()`, `set_memory_area_learning_frozen()`): it
+  survives a brain snapshot but not a genome reload.)
 - **A sign-crossed rewire with initial weights above half the threshold fires both
   directions at once.** The opposing commands destabilize the body. Start
   candidate weights quiet, so several inputs must agree to fire.

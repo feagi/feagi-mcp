@@ -16,6 +16,7 @@ would remove it).
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -42,6 +43,8 @@ class UnitMatch:
 
     coding: UnitCoding
     unit_definition: dict[str, Any]
+    #: The unit's registered decoder properties (``entry[1]``), ``None`` when not a dict.
+    decoder_properties: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -52,6 +55,33 @@ class ChannelRegistration:
     channel: int
     physical_range: PhysicalRange | None
     friendly_name: str | None
+    #: Registered decoder properties of the unit (carries the incremental step size, if any).
+    decoder_properties: dict[str, Any] | None = None
+    #: The unit-level ``frame_change_handling`` flag (``Absolute``/``Incremental``), if stated.
+    unit_frame_change: str | None = None
+
+
+#: Decoder-properties key whose list carries ``[depth, positioning, speeds, step_size]``.
+_STEP_PROPERTIES_KEY = "PositionalServoTargetSpeed"
+_STEP_INDEX = 3
+
+
+def registered_step_size(properties: dict[str, Any] | None) -> float | None:
+    """The incremental step size (0 < step <= 1) the registration states, else ``None``.
+
+    Read positionally (index 3 of the ``PositionalServoTargetSpeed`` properties); a missing,
+    non-numeric, non-finite or out-of-range entry counts as not registered.
+    """
+    if not isinstance(properties, dict):
+        return None
+    raw = properties.get(_STEP_PROPERTIES_KEY)
+    if not isinstance(raw, list) or len(raw) <= _STEP_INDEX:
+        return None
+    step = raw[_STEP_INDEX]
+    if isinstance(step, bool) or not isinstance(step, (int, float)):
+        return None
+    step = float(step)
+    return step if math.isfinite(step) and 0.0 < step <= 1.0 else None
 
 
 def section_for_group(group: str) -> str:
@@ -64,14 +94,15 @@ def section_for_group(group: str) -> str:
     raise RegistrationError(f"only IPU/OPU areas have registered units, not {kind or '?'}")
 
 
-def _unit_entries(units: Any) -> list[dict[str, Any]]:
-    """Unit definitions of one unit key (each registered as ``[definition, properties]``)."""
-    found: list[dict[str, Any]] = []
+def _unit_entries(units: Any) -> list[tuple[dict[str, Any], dict[str, Any] | None]]:
+    """``(definition, properties)`` of one unit key (registered as ``[definition, properties]``)."""
+    found: list[tuple[dict[str, Any], dict[str, Any] | None]] = []
     if isinstance(units, list):
         for entry in units:
             meta = entry[0] if isinstance(entry, list) and entry else None
             if isinstance(meta, dict):
-                found.append(meta)
+                props = entry[1] if len(entry) > 1 and isinstance(entry[1], dict) else None
+                found.append((meta, props))
     return found
 
 
@@ -95,7 +126,7 @@ def match_unit(
     matches: list[UnitMatch] = []
     rejected: list[str] = []
     for unit_key, entries in units.items():
-        for meta in _unit_entries(entries):
+        for meta, props in _unit_entries(entries):
             if meta.get("cortical_unit_index") != unit_id:
                 continue
             try:
@@ -103,7 +134,7 @@ def match_unit(
             except ValueError as e:
                 rejected.append(f"{unit_key}: {e}")
                 continue
-            matches.append(UnitMatch(coding, meta))
+            matches.append(UnitMatch(coding, meta, props))
     if not matches:
         detail = f" ({'; '.join(rejected)})" if rejected else ""
         raise NoUnitError(
@@ -174,8 +205,15 @@ def channel_registration(match: UnitMatch, channel: int) -> ChannelRegistration:
     except ValueError as e:
         raise RegistrationError(f"channel {channel} physical_range is invalid: {e}") from e
     name = entry.get("friendly_name")
+    flags = match.unit_definition.get("io_configuration_flags")
+    frame = flags.get("frame_change_handling") if isinstance(flags, dict) else None
     return ChannelRegistration(
-        match.coding, channel, physical_range, name if isinstance(name, str) and name else None
+        match.coding,
+        channel,
+        physical_range,
+        name if isinstance(name, str) and name else None,
+        match.decoder_properties,
+        frame if isinstance(frame, str) else None,
     )
 
 

@@ -152,3 +152,13 @@ async def test_get_version_info_delegates_to_client(monkeypatch):
     monkeypatch.setattr(server.feagi, "get_version_info", fake_get_version_info)
     result = await server.get_version_info()
     assert result == expected
+
+
+async def test_unknown_tool_arguments_are_an_error_and_nothing_runs() -> None:
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    from feagi_mcp import server
+
+    with pytest.raises(ToolError) as exc:
+        await server.mcp.call_tool("get_burst_counter", {"help": True})
+    assert "help" in str(exc.value) and "Nothing ran" in str(exc.value)

@@ -11,7 +11,7 @@ Analysis, capability checks, tuning, checklist. The training method (method fit,
 - Make the stance balance before wiring a reflex
 - Tune with a run plan, never one value per stage
 - Innate vs learned
-- Motor targets are absolute and hold
+- Absolute motor targets average and hold
 - Start-of-goal checklist
 
 ## Stay bio-inspired
@@ -145,7 +145,9 @@ of the command threshold (a sense port's self-hold, which sets how many bursts i
 - Order: get a correct-sign reflex that helps (measured), then add learning, then measure
   again against the reflex alone.
 
-## Motor targets are absolute and hold
+## Absolute motor targets average and hold
+
+This section is about the absolute servo area. An incremental area instead integrates steps into a held target; both layouts and their decode: [io-encodings.md](io-encodings.md#positional-servo-absolute-incremental-speed).
 
 - A positional-servo absolute channel decodes the mean of its active z voxels into one
   target (bin rule: `convert_io_value`), and the controller holds it until the next command (silence = keep last target).

@@ -17,16 +17,20 @@ import uuid
 from typing import Any
 
 from feagi_mcp.spike_record import MAX_GAPS_LISTED, LedgerCollector
+from feagi_mcp.task_registry import public_view
 
+# A foreground hold answers inside one tool call, so it stays below MCP clients' tool-call
+# timeout; a background hold returns at once and may run for as long as a background
+# ``record_spikes`` window it drives.
 MAX_HOLD_S = 30.0
+MAX_BACKGROUND_HOLD_S = 600.0
 MAX_START_DELAY_S = 30.0
 POSTS_PER_BURST = 2.0
-MAX_HOLD_RECORDS = 20
 SETTLE_BURSTS = 3
 
 
 def validate_hold_args(
-    voxels: Any, duration_s: Any, start_delay_s: Any
+    voxels: Any, duration_s: Any, start_delay_s: Any, background: bool = False
 ) -> tuple[list[list[int]], float, float] | str:
     """Normalized ``(voxels, duration_s, start_delay_s)`` or an error message."""
     if not isinstance(voxels, list) or not voxels:
@@ -41,8 +45,10 @@ def validate_hold_args(
         delay = float(start_delay_s)
     except (TypeError, ValueError):
         return "duration_s and start_delay_s must be numbers"
-    if not 0 < duration <= MAX_HOLD_S:
-        return f"duration_s must be in (0, {MAX_HOLD_S:g}]"
+    cap = MAX_BACKGROUND_HOLD_S if background else MAX_HOLD_S
+    if not 0 < duration <= cap:
+        mode = "background" if background else "foreground (use background=True for longer)"
+        return f"duration_s must be in (0, {cap:g}] for a {mode} hold"
     if not 0 <= delay <= MAX_START_DELAY_S:
         return f"start_delay_s must be in [0, {MAX_START_DELAY_S:g}]"
     return clean, duration, delay
@@ -81,7 +87,7 @@ def landing_report(
 
 def hold_summary(state: dict[str, Any]) -> dict[str, Any]:
     """The public view of a hold record (no internal handles)."""
-    return {k: v for k, v in state.items() if not k.startswith("_")}
+    return public_view(state)
 
 
 async def run_hold(
@@ -163,23 +169,6 @@ async def run_hold(
         if collector is not None:
             await collector.close()
     return hold_summary(state)
-
-
-ACTIVE_HOLD_STATES = ("pending", "running")
-
-
-def prune_finished_holds(holds: dict[str, dict[str, Any]], limit: int) -> None:
-    """Drop the oldest finished holds until at most ``limit`` remain.
-
-    A pending or running hold is never dropped, because its record carries the cancel handle
-    (``get_stimulus_hold(cancel=True)``). The registry can therefore exceed ``limit`` while more
-    than ``limit`` holds are active; each hold is bounded by ``MAX_START_DELAY_S + MAX_HOLD_S``.
-    """
-    for hold_id in list(holds):
-        if len(holds) <= limit:
-            return
-        if holds[hold_id]["state"] not in ACTIVE_HOLD_STATES:
-            del holds[hold_id]
 
 
 def new_hold_state(area_id: str, voxels: list[list[int]], duration_s: float) -> dict[str, Any]:

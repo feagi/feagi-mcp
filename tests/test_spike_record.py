@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from feagi_mcp.feagi_client import FeagiClient
@@ -210,7 +211,7 @@ async def test_client_record_spikes_expands_region_before_the_cap() -> None:
 
     seen: dict[str, Any] = {}
 
-    async def fake_window(_c: Any, ids: list[str], *_a: Any) -> dict[str, Any]:
+    async def fake_window(_c: Any, ids: list[str], *_a: Any, **_k: Any) -> dict[str, Any]:
         seen["ids"] = ids
         return {"success": True}
 
@@ -226,3 +227,88 @@ async def test_client_record_spikes_expands_region_before_the_cap() -> None:
         fc.record_spikes_window = original
     assert seen["ids"] == sorted(members)
     assert result["regions_expanded"] == [{"region": "r1", "areas": 40}]
+
+
+async def test_budget_refuses_a_window_longer_than_one_call_and_releases() -> None:
+    client = FakeLedger()  # 0.001 s per burst
+    result = await record_spikes_window(client, [AREA], bursts=2000, budget_s=1.0)
+    assert result["success"] is False and "background=True" in result["error"]
+    assert client.released == [[AREA]]
+    ok = await record_spikes_window(FakeLedger(), [AREA], bursts=100, budget_s=1.0)
+    assert ok["success"] is True
+
+
+async def test_cancel_ends_the_window_early_with_a_partial_summary() -> None:
+    client = FakeLedger()
+    cancel = asyncio.Event()
+    cancel.set()
+    result = await record_spikes_window(client, [AREA], bursts=10_000, cancel=cancel)
+    assert result["cancelled"] is True and result["success"] is False
+    assert result["last_burst"] < result["first_burst"] + 10_000 - 1
+    assert client.released == [[AREA]]
+
+
+def _client_on(fake: FakeLedger) -> FeagiClient:
+    client = FeagiClient()
+
+    async def resolve_spike_areas(areas: Any) -> tuple[list[str], list[Any], None]:
+        return list(areas), [], None
+
+    client.resolve_spike_areas = resolve_spike_areas  # type: ignore[method-assign]
+    for name in (
+        "get_burst_engine_config",
+        "get_burst_counter",
+        "get_fire_history",
+        "acquire_fire_history",
+        "release_fire_history",
+    ):
+        setattr(client, name, getattr(fake, name))
+    return client
+
+
+async def test_foreground_record_spikes_refuses_past_the_call_budget() -> None:
+    fake = FakeLedger()
+
+    async def slow_config() -> dict[str, Any]:
+        return {"burst_interval_seconds": 0.005}
+
+    fake.get_burst_engine_config = slow_config  # type: ignore[method-assign]
+    client = _client_on(fake)
+    result = await client.record_spikes([AREA], 20_000)
+    assert result["success"] is False and "get_spike_recording" in result["error"]
+
+
+async def test_background_record_spikes_returns_at_once_and_reports_the_summary() -> None:
+    fake = FakeLedger()
+    client = _client_on(fake)
+    started = await client.record_spikes([AREA], 100, background=True)
+    assert started["background"] is True and started["state"] == "running"
+    rid = started["recording_id"]
+    await client._recordings[rid]["_task"]
+    done = await client.get_spike_recording(rid)
+    assert done["state"] == "done"
+    assert done["result"]["areas"][AREA]["bursts_observed"] == 100
+    assert "_task" not in done and "_cancel" not in done
+    listing = await client.get_spike_recording()
+    assert listing["recordings"][0]["recording_id"] == rid
+    assert "error" in await client.get_spike_recording("nope")
+    bad = await client.record_spikes([AREA], 0, background=True)
+    assert bad["success"] is False and not client._recordings.get("x")
+    assert len(client._recordings) == 1
+
+
+async def test_background_record_spikes_cancel_returns_partial_result() -> None:
+    fake = FakeLedger()
+
+    async def counter() -> dict[str, Any]:
+        fake.counter += 1  # slow enough that the window is still running at cancel
+        return {"burst_counter": fake.counter}
+
+    fake.get_burst_counter = counter  # type: ignore[method-assign]
+    client = _client_on(fake)
+    started = await client.record_spikes([AREA], 20_000, background=True)
+    await asyncio.sleep(0.05)
+    cancelled = await client.get_spike_recording(started["recording_id"], cancel=True)
+    assert cancelled["state"] == "cancelled"
+    assert cancelled["result"]["cancelled"] is True
+    assert fake.released == [[AREA]]

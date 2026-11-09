@@ -331,6 +331,8 @@ class FakeBrain:
         self.region_moves_to: list[int] | None = None
         self.region_args: dict[str, Any] = {}
         self.log: list[tuple[str, Any]] = []
+        self.sent: dict[str, Any] = {}
+        self.store_empty = False
 
     async def get_cortical_id_name_mapping(self) -> dict[str, str]:
         return dict(self.live)
@@ -377,7 +379,14 @@ class FakeBrain:
         self.log.append(("morphology", name))
         if name.endswith("rest_to_opu"):
             return {"error": "HTTP 409", "message": "morphology already exists"}
+        self.sent[name] = _params
         return {"success": True}
+
+    async def get_morphology(self, name: str, _include_parameters: bool = False) -> dict[str, Any]:
+        params = self.sent.get(name, {})
+        rows = params.get("patterns") or params.get("vectors") or []
+        count = 0 if self.store_empty else len(rows)
+        return {"name": name, "pattern_count": count, "success": True}
 
     async def get_cortical_mapping(self, _src: str, _dst: str) -> dict[str, Any]:
         return {"rules": [{"morphology_id": "old"}]}
@@ -1334,3 +1343,43 @@ async def test_client_resolves_the_opu_coding_from_the_registration() -> None:
     missing = await client.build_circuit_from_spec(spec, dry_run=True)
     assert "OPU 'Opu': unknown cortical area" in missing["errors"][0]
     await client.close()
+
+
+def _patterns_spec(rows: list[Any]) -> dict[str, Any]:
+    return {
+        "region": REGION,
+        "areas": [
+            {"name": "In", "dimensions": [1, 1, 1]},
+            {"name": "Out", "dimensions": [1, 1, 1]},
+        ],
+        "morphologies": [{"name": "m_str", "type": "patterns", "parameters": {"patterns": rows}}],
+        "mappings": [{"src": "In", "dst": "Out", "rules": [{"morphology": "m_str", "psc": 2}]}],
+    }
+
+
+def test_patterns_string_numeral_coordinates_are_rejected_naming_the_morphology() -> None:
+    report, _ = expand_spec(_patterns_spec([[["1", 0, 0], ["*", "*", "*"]]]))
+    assert report["valid"] is False
+    msg = " ".join(report["errors"])
+    assert "m_str" in msg and "'1'" in msg and "src.x" in msg
+
+
+def test_patterns_ints_and_wildcards_are_accepted() -> None:
+    report, _ = expand_spec(_patterns_spec([[[1, "*", "?"], ["!", 0, "?+1"]]]))
+    assert report["valid"] is True, report["errors"]
+
+
+async def test_execute_plan_fails_loudly_when_feagi_stores_an_empty_pattern_list() -> None:
+    brain = FakeBrain()
+    brain.store_empty = True
+    _, plan = expand_spec(_patterns_spec([[[1, 0, 0], ["*", "*", "*"]]]))
+    out = await execute_plan(brain, plan)
+    assert out["failed"]["step"] == "verify stored morphology m_str"
+    assert "stored 0" in out["failed"]["detail"]
+    assert not any(k == "mapping" for k, _ in brain.log)
+
+
+async def test_execute_plan_accepts_a_fully_stored_pattern_list() -> None:
+    brain = FakeBrain()
+    _, plan = expand_spec(_patterns_spec([[[1, 0, 0], ["*", "*", "*"]]]))
+    assert (await execute_plan(brain, plan))["failed"] is None

@@ -154,6 +154,7 @@ locally with `interpret_cortical_id()`. Details: [references/concepts.md](refere
 16. **Read the memory design guide first.** Before designing any circuit with a MEMORY area or
     associative mapping, read `references/memory-design*.md`
     ([memory-design.md](references/memory-design.md), [structures](references/memory-design-structures.md)).
+17. **Check what FEAGI already does.** Before designing a new mechanism or asking the user, check what FEAGI already does for the problem (for memory consolidation: repetition via lifespan growth and the long-term threshold, `references/memory-design.md`) and try tuning it first.
 
 ## Keep responses small
 
@@ -194,6 +195,7 @@ independent calls together in one turn, and never poll physics or logs in a loop
 | Test or debug signal flow, a silent output, a dead FEAGI | `probe_area_response()`, `trace_signal_path()`, `diagnose_feagi_runtime()` | [debugging.md](references/debugging.md), [drift, learning, runtime failure](references/debugging-runtime.md) |
 | Every burst of an area's firing, or a stimulus held on every burst | `record_spikes()`, `hold_stimulus()` | [debugging.md](references/debugging.md#record-every-burst-and-hold-a-stimulus) |
 | Change the burst frequency | `set_burst_engine_frequency(frequency_hz)` once. The return confirms it | [embodiment-burst-measuring.md](references/embodiment-burst-measuring.md#choosing-the-burst-rate) |
+| How a sensor or motor value maps to voxels (linear, fractional, signed, absolute, incremental servo, IMU, vision, audio, text) | `convert_io_value()`, `get_cortical_template()`, `get_agent_device_registrations()` | [io-encodings.md](references/io-encodings.md) |
 | Robots, joints, MuJoCo scenes, simulator assets | `get_registered_agents()`, `get_agent_joint_map()`, `get_mujoco_scene_config()` | [embodiment.md](references/embodiment.md) |
 | Measure robot behavior (balance, episodes, brain-to-body timing) | `measure_balance()`, `record_aligned_trace()` | [embodiment-burst-measuring.md](references/embodiment-burst-measuring.md#measuring-behavior) |
 | Save, snapshot, load, or merge genomes | `save_brain_snapshot()`, `save_genome_to_filesystem()`, `queue_amalgamation_by_payload()` | [genome-lifecycle.md](references/genome-lifecycle.md) |
@@ -289,14 +291,7 @@ skill).
    inputs with `hold_stimulus(..., background=True)` (cancel it with
    `get_stimulus_hold(hold_id, cancel=true)`) or `schedule_stimulus` for burst-exact pulses.
 5. Summarize what was created, and offer `save_genome_to_filesystem()`.
-6. Sharing nudge (rare). Only after a verified result passed its acceptance check, or a
-   self-contained reusable circuit (a region with clear inputs and outputs) was just finished
-   and verified: suggest publishing to Brain Hub in one sentence naming what would be shared
-   (genome or connectome, which region). At most once per goal or session, never after the
-   user declined, never while troubleshooting. Say that published versions cannot be edited
-   but can be superseded, that the creator can make the work private later (copies people
-   already made cannot be taken back), and that connectomes carry learned data and need
-   two-step consent. Publishing happens in Studio (Publish version…); never publish yourself.
+6. Sharing nudge (rare). When a check just passed, follow [Propose publishing what just worked](references/hub-block-datasheet.md).
 
 ### Wire A to B
 

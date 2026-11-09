@@ -8,13 +8,15 @@ import httpx
 
 from feagi_mcp.feagi_client import FeagiClient
 from feagi_mcp.stimulus_hold import (
-    MAX_HOLD_RECORDS,
+    MAX_BACKGROUND_HOLD_S,
+    MAX_HOLD_S,
     landing_report,
     new_hold_state,
-    prune_finished_holds,
     run_hold,
     validate_hold_args,
 )
+from feagi_mcp.task_registry import MAX_FINISHED_RECORDS as MAX_HOLD_RECORDS
+from feagi_mcp.task_registry import prune_finished as prune_finished_holds
 
 AREA = "area_a"
 VOXELS = [[0, 0, 1], [0, 0, 2]]
@@ -76,6 +78,19 @@ def test_validate_hold_args() -> None:
     assert isinstance(validate_hold_args([[1, 2, 3]], 0, 0), str)
     assert isinstance(validate_hold_args([[1, 2, 3]], 31, 0), str)
     assert isinstance(validate_hold_args([[1, 2, 3]], 1, -1), str)
+
+
+def test_background_hold_may_outlast_the_foreground_cap() -> None:
+    long_s = MAX_HOLD_S + 1
+    assert isinstance(validate_hold_args([[1, 2, 3]], long_s, 0), str)
+    assert validate_hold_args([[1, 2, 3]], long_s, 0, background=True) == (
+        [[1, 2, 3]],
+        long_s,
+        0.0,
+    )
+    assert isinstance(
+        validate_hold_args([[1, 2, 3]], MAX_BACKGROUND_HOLD_S + 1, 0, background=True), str
+    )
 
 
 def test_landing_window_is_after_first_post_through_one_past_last() -> None:

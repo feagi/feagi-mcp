@@ -9,6 +9,7 @@ import math
 import os
 import re
 import time
+import uuid
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -98,7 +99,7 @@ from feagi_mcp.io_value_conversion import (
 )
 from feagi_mcp.memory_diagnostics import annotate_shared_edges
 from feagi_mcp.morphology_scaling import ScaleRowsError, plan_scaled_rows
-from feagi_mcp.motor_channel_explain import explain_channel, lint_areas
+from feagi_mcp.motor_channel_explain import LINT_VOXEL_BUDGET, explain_channel, lint_areas
 from feagi_mcp.percentage_coding import UnitCoding
 from feagi_mcp.placement_policy import (
     check_min_separation_to_existing,
@@ -125,17 +126,26 @@ from feagi_mcp.runtime_diagnostics import (
     log_missing_reason,
     select_local_log_diagnosis,
 )
-from feagi_mcp.spike_record import expand_region_refs, record_spikes_window
+from feagi_mcp.spike_record import (
+    FOREGROUND_BUDGET_S,
+    expand_region_refs,
+    record_spikes_window,
+    validate_record_args,
+)
 from feagi_mcp.stance_mapping import compile_stance_offset_rows
 from feagi_mcp.stimulus_hold import (
-    MAX_HOLD_RECORDS,
     hold_summary,
     new_hold_state,
-    prune_finished_holds,
     run_hold,
     validate_hold_args,
 )
 from feagi_mcp.synapse_counts import edge_synapse_counts
+from feagi_mcp.task_registry import (
+    ACTIVE_STATES,
+    MAX_FINISHED_RECORDS,
+    prune_finished,
+    public_view,
+)
 from feagi_mcp.value_coding import (
     PROJECTOR_MORPHOLOGY,
     bins_geometry,
@@ -1256,6 +1266,7 @@ class FeagiClient:
         self._client = httpx.AsyncClient(timeout=timeout, headers=headers)
         self._fire_history_refs: dict[str, int] = {}
         self._holds: dict[str, dict[str, Any]] = {}
+        self._recordings: dict[str, dict[str, Any]] = {}
 
     async def close(self) -> None:
         """Close the HTTP client."""
@@ -2810,9 +2821,9 @@ class FeagiClient:
     ) -> dict[str, Any]:
         """PUT /v1/cortical_mapping/plasticity_frozen: freeze or resume one mapping's learning.
 
-        Body ``{src_cortical_area, dst_cortical_area, frozen}``; FEAGI stores
-        ``plasticity_frozen`` on the mapping's plastic rules and keeps rule, synapses and
-        weights. Returns ``{src_cortical_area, dst_cortical_area, frozen}``; HTTP 400 when
+        Body ``{src_cortical_area, dst_cortical_area, frozen}``; FEAGI keeps the switch on the
+        running brain (not on the genome's rules) and leaves rule, synapses and weights as
+        they are. Returns ``{src_cortical_area, dst_cortical_area, frozen}``; HTTP 400 when
         the mapping is unknown or holds no plastic rule.
         """
         try:
@@ -2834,8 +2845,8 @@ class FeagiClient:
     async def get_mapping_plasticity_frozen(self, src_area: str, dst_area: str) -> dict[str, Any]:
         """GET /v1/cortical_mapping/plasticity_frozen: read one mapping's freeze state.
 
-        Returns ``{src_cortical_area, dst_cortical_area, frozen}``; ``frozen`` is true when any
-        plastic rule carries ``plasticity_frozen`` and null when the mapping does not exist.
+        Returns ``{src_cortical_area, dst_cortical_area, frozen}``: the brain-instance switch for
+        the mapping, null when the mapping does not exist.
         """
         try:
             response = await self._client.get(
@@ -2847,6 +2858,35 @@ class FeagiClient:
             return {"error": f"HTTP {response.status_code}", "message": response.text}
         except Exception as e:
             logger.error(f"get_mapping_plasticity_frozen failed: {e}")
+            return {"error": str(e)}
+
+    async def set_memory_area_learning_frozen(self, area: str, frozen: bool) -> dict[str, Any]:
+        """PUT /v1/cortical_area/learning_frozen: freeze or resume one memory area's learning.
+
+        Body ``{cortical_area, frozen}``; a brain-instance switch (kept in brain snapshots,
+        cleared on genome reload). HTTP 400 for a non-memory area.
+        """
+        try:
+            response = await self._client.put(
+                f"{self.base_url}/v1/cortical_area/learning_frozen",
+                json={"cortical_area": area, "frozen": bool(frozen)},
+            )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return {"error": f"HTTP {response.status_code}", "message": response.text}
+        except Exception as e:
+            logger.error(f"set_memory_area_learning_frozen failed: {e}")
+            return {"error": str(e)}
+
+    async def get_learning_frozen(self) -> dict[str, Any]:
+        """GET /v1/connectome/learning_frozen: ``{memory_areas: [id], mappings: [[src, dst]]}``."""
+        try:
+            response = await self._client.get(f"{self.base_url}/v1/connectome/learning_frozen")
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return {"error": f"HTTP {response.status_code}", "message": response.text}
+        except Exception as e:
+            logger.error(f"get_learning_frozen failed: {e}")
             return {"error": str(e)}
 
     async def reset_area_incoming_weights(self, area_ids: list[str]) -> dict[str, Any]:
@@ -3597,23 +3637,105 @@ class FeagiClient:
         bursts: int = 200,
         csv_path: str | None = None,
         max_runs: int = 20,
+        background: bool = False,
     ) -> dict[str, Any]:
         """Burst-exact firing of ``areas`` (ids or names) for ``bursts`` bursts.
 
         See :mod:`feagi_mcp.spike_record`. Returns a compact summary; spikes go to
-        ``csv_path`` when given.
+        ``csv_path`` when given. A foreground call is refused when the window would outlast
+        ``FOREGROUND_BUDGET_S``; ``background=True`` returns a ``recording_id`` at once and
+        :meth:`get_spike_recording` returns the same summary when the window has passed.
         """
         try:
             ids, expanded, problem = await self.resolve_spike_areas(areas)
             if problem:
                 return {"success": False, "error": problem}
-            result = await record_spikes_window(self, ids, bursts, csv_path, max_runs)
+            problem = validate_record_args(ids, bursts, max_runs)
+            if problem:
+                return {"success": False, "error": problem}
+            if background:
+                return self._start_spike_recording(ids, expanded, bursts, csv_path, max_runs)
+            result = await record_spikes_window(
+                self, ids, bursts, csv_path, max_runs, budget_s=FOREGROUND_BUDGET_S
+            )
             if expanded:
                 result["regions_expanded"] = expanded
             return result
         except Exception as e:
             logger.error(f"record_spikes failed: {e}")
             return {"success": False, "error": str(e)}
+
+    def _start_spike_recording(
+        self,
+        ids: list[str],
+        expanded: list[dict[str, Any]],
+        bursts: int,
+        csv_path: str | None,
+        max_runs: int,
+    ) -> dict[str, Any]:
+        """Register a background recording and start its task."""
+        state: dict[str, Any] = {
+            "recording_id": uuid.uuid4().hex[:12],
+            "state": "running",
+            "areas": ids,
+            "bursts_requested": bursts,
+            "_cancel": asyncio.Event(),
+        }
+        if expanded:
+            state["regions_expanded"] = expanded
+
+        async def run() -> None:
+            try:
+                result = await record_spikes_window(
+                    self, ids, bursts, csv_path, max_runs, cancel=state["_cancel"]
+                )
+                if expanded:
+                    result["regions_expanded"] = expanded
+                state["result"] = result
+                if result.get("cancelled"):
+                    state["state"] = "cancelled"
+                elif "first_burst" in result:
+                    state["state"] = "done"
+                else:
+                    state["state"] = "failed"
+                    state["error"] = result.get("error")
+            except Exception as e:  # noqa: BLE001 - reported in the recording record
+                logger.error(f"background record_spikes failed: {e}")
+                state["state"] = "failed"
+                state["error"] = str(e)
+
+        self._recordings[state["recording_id"]] = state
+        prune_finished(self._recordings, MAX_FINISHED_RECORDS)
+        state["_task"] = asyncio.create_task(run())
+        return {**public_view(state), "background": True}
+
+    async def get_spike_recording(
+        self, recording_id: str | None = None, cancel: bool = False
+    ) -> dict[str, Any]:
+        """State of one background recording (with its summary once finished), or the list."""
+        if recording_id is None:
+            return {
+                "recordings": [
+                    {
+                        "recording_id": r["recording_id"],
+                        "state": r["state"],
+                        "bursts_requested": r["bursts_requested"],
+                    }
+                    for r in self._recordings.values()
+                ]
+            }
+        state = self._recordings.get(recording_id)
+        if state is None:
+            return {
+                "error": f"unknown recording_id {recording_id}",
+                "known": list(self._recordings),
+            }
+        if cancel and state["state"] in ACTIVE_STATES:
+            state["_cancel"].set()
+            task = state.get("_task")
+            if task is not None:
+                await asyncio.wait_for(asyncio.shield(task), timeout=10.0)
+        return public_view(state)
 
     async def hold_stimulus(
         self,
@@ -3626,7 +3748,7 @@ class FeagiClient:
     ) -> dict[str, Any]:
         """Hold ``voxels`` of ``area`` firing for ``duration_s`` (see :mod:`stimulus_hold`)."""
         try:
-            norm = validate_hold_args(voxels, duration_s, start_delay_s)
+            norm = validate_hold_args(voxels, duration_s, start_delay_s, background)
             if isinstance(norm, str):
                 return {"success": False, "error": norm}
             clean, duration, delay = norm
@@ -3635,7 +3757,7 @@ class FeagiClient:
                 return {"success": False, "error": problem}
             state = new_hold_state(area_id, clean, duration)
             self._holds[state["hold_id"]] = state
-            prune_finished_holds(self._holds, MAX_HOLD_RECORDS)
+            prune_finished(self._holds, MAX_FINISHED_RECORDS)
             run = run_hold(self, state, area_id, clean, duration, delay, verify)
             if background:
                 state["_task"] = asyncio.create_task(run)
@@ -3659,7 +3781,7 @@ class FeagiClient:
         state = self._holds.get(hold_id)
         if state is None:
             return {"error": f"unknown hold_id {hold_id}", "known": list(self._holds)}
-        if cancel and state["state"] in ("pending", "running"):
+        if cancel and state["state"] in ACTIVE_STATES:
             state["_cancel"].set()
             task = state.get("_task")
             if task is not None:
@@ -4665,6 +4787,19 @@ class FeagiClient:
                     "message": f"ltm_eviction must be 'lru' or 'none'; got {policy!r}.",
                 }
             updates = {**updates, "ltm_eviction": policy.strip().lower()}
+        if "replay_trigger" in updates:
+            trigger = updates["replay_trigger"]
+            if not isinstance(trigger, str) or trigger.strip().lower() not in (
+                "any_fire",
+                "recall_only",
+            ):
+                return {
+                    "error": "invalid_replay_trigger",
+                    "message": (
+                        f"replay_trigger must be 'any_fire' or 'recall_only'; got {trigger!r}."
+                    ),
+                }
+            updates = {**updates, "replay_trigger": trigger.strip().lower()}
         try:
             request_data = {"cortical_id": cortical_id}
             request_data.update(updates)
@@ -6143,8 +6278,12 @@ class FeagiClient:
         cortical_id: str,
         page: int = 0,
         page_size: int = 50,
+        detail: bool = False,
     ) -> dict[str, Any]:
-        """List paginated runtime memory-neuron IDs and counts for one memory area."""
+        """List paginated runtime memory-neuron IDs and counts for one memory area.
+
+        ``detail`` adds per-neuron lifecycle fields for the page.
+        """
         area_id = str(cortical_id).strip()
         if not area_id:
             return {"error": "cortical_id must be non-empty"}
@@ -6161,6 +6300,7 @@ class FeagiClient:
                     "cortical_id": area_id,
                     "page": str(page),
                     "page_size": str(page_size),
+                    **({"detail": "true"} if detail else {}),
                 },
             )
             if response.status_code == 200:
@@ -6168,6 +6308,32 @@ class FeagiClient:
             return self._http_failure_payload(endpoint=endpoint, response=response)
         except Exception as e:
             logger.error("list_memory_neurons failed: %s", e)
+            return self._request_exception_payload(endpoint=endpoint, exception=e)
+
+    async def delete_memory_neurons(self, area: str, neuron_ids: list[int]) -> dict[str, Any]:
+        """Delete memory neurons by id (``DELETE /v1/connectome/memory_neuron``)."""
+        area_ref = str(area).strip() if isinstance(area, str) else ""
+        if not area_ref:
+            return {"error": "area must be non-empty"}
+        if (
+            not isinstance(neuron_ids, list)
+            or not neuron_ids
+            or any(isinstance(i, bool) or not isinstance(i, int) or i < 1 for i in neuron_ids)
+        ):
+            return {"error": "neuron_ids must be a non-empty list of positive integers"}
+
+        endpoint = "/v1/connectome/memory_neuron"
+        try:
+            response = await self._client.request(
+                "DELETE",
+                f"{self.base_url}{endpoint}",
+                json={"cortical_id": area_ref, "neuron_ids": neuron_ids},
+            )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            return self._http_failure_payload(endpoint=endpoint, response=response)
+        except Exception as e:
+            logger.error("delete_memory_neurons failed: %s", e)
             return self._request_exception_payload(endpoint=endpoint, exception=e)
 
     async def inspect_memory_neuron(self, neuron_id: int) -> dict[str, Any]:
@@ -8488,7 +8654,10 @@ class FeagiClient:
             return {"error": str(e)}
 
     async def lint_motor_channels(
-        self, opu_area: str | None = None, agent_id: str | None = None
+        self,
+        opu_area: str | None = None,
+        agent_id: str | None = None,
+        max_voxel_reads: int | None = None,
     ) -> dict[str, Any]:
         """Warn, with evidence, about OPU channels with no or several writers (read-only).
 
@@ -8497,6 +8666,12 @@ class FeagiClient:
         bounded and anything left unread is reported (see :mod:`feagi_mcp.motor_channel_explain`).
         """
         try:
+            if max_voxel_reads is not None and (
+                isinstance(max_voxel_reads, bool)
+                or not isinstance(max_voxel_reads, int)
+                or max_voxel_reads < 1
+            ):
+                return {"error": "max_voxel_reads must be an integer >= 1"}
             if opu_area is not None:
                 (area_id,), problem = await self._resolve_known_areas(opu_area)
                 if problem:
@@ -8522,7 +8697,8 @@ class FeagiClient:
                 if agent_id is not None:
                     return {"error": str(e)}
                 registration_error = str(e)
-            result = await lint_areas(self, records, agents)
+            budget = LINT_VOXEL_BUDGET if max_voxel_reads is None else max_voxel_reads
+            result = await lint_areas(self, records, agents, budget)
             if registration_error:
                 result["registration"] = {"error": registration_error, "decode": "unavailable"}
             return result

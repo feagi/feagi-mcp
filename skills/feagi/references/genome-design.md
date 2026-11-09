@@ -23,7 +23,7 @@ straight to "Build a circuit" (act with defaults).
 2. **Safety:** list what must never happen (a fall wired to Death, servo range, runaway or
    silent population, reward wireheading, memory pool full) and the hard-wired veto for each.
 3. **Facts:** embodiment, burst rate derived from the body, neuron and synapse budget.
-4. **Hub first:** search_brain_hub_genomes, show only a match worth acting on, prefer augment_genome_from_hub, record ancestry.
+4. **Hub first:** search_brain_hub_genomes (on a staging build it includes public production genomes, labeled by catalog; pass that catalog to augment), show only a match worth acting on, prefer augment_genome_from_hub, record ancestry.
 5. **Blocks:** behaviors are Lego blocks for Brain Hub ("Decompose into modules"); one region per function, each with its own acceptance number and tool; a
    port contract row (shape, code, sign, latency, driver) per port.
 6. **Mechanism:** innate wiring first; memory only for few patterns; plasticity only with a
@@ -74,7 +74,8 @@ genome needs the same steps.
 ## Hub first
 
 Reuse beats building. In Studio: search_brain_hub_genomes with the task's key terms, then show
-only a match worth acting on. Same rules as [building-circuits.md](building-circuits.md) step 0.
+only a match worth acting on. On a staging build that call includes public production genomes,
+each labeled by catalog; pass that catalog to augment. Same rules as [building-circuits.md](building-circuits.md) step 0.
 
 | Judge a hit by | Meaning |
 |---|---|
@@ -84,9 +85,9 @@ only a match worth acting on. Same rules as [building-circuits.md](building-circ
 
 Use augment_genome_from_hub into a scratch experiment, keep what matches a module row, cut the
 rest, and note the ancestry in the design. Say "nothing fits" in one line when no hit matches a
-module, and design that module from patterns. Region exports drop outgoing mappings and no tool
-declares a region's ports, so re-create the glue mappings at assembly; the contract table below
-is the workaround.
+module, and design that module from patterns. Region exports drop outgoing mappings, so
+re-create the glue mappings at assembly. Declare a region's ports with `package_region_for_hub`
+(`ports{inputs,outputs}`); the contract table below records them.
 
 ## Decompose into modules
 
@@ -128,9 +129,10 @@ Types, magnitude semantics, driver timing and recipes: [modulators.md](modulator
 
 | Type | Orchestrates |
 |---|---|
-| `synaptic.learning_rate` | phases: -100% on a driver stops weight commits of the subscribed plastic rules |
+| `synaptic.learning_rate` | phases: -100% on a driver stops all learning (commits, traces, synthesis) on the subscribed plastic rules |
 | `synaptic.reward` | credit, from hard-wired detector areas only |
 | `memory.formation` | salience: -100% stops new memory neurons forming |
+| `memory.freeze` | phases: m > 0 freezes a memory area (no new, ageing or learning; recall continues) |
 | `synaptic.gate`, `synaptic.transmission_gain` | arbitration between modules: a gate conducts only while its driver fires |
 | `neuro.firing_threshold`, `neuro.leak`, `neuro.firing_probability` | an area-wide state: excitability, integration time |
 

@@ -23,7 +23,7 @@ learning phases, memory formation), not only for learning. Learning details:
 - **Timing:** driver fires on burst t, the factor applies from burst t+1 and is recomputed every
   burst (engine:399-405; test_conditional_gate.rs:119-160). A one-shot trigger holds for the
   spike train: forced refires at the trigger potential, then rest (engine:344-394).
-- **Subscribe:** `neuro.*` and `memory.formation` on cortical areas (area property
+- **Subscribe:** `neuro.*`, `memory.formation` and `memory.freeze` on cortical areas (area property
   `modulators`); `synaptic.*` on mapping rules (rule key `modulators`). Wrong level or unknown id
   is rejected at write time (genome_service_impl.rs:1403-1430, connectome_service_impl.rs:3130-3155).
 - **Groups:** the synaptic ids of one rule form a group id stamped on that mapping's synapses;
@@ -38,6 +38,7 @@ learning phases, memory formation), not only for learning. Learning details:
 | `synaptic.gate` | largest s (open if any gate is open) | kind:199 |
 | Gate with gain in one group | gate x gain, so a closed gate zeroes it | engine:525-530 |
 | `memory.formation` | product of (1 + s), clamped 0..1 | kind:205 |
+| `memory.freeze` | frozen while the combined signal is > 0 | feagi-core, not re-read here |
 
 ## Types
 
@@ -50,9 +51,10 @@ Silent driver = rest value. Every type accepts `graded`; it scales s by driver M
 | `neuro.firing_probability` | area | excitability x (1+s), clamp 0..1: -70 = about 30% of threshold crossings fire | baseline; positive m on baseline 1 does nothing |
 | `synaptic.transmission_gain` | mapping | each synapse's final contribution x (1+s): +100 = 2x, -100 = 0 | factor 1 |
 | `synaptic.reward` | mapping | adds s to R: +100 reward, -100 punishment; R = summed reward x learning factor (npu.rs:6484-6498) | R = 0; mapping is reward-gated |
-| `synaptic.learning_rate` | mapping | multiplies the commit (eta): +50 = 1.5x, -100 = 0 | factor 1 |
+| `synaptic.learning_rate` | mapping | multiplies the commit (eta): +50 = 1.5x; a combined factor <= 0 (-100) stops all learning on the subscribed plastic rule | factor 1 |
 | `synaptic.gate` | mapping | closed (0) unless the driver fires; then the factor is s: +100 passes all, +50 half, m <= 0 never opens, m > 100 amplifies | closed, also before the first burst (engine:111-128; test_conditional_gate.rs:104-117) |
 | `memory.formation` | memory area | factor clamp(1+s, 0, 1); new memory neurons are blocked only at factor 0, so m = -100 at full drive; -50 and any positive m do nothing (engine:174-190) | forms normally; recall and existing memories keep running (plasticity/src/service.rs:4916-4950) |
+| `memory.freeze` | memory area | m > 0 only; area is frozen while the driver's combined signal > 0 (see recipe 2) | not frozen; non-memory areas reject it |
 
 ## Recipes
 
@@ -63,16 +65,27 @@ Verify each with `record_spikes()` (burst-exact `fire_fraction`) unless the line
    build order (npu.rs:6046-6089). `set_mapping_modulators()` with a reward id also switches the
    rule to `rstdp` (server.py:1437-1450); set `eligibility_decay_bursts` for late reward. Read:
    weight stats in `diagnose_mapping_plasticity()`, `watch_mapping_weights()`.
-2. **Freeze learning for a test phase.** One `synaptic.learning_rate` at -100 on a `LearnOff`
-   driver; subscribe every plastic rule (`modulator_usage()` lists them). R becomes 0, so no
-   weight commit. It does not stop `rstdp` eligibility traces (they keep growing and a later
-   reward commits them), and a plain `stdp` associative rule can still create synapses, because only
-   reward-gated rules check R before synthesis (npu.rs:6689-6692). For a hard stop use
-   `freeze_mapping_plasticity()` (sets `plasticity_frozen`; rule, synapses and weights stay). Read: `watch_mapping_weights()` flat under co-firing.
+2. **Freeze learning for a test phase.** Three levels, all stop weight commits and synapse
+   synthesis and pause (not clear) eligibility traces; pick by scope (feagi-core behavior, not
+   re-measured by this skill):
+   - *Circuit-driven, plastic mappings:* one `synaptic.learning_rate` at -100 on a `LearnOff`
+     driver, subscribed on every plastic rule (`modulator_usage()` lists them). A combined
+     factor <= 0 freezes `stdp`, `rstdp` and `associative_memory` rules; graded factors > 0
+     only scale eta.
+   - *Circuit-driven, memory areas:* `memory.freeze` (m > 0) subscribed on the memory area: it
+     becomes a full snapshot (no new memory neurons, no ageing or expiry, no lifespan growth, no
+     long-term conversion or consolidation, never evicted by other areas) and learns nothing on
+     mappings into or out of it. Existing memory neurons still fire.
+   - *Manual switch:* `freeze_mapping_plasticity()` (one mapping) and
+     `set_memory_area_learning_frozen()` (one memory area). These are brain-instance state, not
+     genome: kept in brain snapshots, cleared on genome reload. The Brain Visualizer "Learning"
+     toggle sets the same switches.
+   Read: `watch_mapping_weights()` flat under co-firing; `get_memory_area_runtime_config()`
+   `created_total` flat.
 3. **Salience-gated memory formation.** `memory.formation` at -100, `set_area_modulators()` on the
    memory area. Driver active means blocked, so make the driver tonic (steady drive) and let the
    salient event inhibit it through an inhibitory mapping: formation opens only then. (Design
-   inference, not run end to end.) Read: `get_memory_area_runtime_config()`
+   inference, not run end to end.) To stop all learning in the area, not only creation, use `memory.freeze` (recipe 2). Read: `get_memory_area_runtime_config()`
    `formation_suppressed_total` rises while `created_total` stays flat.
 4. **Attention or arbitration.** Subscribe each candidate path's mapping to its own
    `synaptic.gate` (m = +100) whose driver the path's selector feeds: only the selected path

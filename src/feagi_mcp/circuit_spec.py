@@ -24,7 +24,8 @@ Spec::
 may be deleted and rebuilt in one spec). ``edit_areas`` changes ``properties`` of live areas
 that are members of the existing ``region.region_id`` (new areas in that region are ordinary
 ``areas`` with a ``position``). A mapping with ``frozen: true`` is written as given, then frozen
-through ``PUT /v1/cortical_mapping/plasticity_frozen`` and read back with the GET route; the
+through ``PUT /v1/cortical_mapping/plasticity_frozen`` (a brain-instance switch, cleared on
+genome reload) and read back with the GET route; the
 rules keep their ``plasticity_flag`` and mode, and FEAGI keeps the synapses and weights. The
 mapping must hold a plastic rule, or FEAGI rejects the freeze and the run stops there.
 
@@ -215,6 +216,7 @@ MEMORY_KEYS = frozenset(
         "neuron_longterm_mem_threshold",
         "memory_neuron_cap",
         "ltm_eviction",
+        "replay_trigger",
         "mp_learning_enabled",
         "mp_change_mode",
         "mp_delta_quantization",
@@ -354,6 +356,11 @@ def memory_properties(
         if not (isinstance(ev, str) and ev.strip().lower() in ("lru", "none")):
             raise SpecError(f"area '{name}': ltm_eviction must be 'lru' or 'none'")
         out["ltm_eviction"] = ev.strip().lower()
+    if "replay_trigger" in out:
+        rt = out["replay_trigger"]
+        if not (isinstance(rt, str) and rt.strip().lower() in ("any_fire", "recall_only")):
+            raise SpecError(f"area '{name}': replay_trigger must be 'any_fire' or 'recall_only'")
+        out["replay_trigger"] = rt.strip().lower()
     if mp_encoding is not None:
         enc: Any = {"mode": mp_encoding} if isinstance(mp_encoding, str) else mp_encoding
         mode = enc.get("mode") if isinstance(enc, dict) else None
@@ -1642,6 +1649,12 @@ async def _run_plan(client: Any, plan: Plan, created: dict[str, Any]) -> dict[st
                 "failed": {"step": f"create_morphology {m['name']}", "detail": res},
             }
         created["morphologies"].append(m["name"])
+        problem = await _morphology_readback_problem(client, m)
+        if problem is not None:
+            return {
+                "created": created,
+                "failed": {"step": f"verify stored morphology {m['name']}", "detail": problem},
+            }
     for e in plan.edits:
         res = await client.update_cortical_area(ids[e["name"]], e["properties"])
         if _is_error(res):
@@ -1695,6 +1708,33 @@ async def _run_plan(client: Any, plan: Plan, created: dict[str, Any]) -> dict[st
         created["mappings"].append({"src": mp["src"], "dst": mp["dst"], "rules": len(mp["rules"])})
     verification = await _verify(client, plan, ids, edge_synapse_counts)
     return {"created": created, "failed": None, "verification": verification}
+
+
+def _expected_rows(morphology: dict[str, Any]) -> int:
+    """Rows a patterns or vectors morphology was created with (0 for other types)."""
+    kind = str(morphology.get("type") or "").strip().lower()
+    key = {"patterns": "patterns", "vectors": "vectors"}.get(kind)
+    params = morphology.get("parameters")
+    rows = params.get(key) if key and isinstance(params, dict) else None
+    return len(rows) if isinstance(rows, list) else 0
+
+
+async def _morphology_readback_problem(client: Any, morphology: dict[str, Any]) -> str | None:
+    """Error text when FEAGI stored fewer rows than were sent (an empty list is the usual case)."""
+    expected = _expected_rows(morphology)
+    if expected == 0:
+        return None
+    name = morphology["name"]
+    read = await client.get_morphology(name, True)
+    if _is_error(read) or not isinstance(read, dict):
+        return f"morphology '{name}' could not be read back after creation: {read}"
+    stored = int(read.get("pattern_count") or 0)
+    if stored < expected:
+        return (
+            f"morphology '{name}' was sent {expected} {morphology['type']} row(s) but FEAGI "
+            f"stored {stored}; check the row tokens (ints, '*', '?', '!', 'N..M', '?+N')"
+        )
+    return None
 
 
 async def _verify(client: Any, plan: Plan, ids: dict[str, str], count_fn: Any) -> dict[str, Any]:

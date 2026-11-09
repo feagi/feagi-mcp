@@ -29,7 +29,9 @@ or mappings, or replacing mapping rules.
   experiment, genome and connectome. The genome goes to the experiment in Composer (team-aware,
   same revision rules as autosave); the full connectome stays on this machine and its lite form
   uploads asynchronously, so check `list_brain_snapshots()` `sync` before relying on it
-  elsewhere. Labels are `[A-Za-z0-9_.-]{1,128}`, unique per experiment (team-wide for teams).
+  elsewhere. Labels may contain spaces: normalized to NFC, trimmed, internal whitespace collapsed to
+  single spaces, 1-128 characters; Unicode letters, digits, spaces and printable punctuation are
+  allowed, control characters, `/` and `\` are not. Unique per experiment (team-wide for team experiments), case-sensitive, after normalization.
 - `list_brain_snapshots()` lists them; `restore_brain_snapshot(label)` reverts the genome and
   reloads the connectome. Confirm first; for a team experiment it changes the shared brain and
   notifies the team.

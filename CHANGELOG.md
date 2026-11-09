@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Skill**: the behavior playbooks (standing, standing tests, training method, measured lessons, adaptive circuit patterns, worked genome designs) moved to Neurorobotics Studio (`behavior-playbooks` skill); the open `feagi` skill keeps a short standing summary in `genome-design.md`.
 - **Development**: pre-commit now runs `mypy src/` on commit and `pytest` on push, matching CI; `mypy` pinned to `2.4.1` in the `dev` extra.
 
+## [0.1.7] - 2026-11-09
+
+### Changed
+- **Dependencies**: pin `feagi-core==2.6.15` (Python SDK; Brain Visualizer `2.13.0`, `feagi-rust-py-libs==0.0.123`).
+
 ## [0.1.6] - 2026-11-06
 
 ### Changed

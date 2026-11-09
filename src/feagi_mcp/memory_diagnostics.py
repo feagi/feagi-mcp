@@ -66,6 +66,48 @@ def lifecycle_totals(
         "evicted_total": _int_or_none(stats.get("evicted_total")),
         "creation_failed_total": _int_or_none(stats.get("creation_failed_total")),
         "formation_suppressed_total": _int_or_none(stats.get("formation_suppressed_total")),
+        "reactivated_total": _int_or_none(stats.get("reactivated_total")),
+    }
+
+
+_REMATCH_DENOMINATOR_COUNTERS = (
+    "created_total",
+    "creation_failed_total",
+    "formation_suppressed_total",
+)
+
+
+def rematch_rate(
+    before: dict[str, int | None],
+    after: dict[str, int | None],
+) -> dict[str, Any]:
+    """Share of pattern presentations that matched an existing neuron, between two samples.
+
+    ``rate = d_reactivated / (d_reactivated + d_created + d_creation_failed +
+    d_formation_suppressed)`` over the window. ``rate`` is ``None`` when no presentation
+    was counted or the reactivation or creation counter is missing (older FEAGI); the deltas
+    are reported either way.
+    """
+    deltas: dict[str, int | None] = {}
+    for key in ("reactivated_total", *_REMATCH_DENOMINATOR_COUNTERS):
+        start, end = before.get(key), after.get(key)
+        deltas[key] = None if start is None or end is None else end - start
+    rate = None
+    reactivated = deltas["reactivated_total"]
+    created = deltas["created_total"]
+    if reactivated is not None and created is not None:
+        # Failure and suppression counters are absent on older FEAGI: count them as 0.
+        total = reactivated + created
+        total += deltas["creation_failed_total"] or 0
+        total += deltas["formation_suppressed_total"] or 0
+        if total > 0:
+            rate = round(reactivated / total, 4)
+    return {
+        "rate": rate,
+        "delta_reactivated": deltas["reactivated_total"],
+        "delta_created": deltas["created_total"],
+        "delta_creation_failed": deltas["creation_failed_total"],
+        "delta_formation_suppressed": deltas["formation_suppressed_total"],
     }
 
 

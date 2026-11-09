@@ -14,7 +14,7 @@ Mechanics and parameter names: [memory-and-plasticity.md](memory-and-plasticity.
   is `temporal_depth` burst-aligned hashes per upstream area. (code: plasticity service.rs:702-802;
   pattern_detector.rs:242-262)
 - New window content makes a new neuron. A repeat reactivates the existing one. The
-  `memory.formation` modulator blocks creation only, not reactivation. (code: service.rs:939-1121, 1009)
+  `memory.formation` modulator blocks creation only, not reactivation; a frozen area (`memory.freeze` or the area switch) also creates none and ages none. (code: service.rs:939-1121, 1009)
 - A memory neuron fires in two ways: its upstream pattern matches live fires (encoding), or a
   learned associative synapse drives it (recall, no input needed). One area alone classifies
   states; a sequence needs a chain or a hierarchy (below). (code: npu.rs:6880-6887,
@@ -53,6 +53,24 @@ Defaults: depth 1, init_lifespan 9, growth 1.0, long-term threshold 100, cap 0, 
 | Save and restart | Only LTM is saved and restored. A connectome snapshot keeps a synapse only when both memory endpoints are LTM. (code: :1076-1077, connectome.rs) |
 | Deleting a neuron | Expiry or eviction deletes that neuron's synapses, learned ones included. (code: npu.rs:1631-1692) |
 | Shape changes | Changing `temporal_depth`, the upstream set or the MP mode removes neurons that no longer fit. The change reports it. (code: [memory-and-plasticity.md](memory-and-plasticity.md)) |
+
+### Tuning consolidation (repetition to long-term)
+
+Repetition is the built-in way short-term memories become long-term: each reactivation grows
+lifespan by `neuron_lifespan_growth_rate`, and reaching `neuron_longterm_mem_threshold` makes the
+neuron permanent. Tune this before designing any new consolidation mechanism. (code: the refs in
+the table above)
+
+1. Measure the recurrence gap of the patterns to keep: `list_memory_neurons` with detail, read
+   `last_activation_burst` and `activation_count` over a sample. Convert seconds to bursts with
+   the burst rate.
+2. Set `neuron_init_lifespan` to about 3 x that gap (design guidance; derive your own factor).
+3. Set `neuron_longterm_mem_threshold` = init + N x growth, N being the repetitions that should
+   make a memory permanent (design choice). Read both back.
+
+Pitfalls: a very large threshold as a workaround disables consolidation; a threshold at or below
+init makes everything permanent at creation; reward-gated associative commits promote both
+endpoints at once whatever the threshold ([memory-and-plasticity.md](memory-and-plasticity.md)).
 
 Temporal depth, measured: a held pattern at depth 1 gives 1 neuron; at depth 3 it gives 4 (3
 start-up windows plus 1 steady). A moving 3-step cycle gives 3 neurons at depth 1 and 3 steady at
