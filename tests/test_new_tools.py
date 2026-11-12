@@ -2744,6 +2744,25 @@ class TestCreateIoAreaForUnit:
         assert result["cortical_type"] == "IPU"
 
     @pytest.mark.asyncio
+    async def test_height_sets_per_device_y_extent(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"cortical_id": "aWltZwAJAAA="}
+        mock_client._client.post.return_value = mock_response
+
+        await mock_client.create_io_area_for_unit(
+            name="img",
+            subtype="iimg",
+            variant="cartesian_plane",
+            channels=28,
+            depth=3,
+            height=28,
+        )
+
+        body = mock_client._client.post.call_args.kwargs["json"]
+        assert body["per_device_dimensions"] == [28, 28, 3]
+
+    @pytest.mark.asyncio
     async def test_invalid_subtype_does_not_create(self, mock_client):
         mock_client._client.post = AsyncMock()
         result = await mock_client.create_io_area_for_unit(

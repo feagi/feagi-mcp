@@ -11,6 +11,7 @@ Covers:
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -46,6 +47,28 @@ def _ok(json_payload):
     return response
 
 
+_MOTOR_PAYLOAD = {
+    "burst_num": 7,
+    "timestamp_ms": 1,
+    "has_data": True,
+    "total_areas": 1,
+    "total_neurons": 3,
+    "areas": [
+        {
+            "cortical_id": "b3B1AAA=",
+            "cortical_idx": 4,
+            "neuron_count": 3,
+            "samples": [
+                {"x": 0, "y": 0, "z": 0, "potential": 0.5},
+                {"x": 1, "y": 0, "z": 0, "potential": 0.25},
+                {"x": 0, "y": 0, "z": 1, "potential": 1.0},
+            ],
+        }
+    ],
+    "agents": [],
+}
+
+
 class TestRuntimeTaps:
     @pytest.mark.asyncio
     async def test_get_motor_snapshot_last_passes_filter(self, mock_client):
@@ -70,8 +93,60 @@ class TestRuntimeTaps:
     async def test_get_motor_snapshot_last_no_filter(self, mock_client):
         mock_client._client.get.return_value = _ok({"has_data": False})
         result = await mock_client.get_motor_snapshot_last()
-        assert result == {"has_data": False}
+        assert result["has_data"] is False
+        assert result["summary_only"] is False
+        assert result["areas_summary"] == []
         assert mock_client._client.get.call_args.kwargs["params"] is None
+
+    @pytest.mark.asyncio
+    async def test_get_motor_snapshot_last_client_default_keeps_areas(self, mock_client):
+        mock_client._client.get.return_value = _ok(deepcopy(_MOTOR_PAYLOAD))
+        result = await mock_client.get_motor_snapshot_last()
+        assert result["areas"][0]["samples"][0]["potential"] == 0.5
+        assert result["areas_summary"][0]["sample_count"] == 3
+        assert result["summary_only"] is False
+
+    @pytest.mark.asyncio
+    async def test_get_motor_snapshot_last_summary_only_drops_areas(self, mock_client):
+        mock_client._client.get.return_value = _ok(deepcopy(_MOTOR_PAYLOAD))
+        result = await mock_client.get_motor_snapshot_last(summary_only=True)
+        assert "areas" not in result
+        assert result["summary_only"] is True
+        assert result["burst_num"] == 7
+        assert result["agents"] == []
+        summary = result["areas_summary"][0]
+        assert summary["cortical_id"] == "b3B1AAA="
+        by_z = {row["z"]: row for row in summary["by_z"]}
+        assert by_z[0]["n"] == 2
+        assert by_z[0]["max"] == 0.5
+        assert by_z[1]["n"] == 1
+
+    @pytest.mark.asyncio
+    async def test_get_motor_snapshot_last_http_error_unchanged(self, mock_client):
+        response = MagicMock()
+        response.status_code = 500
+        response.text = "boom"
+        mock_client._client.get.return_value = response
+        result = await mock_client.get_motor_snapshot_last(summary_only=True)
+        assert result == {"error": "HTTP 500", "message": "boom"}
+
+    @pytest.mark.asyncio
+    async def test_server_motor_snapshot_tool_defaults_to_summary(self, mock_client, monkeypatch):
+        from feagi_mcp import server
+
+        mock_client._client.get.side_effect = lambda *_args, **_kwargs: _ok(
+            deepcopy(_MOTOR_PAYLOAD)
+        )
+        monkeypatch.setattr(server, "feagi", mock_client)
+        result = await server.get_motor_snapshot_last(agent_id="a1", cortical_id="b3B1AAA=")
+        assert result["summary_only"] is True
+        assert "areas" not in result
+        assert result["areas_summary"][0]["sample_count"] == 3
+        params = mock_client._client.get.call_args.kwargs["params"]
+        assert params == {"agent_id": "a1", "cortical_id": "b3B1AAA="}
+        raw = await server.get_motor_snapshot_last(summary_only=False)
+        assert raw["areas"][0]["samples"][0]["z"] == 0
+        assert raw["areas_summary"][0]["sample_count"] == 3
 
     @pytest.mark.asyncio
     async def test_get_sensor_snapshot_last_filter(self, mock_client):
@@ -208,6 +283,28 @@ class TestRuntimeTaps:
         call = mock_client._client.get.call_args
         assert call.args[0].endswith("/v1/agent/device_registration_store")
         assert call.kwargs["params"] == {"agent_name": "Lite6"}
+
+    @pytest.mark.asyncio
+    async def test_get_log_tail_is_bounded_by_default(self, mock_client):
+        records = [{"timestamp_ms": i, "level": "INFO", "message": "x" * 5000} for i in range(900)]
+        mock_client._client.get.return_value = _ok(
+            {"enabled": True, "capacity": 2000, "records": records, "returned": 900}
+        )
+        result = await mock_client.get_log_tail()
+        assert mock_client._client.get.call_args.kwargs["params"]["limit"] == "200"
+        assert result["limit_applied"] == 200
+        assert result["truncated"] is True
+        assert len(json.dumps(result)) < 80_000
+        assert result["records"][-1]["timestamp_ms"] == 899
+        assert result["records"][0]["message"].endswith("[clipped]")
+
+    @pytest.mark.asyncio
+    async def test_get_log_tail_caps_requested_limit(self, mock_client):
+        mock_client._client.get.return_value = _ok(
+            {"enabled": True, "capacity": 2000, "records": [], "returned": 0}
+        )
+        await mock_client.get_log_tail(limit=50000)
+        assert mock_client._client.get.call_args.kwargs["params"]["limit"] == "1000"
 
     @pytest.mark.asyncio
     async def test_get_log_tail_handles_disabled(self, mock_client):

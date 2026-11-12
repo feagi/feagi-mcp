@@ -12,7 +12,7 @@ from feagi_mcp.weight_watch import (
     reset_mapping,
     reset_mapping_native_first,
     watch_weights,
-    weight_cap_from_area,
+    weight_cap_from_rules,
     weight_sample,
 )
 
@@ -66,11 +66,16 @@ def test_weight_sample_extremes_and_cap_counts() -> None:
     assert weight_sample(_diag([1.0]), cap=None)["count_at_cap"] is None
 
 
-def test_weight_cap_from_area_reads_top_level_or_properties() -> None:
-    assert weight_cap_from_area({"neuron_post_synaptic_potential_max": 35.0}) == 35.0
-    assert weight_cap_from_area({"properties": {"neuron_post_synaptic_potential_max": 12}}) == 12.0
-    assert weight_cap_from_area({}) is None
-    assert weight_cap_from_area(None) is None
+def test_weight_cap_from_rules_uses_plastic_rule_max_weight() -> None:
+    rules = [
+        {"morphology_id": "a", "plasticity_flag": False, "max_weight": 99},
+        {"morphology_id": "b", "plasticity_flag": True, "max_weight": 50},
+        {"morphology_id": "c", "plasticity_mode": "stdp", "max_weight": 20},
+    ]
+    assert weight_cap_from_rules(rules) == (50.0, "rule.max_weight")
+    assert weight_cap_from_rules(rules, "c") == (20.0, "rule.max_weight")
+    assert weight_cap_from_rules([{"plasticity_flag": False, "max_weight": 9}]) == (None, None)
+    assert weight_cap_from_rules(None) == (None, None)
 
 
 async def test_watch_weights_samples_series_and_deltas() -> None:
@@ -241,3 +246,44 @@ async def test_freeze_memory_area_errors() -> None:
     client.set_memory_area_learning_frozen.return_value = {"frozen": True}
     client.get_learning_frozen.return_value = {"error": "HTTP 500"}
     assert (await freeze_memory_area(client, "m_a", True))["error"] == "readback_failed"
+
+
+def test_samples_one_returns_at_once_with_summary() -> None:
+    import asyncio
+
+    clock = FakeClock()
+    calls = 0
+
+    async def diagnose() -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        d = _diag([0.0, 5.0, 35.0])
+        d["synapse_scan"]["weight_stats"]["at_cap_count"] = 1
+        return d
+
+    out = asyncio.run(
+        watch_weights(diagnose, 20.0, 2.0, cap=35.0, max_samples=1, sleep=clock.sleep, clock=clock)
+    )
+    assert calls == 1 and clock.t == 0.0
+    assert out["summary"] == {
+        "count": 3,
+        "min": 0.0,
+        "max": 35.0,
+        "avg": out["samples"][0]["avg"],
+        "count_at_zero": 1,
+        "count_at_max_weight": 1,
+    }
+
+
+def test_max_samples_three_takes_three() -> None:
+    import asyncio
+
+    clock = FakeClock()
+
+    async def diagnose() -> dict[str, Any]:
+        return _diag([1.0, 2.0])
+
+    out = asyncio.run(
+        watch_weights(diagnose, 1.0, 1.0, cap=None, max_samples=3, sleep=clock.sleep, clock=clock)
+    )
+    assert len(out["samples"]) == 3

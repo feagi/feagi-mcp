@@ -39,7 +39,8 @@ Synapses, not neurons, set the cost: every active synapse is one event per burst
 ## Schematic and documentation
 
 - **Schematic and tables:** the template's schematic section sets the node and edge-label
-  grammar; show it with `show_in_studio` kind `circuit`. Without Studio, give the same as the
+  grammar; show it with `show_in_studio` kind `circuit`
+  (format: [building-circuits.md](building-circuits.md) "Circuit diagram format"). Without Studio, give the same as the
   template's tables (module, in, out, rule, sign, synapses) and keep a design doc in the repo.
 - **Notebook:** append_design_note kinds `goal`, `constraint`, `baseline`, then one `hypothesis`
   per module with its acceptance number, later `verdict` and `dead_end`.

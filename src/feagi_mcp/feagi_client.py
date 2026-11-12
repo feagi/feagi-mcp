@@ -1090,7 +1090,49 @@ def project_cortical_area_catalog_row(area: dict[str, Any]) -> dict[str, Any]:
         "subunit_id": area.get("subunit_id"),
         "encoding_type": area.get("encoding_type"),
     }
-    return {key: row[key] for key in _CORTICAL_CATALOG_KEYS}
+    return {key: row[key] for key in _CORTICAL_CATALOG_KEYS if row[key] is not None}
+
+
+def project_cortical_area_brief_row(
+    area: dict[str, Any], region_titles: dict[str, str] | None = None
+) -> dict[str, Any]:
+    """Brief list row: id, name, type, dimensions and region name (when known).
+
+    ``region_titles`` maps a cortical id to its region title (see
+    ``cortical_area_region_titles``); the row falls back to ``parent_region_id`` only
+    through that map, so an unknown region leaves ``region`` out.
+    """
+    full = project_cortical_area_catalog_row(area)
+    cortical_id = full.get("cortical_id")
+    row = {
+        "cortical_id": cortical_id,
+        "name": full.get("name"),
+        "type": full.get("cortical_type") or full.get("cortical_group") or full.get("area_type"),
+        "dimensions": full.get("cortical_dimensions"),
+        "region": (region_titles or {}).get(str(cortical_id))
+        or (region_titles or {}).get(f"parent:{full.get('parent_region_id')}"),
+    }
+    return {key: value for key, value in row.items() if value is not None}
+
+
+def cortical_area_region_titles(regions_members: Any) -> dict[str, str]:
+    """Map cortical id (and ``parent:<region_id>``) to region title from ``regions_members``."""
+    out: dict[str, str] = {}
+    if not isinstance(regions_members, dict) or "error" in regions_members:
+        return out
+    for region_id, entry in regions_members.items():
+        if not isinstance(entry, dict):
+            continue
+        title = entry.get("title")
+        if not isinstance(title, str) or not title.strip():
+            continue
+        out[f"parent:{region_id}"] = title.strip()
+        areas = entry.get("areas")
+        if isinstance(areas, list):
+            for area_id in areas:
+                if isinstance(area_id, str):
+                    out[area_id] = title.strip()
+    return out
 
 
 def _normalize_cortical_area_list_payload(data: Any) -> list[dict[str, Any]]:
@@ -1182,6 +1224,48 @@ def filter_log_tail_records(
         if isinstance(message, str) and needle in message.lower():
             matched.append(record)
     return matched
+
+
+LOG_TAIL_DEFAULT_LIMIT = 200
+LOG_TAIL_MAX_LIMIT = 1000
+LOG_TAIL_MAX_BYTES = 60_000
+LOG_TAIL_MAX_MESSAGE_CHARS = 600
+
+
+def bound_log_tail_records(
+    records: list[dict[str, Any]],
+    limit: int,
+    max_bytes: int = LOG_TAIL_MAX_BYTES,
+    max_message_chars: int = LOG_TAIL_MAX_MESSAGE_CHARS,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Keep the newest ``limit`` rows whose JSON fits ``max_bytes``; clip long messages.
+
+    Rows are oldest-first. Returns ``(rows, truncated)``. Applied locally so an older FEAGI
+    that ignores ``limit`` still cannot hand the agent the whole ring buffer.
+    """
+    truncated = len(records) > limit
+    kept = records[-limit:] if limit > 0 else []
+    bounded: list[dict[str, Any]] = []
+    for record in kept:
+        row = dict(record)
+        message = row.get("message")
+        if isinstance(message, str) and len(message) > max_message_chars:
+            row["message"] = message[:max_message_chars] + "...[clipped]"
+            truncated = True
+        if "fields" in row and len(json.dumps(row["fields"], default=str)) > max_message_chars:
+            row["fields"] = "[clipped]"
+            truncated = True
+        bounded.append(row)
+    total = 0
+    start = len(bounded)
+    for index in range(len(bounded) - 1, -1, -1):
+        size = len(json.dumps(bounded[index], default=str))
+        if total + size > max_bytes:
+            truncated = True
+            break
+        total += size
+        start = index
+    return bounded[start:], truncated
 
 
 def _nonempty_str(raw: Any) -> str | None:
@@ -3198,8 +3282,14 @@ class FeagiClient:
         record_areas: list[str],
         tail_bursts: int = 0,
         mode: str = "force_fire",
+        repeat: int = 1,
+        compact: bool = False,
     ) -> dict[str, Any]:
         """Present a timed stimulus sequence and record per-burst firing.
+
+        ``repeat`` runs the step list that many times in a row (the tail follows the last
+        repeat). ``compact`` returns per-step, per-area fire counts instead of per-voxel
+        counts and per-burst rows.
 
         Each step holds for ``bursts`` bursts; on every new burst counter value
         all of the step's stimuli are POSTed as one ``manual_stimulation``
@@ -3211,7 +3301,9 @@ class FeagiClient:
         ``STIMULATION_HOLD_MAX_MS``.
         """
         try:
-            return await self._run_stimulus_protocol(steps, record_areas, tail_bursts, mode)
+            return await self._run_stimulus_protocol(
+                steps, record_areas, tail_bursts, mode, repeat, compact
+            )
         except Exception as e:
             logger.error(f"run_stimulus_protocol failed: {e}")
             return {"success": False, "error": str(e)}
@@ -3222,9 +3314,14 @@ class FeagiClient:
         record_areas: list[str],
         tail_bursts: int,
         mode: str,
+        repeat: int = 1,
+        compact: bool = False,
     ) -> dict[str, Any]:
         if not steps:
             return {"success": False, "error": "steps must be non-empty"}
+        if not isinstance(repeat, int) or isinstance(repeat, bool) or repeat < 1:
+            return {"success": False, "error": "repeat must be an int >= 1"}
+        steps = list(steps) * repeat
         if not record_areas:
             return {"success": False, "error": "record_areas must be non-empty"}
         refs = list(
@@ -3347,12 +3444,22 @@ class FeagiClient:
             a: {"firing_bursts": 0, "voxel_counts": {}} for a in record_areas
         }
         burst_rows: list[dict[str, Any]] = []
+        per_step: dict[int | None, dict[str, dict[str, int]]] = {}
         for ts in sorted(recorded):
             fired = recorded[ts]
-            burst_rows.append({"burst": ts, "step": _step_of(ts), "areas": fired})
+            owner = _step_of(ts)
+            if not compact:
+                burst_rows.append({"burst": ts, "step": owner, "areas": fired})
             for area, voxels in fired.items():
+                cell = per_step.setdefault(owner, {}).setdefault(
+                    area, {"firing_bursts": 0, "neuron_fires": 0}
+                )
+                cell["firing_bursts"] += 1
+                cell["neuron_fires"] += len(voxels)
                 stats = area_stats[area]
                 stats["firing_bursts"] += 1
+                if compact:
+                    continue
                 for v in voxels:
                     key = f"{v[0]},{v[1]},{v[2]}"
                     stats["voxel_counts"][key] = stats["voxel_counts"].get(key, 0) + 1
@@ -3365,25 +3472,33 @@ class FeagiClient:
         step_rows = []
         for idx, step in enumerate(steps):
             bursts_posted = step_posts.get(idx, [])
-            step_rows.append(
-                {
-                    "step": idx,
-                    "label": step.get("label"),
-                    "first_burst": bursts_posted[0] if bursts_posted else None,
-                    "last_burst": bursts_posted[-1] if bursts_posted else None,
-                    "bursts_posted": len(bursts_posted),
-                }
-            )
+            row = {
+                "step": idx,
+                "label": step.get("label"),
+                "first_burst": bursts_posted[0] if bursts_posted else None,
+                "last_burst": bursts_posted[-1] if bursts_posted else None,
+                "bursts_posted": len(bursts_posted),
+            }
+            if compact:
+                row["fires"] = per_step.get(idx, {})
+            step_rows.append(row)
         result: dict[str, Any] = {
             "success": done >= wanted and not errors,
             "steps": step_rows,
             "areas": area_stats,
-            "bursts": burst_rows,
             "bursts_missed": missed,
             "bursts_run": done,
             "bursts_requested": wanted,
             "burst_interval_seconds": interval,
         }
+        if not compact:
+            result["bursts"] = burst_rows
+        if compact:
+            for stats in area_stats.values():
+                stats.pop("voxel_counts", None)
+            result["compact"] = True
+        if repeat > 1:
+            result["repeat"] = repeat
         if errors:
             result["error"] = errors[0]
         elif done < wanted:
@@ -4559,6 +4674,7 @@ class FeagiClient:
         subunit_index: int = 0,
         device_count: int = 1,
         position: list[int] | None = None,
+        height: int = 1,
     ) -> dict[str, Any]:
         """Create the IPU/OPU area a sensorimotor unit binds to, deriving its canonical id.
 
@@ -4582,6 +4698,9 @@ class FeagiClient:
             subunit_index: Sub-area index within the unit (flag bits 4-7, 0-15).
             device_count: Number of devices for the area.
             position: Optional ``[x, y, z]`` request (FEAGI may auto-place; see ``placement``).
+            height: Per-device y-extent (default 1). Planar units such as ``iimg``
+                ``cartesian_plane`` need the image height here, with ``channels`` the width and
+                ``depth`` the colour channels.
 
         Returns:
             ``{"computed_cortical_id", "config_flag", "verified", "create_result", ...}`` on
@@ -4599,7 +4718,9 @@ class FeagiClient:
             return {"error": "invalid_io_cortical_id", "message": encoded.get("error")}
 
         cortical_type = "IPU" if encoded["io_kind"] == "sensory" else "OPU"
-        per_device_dimensions = [int(channels), 1, int(depth)]
+        if not isinstance(height, int) or isinstance(height, bool) or height < 1:
+            return {"error": "invalid_height", "message": "height must be an int >= 1"}
+        per_device_dimensions = [int(channels), int(height), int(depth)]
         create_result = await self.create_cortical_area(
             name=name,
             cortical_type=cortical_type,
@@ -5329,8 +5450,12 @@ class FeagiClient:
         src_area: str,
         dst_area: str,
         sample_limit: int = 20,
+        weight_cap: float | None = None,
     ) -> dict[str, Any]:
         """Diagnose live plasticity state for one source->destination mapping pair.
+
+        ``weight_cap`` (optional) adds ``weight_stats.at_cap_count``: matched synapses
+        whose weight is at or above it, counted over all matched synapses (not the sample).
 
         Combines mapping rules with realized synapse inspection and weight statistics
         filtered to likely edges from ``src_area`` into ``dst_area``.
@@ -5659,6 +5784,11 @@ class FeagiClient:
                     "sum": sum(weights) if weights else None,
                     "zero_weight_count": zero_weight_count,
                     "nonzero_weight_count": nonzero_weight_count,
+                    "at_cap_count": (
+                        sum(1 for w in weights if w >= weight_cap)
+                        if weight_cap is not None
+                        else None
+                    ),
                 },
                 "sample": matched[:limit],
                 "skipped_without_target_identity": skipped_without_target_identity,
@@ -5851,6 +5981,7 @@ class FeagiClient:
         self,
         agent_id: str | None = None,
         cortical_id: str | None = None,
+        summary_only: bool = False,
     ) -> dict[str, Any]:
         """GET /v1/output/motor_snapshot/last - latest motor output captured by the burst loop.
 
@@ -5859,10 +5990,14 @@ class FeagiClient:
             cortical_id: When set, server returns only the ``areas`` block for
                 that OPU (base64 id) and recomputes ``total_*``; use this to read
                 a single motor area without wading through unrelated areas.
+            summary_only: When True, drop per-neuron ``areas`` samples and keep
+                ``areas_summary`` (per-area, per-Z stats). Default False so
+                internal callers receive raw samples.
 
         Returns:
             Dict with ``burst_num``, ``timestamp_ms``, ``has_data``, ``total_areas``,
-            ``total_neurons``, ``areas`` (per-cortical-area firing samples), and
+            ``total_neurons``, ``areas_summary``, ``areas`` (per-cortical-area firing
+            samples; omitted when ``summary_only``), and
             ``agents`` (per-agent publish stats including ``published`` and ``last_error``).
         """
         try:
@@ -5876,7 +6011,15 @@ class FeagiClient:
                 params=params or None,
             )
             if response.status_code == 200:
-                return _as_json_dict(response.json())
+                payload = _as_json_dict(response.json())
+                payload["areas_summary"] = summarize_sensor_snapshot_areas(
+                    payload.get("areas"),
+                    threshold=None,
+                )
+                payload["summary_only"] = bool(summary_only)
+                if summary_only:
+                    payload.pop("areas", None)
+                return payload
             return {
                 "error": f"HTTP {response.status_code}",
                 "message": response.text,
@@ -5971,7 +6114,8 @@ class FeagiClient:
             level: Minimum severity (TRACE/DEBUG/INFO/WARN/ERROR).
             target_prefix: Restrict to tracing targets starting with this prefix.
             since_ts_ms: Only return records emitted at or after this Unix timestamp (ms).
-            limit: Maximum records to return.
+            limit: Maximum records to return (default 200, at most 1000; the reply is also
+                capped in bytes and long messages are clipped).
             message_contains: Case-insensitive substring match on ``message``.
                 Prefer this over fetching an unfiltered dump.
 
@@ -5988,8 +6132,12 @@ class FeagiClient:
                 params["target_prefix"] = target_prefix.strip()
             if isinstance(since_ts_ms, int):
                 params["since_ts_ms"] = str(int(since_ts_ms))
-            if isinstance(limit, int) and limit > 0:
-                params["limit"] = str(int(limit))
+            effective_limit = (
+                min(int(limit), LOG_TAIL_MAX_LIMIT)
+                if isinstance(limit, int) and limit > 0
+                else LOG_TAIL_DEFAULT_LIMIT
+            )
+            params["limit"] = str(effective_limit)
             if isinstance(message_contains, str) and message_contains.strip():
                 params["message_contains"] = message_contains.strip()
             response = await self._client.get(
@@ -6012,8 +6160,17 @@ class FeagiClient:
                     payload.get("records"),
                     message_contains,
                 )
-                payload["records"] = filtered
-                payload["returned"] = len(filtered)
+                bounded, truncated = bound_log_tail_records(filtered, effective_limit)
+                payload["records"] = bounded
+                payload["returned"] = len(bounded)
+                payload["limit_applied"] = effective_limit
+                if truncated:
+                    payload["truncated"] = True
+                    payload["truncated_note"] = (
+                        f"Only the newest {len(bounded)} records are shown (limit "
+                        f"{effective_limit}, at most {LOG_TAIL_MAX_BYTES} bytes). Narrow with "
+                        "level, target_prefix, since_ts_ms or message_contains."
+                    )
                 return payload
             return {
                 "error": f"HTTP {response.status_code}",

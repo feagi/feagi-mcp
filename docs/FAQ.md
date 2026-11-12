@@ -295,6 +295,7 @@ is still in play.
 
 Pass `cortical_id` to `get_motor_snapshot_last` to filter the tap to a single
 OPU (new query param on the FEAGI `motor_snapshot/last` endpoint in recent builds).
+The reply is a per-area summary by default; pass `summary_only=False` for raw samples.
 
 ---
 

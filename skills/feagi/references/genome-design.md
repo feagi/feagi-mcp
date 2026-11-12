@@ -39,7 +39,7 @@ straight to "Build a circuit" (act with defaults).
     failed checks; end with Bugs and Gaps and the cost line.
 
 Detail: the sections below. Template: genome-design-template. Blocks: genome-design-patterns.
-Worked designs and the adaptive patterns ship with Neurorobotics Studio (`behavior-playbooks` skill).
+Before designing, read the matching `behavior-playbooks` pattern with `read_skill`; design from it, not from first principles.
 
 ## What a design produces
 

@@ -29,6 +29,8 @@ from feagi_mcp.experiment_status import (
 from feagi_mcp.feagi_client import (
     FeagiClient,
     analyze_genome_completeness,
+    cortical_area_region_titles,
+    project_cortical_area_brief_row,
     project_cortical_area_catalog_row,
 )
 from feagi_mcp.genome_artifact import (
@@ -65,7 +67,7 @@ from feagi_mcp.weight_watch import (
     freeze_memory_area,
     reset_mapping_native_first,
     watch_weights,
-    weight_cap_from_area,
+    weight_cap_from_rules,
 )
 
 logging.basicConfig(
@@ -90,6 +92,48 @@ composer_datasheets = ComposerDatasheetClient(
 )
 
 
+MAX_TOOL_REPLY_BYTES = 1_000_000
+"""Largest tool reply content, in bytes, sent to an assistant.
+
+The stdio bridge discards a line over its transport limit, so the client never gets an
+answer and the call hangs; replies this large are also unusable by an assistant.
+"""
+
+
+def _block_bytes(block: Any) -> int:
+    """UTF-8 size of one content block (text, base64 data, embedded resource)."""
+    total = 0
+    text = getattr(block, "text", None)
+    if isinstance(text, str):
+        total += len(text.encode("utf-8"))
+    data = getattr(block, "data", None)
+    if isinstance(data, (str, bytes)):
+        total += len(data)
+    resource = getattr(block, "resource", None)
+    if resource is not None:
+        total += _block_bytes(resource)
+    blob = getattr(block, "blob", None)
+    if isinstance(blob, (str, bytes)):
+        total += len(blob)
+    return total
+
+
+def tool_reply_bytes(result: Any) -> int:
+    """Content size of a FastMCP ``call_tool`` result; 0 for a shape it does not know."""
+    try:
+        if hasattr(result, "content") and not isinstance(result, (dict, list, tuple)):
+            return sum(_block_bytes(b) for b in result.content)
+        if isinstance(result, tuple) and len(result) == 2:
+            return tool_reply_bytes(result[0])
+        if isinstance(result, dict):
+            return len(json.dumps(result, separators=(",", ":")).encode("utf-8"))
+        if isinstance(result, list):
+            return sum(_block_bytes(b) for b in result)
+    except Exception:  # noqa: BLE001 - measuring must never fail a call
+        return 0
+    return 0
+
+
 class _StudioAwareFastMCP(FastMCP):
     """FastMCP that refuses tool calls while Neurorobotics Studio manages this FEAGI.
 
@@ -102,6 +146,12 @@ class _StudioAwareFastMCP(FastMCP):
         hint = getattr(getattr(tool, "annotations", None), "readOnlyHint", None)
         return hint is True
 
+    def _declared_arguments(self, name: str) -> list[str]:
+        """Sorted argument names the tool declares (empty when unknown)."""
+        tool = self._tool_manager.get_tool(name)
+        properties = (getattr(tool, "parameters", None) or {}).get("properties", {})
+        return sorted(properties) if isinstance(properties, dict) else []
+
     def _unknown_arguments(self, name: str, arguments: dict[str, Any]) -> list[str]:
         """Argument names the tool does not declare (FastMCP's argument model drops them)."""
         tool = self._tool_manager.get_tool(name)
@@ -113,9 +163,7 @@ class _StudioAwareFastMCP(FastMCP):
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
         unknown = self._unknown_arguments(name, arguments)
         if unknown:
-            tool = self._tool_manager.get_tool(name)
-            properties = (tool.parameters or {}).get("properties", {}) if tool is not None else {}
-            declared = sorted(properties)
+            declared = self._declared_arguments(name)
             raise ToolError(
                 f"Unknown argument(s) for {name}: {', '.join(unknown)}. Nothing ran. "
                 f"Declared arguments: {', '.join(declared) or 'none'}."
@@ -125,7 +173,17 @@ class _StudioAwareFastMCP(FastMCP):
         arguments = await resolve_area_arguments(
             name, arguments, feagi.get_cortical_id_name_mapping
         )
-        return await super().call_tool(name, arguments)
+        result = await super().call_tool(name, arguments)
+        size = tool_reply_bytes(result)
+        if size > MAX_TOOL_REPLY_BYTES:
+            argument_list = ", ".join(self._declared_arguments(name)) or "none"
+            raise ToolError(
+                f"{name} reply was {size / 1_000_000:.2f} MB, over the "
+                f"{MAX_TOOL_REPLY_BYTES / 1_000_000:.2f} MB limit for assistant replies. "
+                f"Nothing was returned. Narrow the request with the tool's arguments "
+                f"({argument_list}), or ask for a summary, one area or a smaller page."
+            )
+        return result
 
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True)
@@ -808,6 +866,8 @@ async def run_stimulus_protocol(
     record_areas: list[str],
     tail_bursts: int = 0,
     mode: str = "force_fire",
+    repeat: int = 1,
+    compact: bool = False,
 ) -> dict[str, Any]:
     """Present a timed stimulus sequence and record per-burst firing in one call.
 
@@ -825,6 +885,12 @@ async def run_stimulus_protocol(
         record_areas: Area ids whose firing is recorded
         tail_bursts: Bursts to record after the last step (default 0)
         mode: Stimulation mode (default ``force_fire``)
+        repeat: Run the step list this many times in a row (default 1); the tail
+            follows the last repeat. ``steps`` in the result then has one row per
+            repeated step.
+        compact: Per-step, per-area fire counts instead of per-voxel lines: each
+            ``steps`` row gets ``fires`` (area -> ``firing_bursts``, ``neuron_fires``),
+            ``areas`` keeps only ``firing_bursts``, and ``bursts`` is omitted.
 
     Returns:
         ``steps`` (label, first/last posted burst, bursts posted), ``areas``
@@ -832,7 +898,9 @@ async def run_stimulus_protocol(
         bursts where a recorded area fired: burst, step, areas),
         ``bursts_missed`` (window bursts no read observed) and ``success``.
     """
-    return await feagi.run_stimulus_protocol(steps, record_areas, tail_bursts, mode)
+    return await feagi.run_stimulus_protocol(
+        steps, record_areas, tail_bursts, mode, repeat, compact
+    )
 
 
 @mcp.tool()
@@ -1098,6 +1166,7 @@ async def list_cortical_areas(
     cortical_id_contains: str | None = None,
     cortical_type: str | None = None,
     limit: int | None = None,
+    detail: str = "full",
 ) -> list[dict[str, Any]]:
     """List cortical areas as compact catalog rows.
 
@@ -1114,6 +1183,10 @@ async def list_cortical_areas(
             ``cortical_type``, ``cortical_group``, or ``area_type``.
             Allowed: IPU, OPU, CORE, CUSTOM, MEMORY, SENSORY, MOTOR.
         limit: Maximum rows to return after filtering. Omit for no cap.
+        detail: ``full`` (default) returns the catalog rows below. ``brief``
+            returns only ``cortical_id``, ``name``, ``type``, ``dimensions`` and
+            ``region`` (the brain region's title), a much smaller answer for an
+            overview. Keys with no value are left out of every row.
 
     Returns:
         Catalog rows with id, name, type, dimensions, per-device dimensions,
@@ -1128,6 +1201,11 @@ async def list_cortical_areas(
         cortical_type=cortical_type,
         limit=limit,
     )
+    if detail == "brief":
+        titles = cortical_area_region_titles(await feagi.get_regions_members())
+        return [project_cortical_area_brief_row(area, titles) for area in areas]
+    if detail != "full":
+        raise ValueError("detail must be 'full' or 'brief'")
     return [project_cortical_area_catalog_row(area) for area in areas]
 
 
@@ -2424,6 +2502,7 @@ async def create_io_area_for_unit(
     subunit_index: int = 0,
     device_count: int = 1,
     position: list[int] | None = None,
+    height: int = 1,
 ) -> dict[str, Any]:
     """Create the IPU/OPU area a sensorimotor unit binds to, with its canonical id derived.
 
@@ -2448,6 +2527,9 @@ async def create_io_area_for_unit(
         subunit_index: Sub-area index within the unit (flag bits 4-7, 0-15).
         device_count: Number of devices for the area.
         position: Optional ``[x, y, z]`` request (FEAGI may auto-place; see ``placement``).
+        height: Per-device y-extent (default 1). Planar units such as ``iimg``
+            ``cartesian_plane`` need the image height here: ``channels`` is the width,
+            ``depth`` the colour channels (28x28x3 -> channels=28, height=28, depth=3).
 
     Returns:
         ``{"computed_cortical_id", "assigned_cortical_id", "verified", "config_flag",
@@ -2465,6 +2547,7 @@ async def create_io_area_for_unit(
         subunit_index=subunit_index,
         device_count=device_count,
         position=position,
+        height=height,
     )
 
 
@@ -3556,6 +3639,7 @@ async def confirm_amalgamation_destination(
 async def get_motor_snapshot_last(
     agent_id: str | None = None,
     cortical_id: str | None = None,
+    summary_only: bool = True,
 ) -> dict[str, Any]:
     """Latest motor output produced by the burst loop (`/v1/output/motor_snapshot/last`).
 
@@ -3563,7 +3647,10 @@ async def get_motor_snapshot_last(
     actually being published to a connected agent. The response contains:
 
     - ``has_data`` / ``burst_num`` / ``timestamp_ms`` - freshness markers.
-    - ``areas`` - per OPU cortical area firing samples (xyz + potential).
+    - ``areas_summary`` - per OPU area ``sample_count`` and per-Z potential
+      count/min/max/mean (no per-neuron samples).
+    - ``areas`` - per OPU firing samples (xyz + potential); only when
+      ``summary_only=False``.
     - ``agents`` - per-agent publish stats with ``published`` and ``last_error``.
 
     Args:
@@ -3572,8 +3659,15 @@ async def get_motor_snapshot_last(
             ``areas`` and adjust ``total_areas`` / ``total_neurons`` (same id as
             the JSON ``cortical_id`` in each area row). Use to isolate a cart or
             hinge motor when multiple OPUs and internal areas appear together.
+        summary_only: Drop per-neuron ``areas`` samples (default True). Set
+            False only when the raw samples are required, ideally with
+            ``cortical_id``.
     """
-    return await feagi.get_motor_snapshot_last(agent_id, cortical_id=cortical_id)
+    return await feagi.get_motor_snapshot_last(
+        agent_id,
+        cortical_id=cortical_id,
+        summary_only=summary_only,
+    )
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -3644,7 +3738,9 @@ async def get_log_tail(
             (e.g. ``feagi_npu`` or ``burst_loop``).
         since_ts_ms: Unix-ms cutoff; only returns records emitted at or after this
             timestamp.
-        limit: Cap on returned record count (most recent records win).
+        limit: Cap on returned record count (most recent records win). Default 200,
+            at most 1000. The reply is also capped at about 60 KB and long messages are
+            clipped; ``truncated`` says when that happened.
         message_contains: Case-insensitive substring of the log message. Applied
             on FEAGI and again locally so the agent never receives an unfiltered
             ring dump.
@@ -4971,25 +5067,40 @@ async def watch_mapping_weights(
     dst_area: str,
     duration_s: float = 20.0,
     interval_s: float = 2.0,
+    window_s: float | None = None,
+    samples: int | None = None,
 ) -> dict[str, Any]:
     """Sample one mapping's synapse weights over time (series of min/max/avg and extremes).
 
+    ``window_s`` is an alias of ``duration_s`` (it wins when both are given). ``samples=1``
+    or a window of 0 takes one sample and returns at once; ``samples=N`` takes N samples
+    ``interval_s`` apart. The result's ``summary`` is the last sample's ``count``, ``min``,
+    ``max``, ``avg``, ``count_at_zero`` and ``count_at_max_weight`` (the plastic rule's
+    ``max_weight``, counted over every matched synapse; no cap without a plastic rule).
+
     Every ``interval_s`` (at least 0.5 s) for up to 25 s, takes
     ``diagnose_mapping_plasticity()`` statistics: matched synapse count, min, max,
-    avg, ``count_at_zero``, ``count_at_cap`` (cap is the destination's
-    ``neuron_post_synaptic_potential_max``) and the ids of the five largest and five
+    avg, ``count_at_zero``, ``count_at_cap`` (cap is the plastic rule's
+    ``max_weight``, named in ``weight_cap_source``) and the ids of the five largest and five
     smallest synapses (from up to 200 matched synapses). ``avg_delta`` and
     ``max_delta`` compare the last sample with the first. A flat series under
     co-activity means learning is not happening; see
     ``freeze_mapping_plasticity()`` and ``reset_mapping_weights()``.
     """
-    dst_record = await feagi.fetch_cortical_area_properties(dst_area)
-    cap = weight_cap_from_area(dst_record if isinstance(dst_record, dict) else None)
+    mapping = await feagi.get_cortical_mapping(src_area, dst_area)
+    cap, cap_source = weight_cap_from_rules(
+        mapping.get("rules") if isinstance(mapping, dict) else None
+    )
 
     async def diagnose() -> dict[str, Any]:
-        return await feagi.get_mapping_plasticity_diagnostics(src_area, dst_area, sample_limit=200)
+        return await feagi.get_mapping_plasticity_diagnostics(
+            src_area, dst_area, sample_limit=200, weight_cap=cap
+        )
 
-    result = await watch_weights(diagnose, duration_s, interval_s, cap=cap)
+    window = duration_s if window_s is None else window_s
+    result = await watch_weights(
+        diagnose, window, interval_s, cap=cap, cap_source=cap_source, max_samples=samples
+    )
     result["src_area"] = src_area
     result["dst_area"] = dst_area
     return result

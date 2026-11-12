@@ -155,6 +155,7 @@ locally with `interpret_cortical_id()`. Details: [references/concepts.md](refere
     associative mapping, read `references/memory-design*.md`
     ([memory-design.md](references/memory-design.md), [structures](references/memory-design-structures.md)).
 17. **Check what FEAGI already does.** Before designing a new mechanism or asking the user, check what FEAGI already does for the problem (for memory consolidation: repetition via lifespan growth and the long-term threshold, `references/memory-design.md`) and try tuning it first.
+18. **Change many areas in one call.** When the same settings go to several areas (for example lifespan values on every memory area of a set of classifiers), update them all in a single call: the multi-area update (`brain_visualizer_api` operation `put_cortical_area_multi`, PUT `/v1/cortical_area/multi/cortical_area`) or `build_circuit_from_spec` with `edit_areas`. Never loop single-area updates. Read a few areas back afterwards.
 
 ## Keep responses small
 
@@ -224,7 +225,7 @@ skill).
 5. Orchestrate: modulators and an influence table; reward only from hard-wired detectors.
 6. Budget: synapses per rule, events per burst, loop latency against the body's time constant.
 7. Layout (2D rows per layer, 3D anchors per module, in the template's layout table), then the
-   schematic (`show_in_studio` kind `circuit`, edges `<rule>, <sign>`), design notes, and a
+   schematic (`show_in_studio` kind `circuit`, format in [building-circuits.md](references/building-circuits.md) "Circuit diagram format"; edges `<rule>, <sign>`), design notes, and a
    report to the user with at most one exclusive question and the cost line.
 8. Build one stage per module with its acceptance number, snapshot first, black-box test after.
 

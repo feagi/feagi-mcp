@@ -144,3 +144,10 @@ region of an untitled genome: never put new CUSTOM or MEMORY areas there.
 | `Walk_CPG_Hip_FL`, `CPG_Rhythm_Core`, `Motor_FL_Hip` | `McpOrInput`, `FEAGI_Area`, `NewArea_2026` |
 
 Keep one style per project (PascalCase or snake_case with underscores between facets).
+
+## Circuit diagram format (`show_in_studio` kind `circuit`)
+
+`graph`: `v` 1 or "1"; optional `title`; `layout` optional, `"horizontal"` or `"vertical"` only;
+`nodes` (max 128) each with unique non-empty `id` and `label`, optional integer `layer` 0-256;
+`edges` (max 384) each with non-empty `from`/`to`, optional `label`. Edge-only endpoints get stub
+nodes; self-edges are dropped. An invalid graph returns `ok:false` with the reasons.

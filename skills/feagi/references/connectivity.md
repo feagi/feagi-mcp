@@ -67,6 +67,8 @@ Confirm availability with `describe_connectivity_rules()`; these are the usual c
 | `tile` | Source larger than the destination (by voxel count): fold it onto the destination tile by tile. Otherwise copy it across the destination. The genome's `src_seed` and `src_pattern` are ignored | No |
 | `sweeper` | Each source voxel to the next destination voxel: along x, then the next row, then the next layer; the last voxel has none | No |
 | `first_to_last`, `last_to_first` | Source voxel 0,0,0 to the highest destination voxel, or the highest source voxel to destination 0,0,0 | No |
+
+For downsizing a large input with `projector` (threshold and size choice), see [memory-design.md](memory-design.md) "Memory areas are the learning mechanism for recognition".
 | `bitmask_encoder_x/y/z`, `bitmask_decoder_x/y/z` | Encoder: source voxel i along the axis is bit i (most significant first) and reaches every destination position with that bit set, so 3 source bits need 8 destination voxels. Decoder: the reverse | No |
 | `randomizer`, `lateral_pairs_x` | Named in genomes but not implemented in feagi-core: a rule using them silently creates 0 synapses. Do not use | n/a |
 | `episodic_memory` | Feed a memory area so it forms memory neurons. FEAGI also writes it, non-plastic, as the generated memory-to-twin recall edge | No |

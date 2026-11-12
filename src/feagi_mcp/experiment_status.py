@@ -21,11 +21,11 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any
 
 from feagi_mcp.introspection_discovery import _candidate_runtime_roots
+from feagi_mcp.process_probe import pid_alive
 
 logger = logging.getLogger(__name__)
 
@@ -39,20 +39,6 @@ STOPPED_WARNING = (
     "the last frame before it stopped and motor commands will not move the "
     "robot. Ask the user to run the experiment before testing on the robot."
 )
-
-
-def _pid_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
 
 
 def _read_status_file(path: Path) -> dict[str, Any] | None:
@@ -87,7 +73,7 @@ def read_experiment_status(*, env_override: str | None = None) -> dict[str, Any]
             "updated_at": data.get("updated_at"),
             "status_path": str(path),
         }
-        if not _pid_alive(studio_pid):
+        if not pid_alive(studio_pid):
             result["state"] = "unknown"
             result["reason"] = "The Studio process that wrote this status has exited."
         else:

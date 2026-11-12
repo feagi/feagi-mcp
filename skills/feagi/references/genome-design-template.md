@@ -125,8 +125,8 @@ the `suggest_cortical_anchor_positions()` value (`xy_plane`, `hierarchy_y`, `tem
 
 ## Schematic
 
-`show_in_studio` kind `circuit`, one fenced block in the document. Schema and limits (128 nodes,
-384 edges): read_skill hey-feagi-chat Diagrams (Studio).
+`show_in_studio` kind `circuit`, one fenced block in the document. Allowed layouts, fields and limits:
+[building-circuits.md](building-circuits.md) "Circuit diagram format".
 
 ```json
 {"v": 1, "title": "<design name> (design)", "layout": "horizontal",

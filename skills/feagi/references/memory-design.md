@@ -38,6 +38,12 @@ Mechanics and parameter names: [memory-and-plasticity.md](memory-and-plasticity.
 | Predict the next state, replay a sequence | Chain of memory areas A -> B -> C, each link associative | The order is fixed and each step is a distinct state | Many branches: every co-fired pair links, so branches blur |
 | Abstraction, sequences of states, many timescales | Hierarchy: lower memory area episodic into an upper memory area; upper `temporal_depth` = sequence length in lower states | The unit of interest is a sequence of lower patterns | The lower area's pattern count is unbounded: the upper one inherits the blow-up |
 
+### Memory areas are the learning mechanism for recognition
+
+Memory areas are how FEAGI learns to recognise and classify. A memory area fed raw high-resolution input mints a new pattern per input and does not generalise. The fix is not to drop memory areas: extract coarse features first (pooling, oriented-edge detectors, local regions) until the pattern count is bounded and the same feature patterns recur across many examples of a class, then feed those to memory. Do not reject memory areas because raw inputs are unique. A worked classification pattern ships with Neurorobotics Studio (`behavior-playbooks` skill).
+
+Downsizing is the cheapest coarsening: map a large input onto a smaller area with the `projector` morphology (for example a W x H plane onto W/2 x H/2 or W/4 x H/4), so several source voxels land on one destination voxel and minute differences between inputs disappear. Set the destination threshold so a voxel fires only when enough of its source voxels fire (a fraction of the block, not one stray pixel), and check the fired count on a few real inputs. Downsize before feature detectors or memory; pick the size from the smallest detail that must still be told apart.
+
 ## Tuning a memory area
 
 Defaults: depth 1, init_lifespan 9, growth 1.0, long-term threshold 100, cap 0, eviction lru.
@@ -46,9 +52,9 @@ Defaults: depth 1, init_lifespan 9, growth 1.0, long-term threshold 100, cap 0, 
 | Setting | Rule |
 |---|---|
 | Pattern count | Keep it bounded, a few dozen. Coarsen the upstream (fewer bins, coarser values) before building. (derived rule from measured blow-up) |
-| `neuron_init_lifespan` | Larger than the longest gap, in bursts, between recurrences of a pattern you want to keep. Lifespan starts at init; each unseen burst ages it by 1; expiry at 0. (code: memory_neuron_array.rs:597-609) |
-| Growth | At least 1. Each reactivation adds growth truncated to an integer, so 0.5 adds 0. (code: :571-575) |
-| Long-term threshold | Compared with the lifespan, which starts at `neuron_init_lifespan` (code: :521). STM becomes LTM when lifespan >= threshold; LTM never ages (code: :677-709). So the threshold must exceed init: bursts of presence to LTM = (threshold - init) / growth. A threshold at or below init makes every neuron LTM on creation. A self-held input reactivates every burst. A rewarded weight rise or creation on a reward-gated mapping promotes its memory endpoint regardless of the threshold (code: npu.rs:6195-6202, 6617-6619). |
+| `neuron_init_lifespan` | About 2 x the gap G, in bursts, between recurrences of the rarest pattern you want to keep (see Tuning consolidation). Lifespan starts at init; each unseen burst ages it by 1; expiry at 0. (code: memory_neuron_array.rs:597-609) |
+| Growth | Each reactivation adds growth truncated to an integer, so 0.5 adds 0. It must make `r x growth` exceed the gap G (see Tuning consolidation); 1 is too small when G exceeds the hold. (code: :571-575) |
+| Long-term threshold | Compared with the lifespan, which starts at `neuron_init_lifespan` (code: :521). STM becomes LTM when lifespan >= threshold; LTM never ages (code: :677-709). So the threshold must exceed init, and the lifespan must be able to reach it net of aging (see Tuning consolidation). A threshold at or below init makes every neuron LTM on creation. A rewarded weight rise or creation on a reward-gated mapping promotes its memory endpoint regardless of the threshold (code: npu.rs:6195-6202, 6617-6619). |
 | `memory_neuron_cap` and eviction | Cap evicts in the creating area. A full shared pool evicts from the lru area holding most. Victim: lowest-lifespan STM, then least-recent LTM. Eviction `none` makes creation fail, so use it on areas that must not lose memories. (code: :412-424, 490-503) |
 | Save and restart | Only LTM is saved and restored. A connectome snapshot keeps a synapse only when both memory endpoints are LTM. (code: :1076-1077, connectome.rs) |
 | Deleting a neuron | Expiry or eviction deletes that neuron's synapses, learned ones included. (code: npu.rs:1631-1692) |
@@ -56,21 +62,33 @@ Defaults: depth 1, init_lifespan 9, growth 1.0, long-term threshold 100, cap 0, 
 
 ### Tuning consolidation (repetition to long-term)
 
-Repetition is the built-in way short-term memories become long-term: each reactivation grows
-lifespan by `neuron_lifespan_growth_rate`, and reaching `neuron_longterm_mem_threshold` makes the
-neuron permanent. Tune this before designing any new consolidation mechanism. (code: the refs in
-the table above)
+Repetition is the built-in way short-term memories become long-term. Tune this before designing
+any new consolidation mechanism. A neuron LOSES 1 lifespan per burst its pattern is unseen (so G
+per gap) and GAINS `r x growth` per presentation, so the lifespan climbs only if the gain beats
+the loss. Derive the values:
 
-1. Measure the recurrence gap of the patterns to keep: `list_memory_neurons` with detail, read
-   `last_activation_burst` and `activation_count` over a sample. Convert seconds to bursts with
-   the burst rate.
-2. Set `neuron_init_lifespan` to about 3 x that gap (design guidance; derive your own factor).
-3. Set `neuron_longterm_mem_threshold` = init + N x growth, N being the repetitions that should
-   make a memory permanent (design choice). Read both back.
+1. Measure P = bursts per presentation cycle (hold + gap + pipeline) and r = reactivations of a
+   matching memory neuron per presentation (`list_memory_neurons` activation counts; usually
+   close to the bursts the input is held at temporal depth 1). A self-held input reactivates its memory neuron every burst (r = every burst held).
+2. Choose f_min, the rarest pattern worth keeping, as a fraction of presentations (design
+   choice). G = P / f_min is its gap between recurrences, in bursts.
+3. `neuron_init_lifespan` about 2 x G, so a new pattern survives until it is seen again.
+4. `neuron_lifespan_growth_rate` >= ceil(2 x G / r), so each recurrence nets at least +G.
+5. `neuron_longterm_mem_threshold` = init + K x (r x growth - G), K = recurrences that should
+   make a pattern permanent (design choice, e.g. 3-5).
+6. Time to long-term for the rarest kept pattern is about K / f_min presentations; commoner
+   patterns get there sooner. It must be a small fraction of the training run; if not, raise
+   f_min or lower K.
+7. Verify on a small batch: `long_term_neuron_count` rises within the predicted presentations and
+   `neuron_count` levels off (rare patterns expire). Then adjust once, not by guessing.
 
-Pitfalls: a very large threshold as a workaround disables consolidation; a threshold at or below
-init makes everything permanent at creation; reward-gated associative commits promote both
-endpoints at once whatever the threshold ([memory-and-plasticity.md](memory-and-plasticity.md)).
+With growth 1 and a gap longer than the hold, lifespan never climbs and repetition never
+consolidates. Never set the threshold far above what this derivation gives: a threshold the
+lifespan cannot reach disables consolidation; one at or below init makes everything permanent at
+creation. Reward consolidation (a rewarded link) promotes both memory endpoints regardless of the
+threshold, so in a reward-trained classifier the threshold governs unrewarded patterns only
+([memory-and-plasticity.md](memory-and-plasticity.md)). Worked numbers:
+[memory-design-structures.md](memory-design-structures.md) "Consolidation, worked example".
 
 Temporal depth, measured: a held pattern at depth 1 gives 1 neuron; at depth 3 it gives 4 (3
 start-up windows plus 1 steady). A moving 3-step cycle gives 3 neurons at depth 1 and 3 steady at

@@ -243,3 +243,34 @@ def test_filter_cortical_area_records_matches_vision_alias() -> None:
     ]
     matched = filter_cortical_area_records(areas, name_contains="vision")
     assert [area["cortical_id"] for area in matched] == ["aWltZwkAAAA="]
+
+
+def test_catalog_row_drops_null_keys() -> None:
+    row = project_cortical_area_catalog_row({"cortical_id": "a", "cortical_name": "A"})
+    assert row["cortical_id"] == "a"
+    assert all(value is not None for value in row.values())
+
+
+def test_brief_row_has_five_keys_and_region_title() -> None:
+    from feagi_mcp.feagi_client import (
+        cortical_area_region_titles,
+        project_cortical_area_brief_row,
+    )
+
+    area = {
+        "cortical_id": "ptr_spd",
+        "cortical_name": "Spatial Pointer Speed",
+        "cortical_group": "OPU",
+        "cortical_dimensions": [3, 1, 100],
+        "parent_region_id": "r1",
+        "neuron_count": 5,
+    }
+    titles = cortical_area_region_titles({"r1": {"title": "Pointer", "areas": ["ptr_spd"]}})
+    row = project_cortical_area_brief_row(area, titles)
+    assert row == {
+        "cortical_id": "ptr_spd",
+        "name": "Spatial Pointer Speed",
+        "type": "OPU",
+        "dimensions": [3, 1, 100],
+        "region": "Pointer",
+    }

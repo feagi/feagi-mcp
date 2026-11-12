@@ -18,7 +18,15 @@ robot.
   balancing): the pendulum time constant `tau = sqrt(h/g)`, h = centre-of-mass height (a
   0.11 m biped: tau about 0.1 s). Confirm it from a trace with the motors quiet as the
   median 5-to-15 degree fall time. Tracking or reaching: the joint or target settling time.
-  Slow tasks (classification, wheeled driving at low speed, slow reaching) may land at a low rate, but derive it and record the derivation; never keep 10 Hz as an unexamined default.
+  Slow tasks (wheeled driving at low speed, slow reaching) may land at a low rate, but derive it and record the derivation; never keep 10 Hz as an unexamined default.
+- **No body (dataset tasks: classification, segmentation, tables, recorded signals).** Nothing
+  physical sets a deadline. The Trainer counts time in ticks (bursts), so the rate only sets
+  the wall time per sample. Run at the highest rate the brain sustains: raise the setpoint,
+  then read `get_runtime_metrics(measure_s=5)`, and keep the highest setpoint whose measured
+  rate holds within about 10% of it (design guidance; derive your own margin). Recheck after
+  the brain grows. Burst-counted settings keep their meaning, because every timing is in
+  bursts. A low default is never a reason to run slowly, and neither is a body rule carried
+  over from robot work.
 - **Count loop latency in bursts.** Synaptic hops from sensor IPU to motor OPU
   (`trace_signal_path()`), plus about one burst each way for transport. Latency in seconds
   is bursts / burst_hz, or bursts x sim time per burst in lock-step.
@@ -79,6 +87,10 @@ experiment (`_experiment.state` is `running`).
   `"world"` or a list.
 - For joint trajectories over time without brain alignment, the Studio tools
   `record_embodiment_trace` and `run_embodiment_trial` remain the right choice.
+
+## Stimulus presentation and reading at high burst rates
+
+At high burst rates `run_stimulus_protocol` posts land about every other burst and its reads miss bursts (measured once at 200 Hz). For burst-exact presentation use `schedule_stimulus`; for burst-exact reading use `record_spikes`.
 
 ## Death and falls
 

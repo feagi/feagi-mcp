@@ -90,14 +90,14 @@ N = positions (W x H), D = depth; cost model in [genome-design-budget.md](genome
 
 ### Winner-take-all race
 - **Tag:** design, **unverified live** (stage 3b; from code reading).
-- **When:** exactly one bin of D must win per position. **Rules:** integrate-to-threshold race (charge accumulation on, first bin to cross fires, its inhibition resets the others, refractory holds the winner). The `!` pairwise form costs N x D x (D - 1).
+- **When:** exactly one bin of D must win per position. **Rules:** integrate-to-threshold race (first bin to cross fires, refractory holds the winner). With charge accumulation on, negative input is clipped to 0 (`concepts.md`), so inhibition cannot lower a loser's accumulated potential (measured once: losers held their potential while the pool fired, and near-ties co-fired). Stop the losers by something else: accumulation off with inhibition arriving before they cross, or a refractory/snooze on the losers. If a downstream reader just picks the largest value (e.g. a Trainer class decoder), skip WTA: a graded population readout (each class fires carrying its value with `mp_driven_psp`) avoids the problem. The `!` pairwise form costs N x D x (D - 1).
 - **Pitfall:** symmetric delayed lateral inhibition shifts every class equally, picks no maximum and can oscillate; the mask decoder sums ties into a third class.
 - **Verify before any learning stage:** one bin fires on the last burst of a 12-burst hold in at least 95% of positions, and it is the larger input.
 
 ### Pooled inhibition
 - **Tag:** design (variant 5v, unbuilt). **When:** winner selection across D separate class areas.
 - **Rules:** each `Class_k` to one pool area (+1), pool back to every `Class_k` (-1), one burst delayed.
-- **Synapses:** 2 x N x D, against N x D x (D - 1) pairwise. **Pitfall:** the same winner check as the race applies.
+- **Synapses:** 2 x N x D, against N x D x (D - 1) pairwise. **Pitfall:** the pool's inhibition is subject to the same clipping as the race (it cannot reduce accumulated charge), so use the same loser-stopping options and the same winner check.
 - **Verify:** `run_stimulus_protocol()` with two inputs one PSC apart.
 
 ## Safety

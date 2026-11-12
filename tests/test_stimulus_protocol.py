@@ -269,3 +269,32 @@ async def test_stimulate_area_resolves_a_name_but_not_an_id() -> None:
     assert list(http.posts[-1]["stimulation_payload"]) == [CUSTOM_ID]
     missing = await client.stimulate_area("Nope", [0, 0, 0])
     assert missing["success"] is False and "Nope" in missing["error"]
+
+
+async def test_repeat_runs_step_list_n_times() -> None:
+    http = FakeHttp({})
+    out = await _client(http).run_stimulus_protocol(STEPS, [AREA_A], repeat=3)
+    assert out["success"] is True
+    assert len(http.posts) == 9  # (2 + 0 + 1) per repeat
+    assert len(out["steps"]) == 9
+    assert out["bursts_run"] == 12
+    assert out["repeat"] == 3
+
+
+async def test_repeat_must_be_positive_int() -> None:
+    out = await _client(FakeHttp({})).run_stimulus_protocol(STEPS, [AREA_A], repeat=0)
+    assert out["success"] is False
+
+
+async def test_compact_gives_per_step_area_counts_without_voxels() -> None:
+    samples = {
+        101: _sample(101, {AREA_A: [[0, 0, 0], [1, 0, 0]]}),
+        102: _sample(102, {AREA_A: [[0, 0, 0]]}),
+    }
+    out = await _client(FakeHttp(samples)).run_stimulus_protocol(
+        STEPS, [AREA_A], tail_bursts=1, compact=True
+    )
+    assert "bursts" not in out
+    assert "voxel_counts" not in out["areas"][AREA_A]
+    assert out["areas"][AREA_A]["firing_bursts"] == 2
+    assert out["steps"][0]["fires"] == {AREA_A: {"firing_bursts": 2, "neuron_fires": 3}}

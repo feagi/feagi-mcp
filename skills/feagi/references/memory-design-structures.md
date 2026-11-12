@@ -92,3 +92,11 @@ Other rules:
 - Expecting recalled neurons to learn: recall-fired neurons form no new associative synapses.
 - Wide `plasticity_window` or many fired sources: every pair links (cross-product synapses).
 - Expecting memory to sequence unaided: use a chain or hierarchy, or keep an innate clock.
+
+## Consolidation, worked example
+
+Worked example, derive your own (see "Tuning consolidation" in [memory-design.md](memory-design.md)):
+P = 42 bursts per presentation, r about 20, f_min = 1/50, so G = 2100; init = 4200; growth = 210
+(net +2100 per recurrence); K = 3 gives threshold = 10500. The rarest kept pattern goes long-term
+after about 150 presentations; a pattern seen every 4th presentation after about 2 sightings.
+(design intent, unmeasured)

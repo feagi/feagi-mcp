@@ -58,8 +58,11 @@ def weight_sample(diagnostics: dict[str, Any], cap: float | None) -> dict[str, A
             for s in items
         ]
 
+    full_at_cap = stats.get("at_cap_count")
     at_cap = (
-        sum(1 for s in weighted if cap is not None and float(s["weight"]) >= cap)
+        full_at_cap
+        if isinstance(full_at_cap, int) and cap is not None
+        else sum(1 for s in weighted if cap is not None and float(s["weight"]) >= cap)
         if cap is not None
         else None
     )
@@ -70,22 +73,50 @@ def weight_sample(diagnostics: dict[str, Any], cap: float | None) -> dict[str, A
         "avg": round(stats["avg"], 4) if isinstance(stats.get("avg"), (int, float)) else None,
         "count_at_zero": stats.get("zero_weight_count"),
         "count_at_cap": at_cap,
+        "count_at_max_weight": at_cap,
         "largest": ids(ordered[-EXTREME_COUNT:][::-1]),
         "smallest": ids(ordered[:EXTREME_COUNT]),
         "extremes_from_sample_of": len(weighted),
     }
 
 
-def weight_cap_from_area(area: dict[str, Any] | None) -> float | None:
-    """Destination area's ``neuron_post_synaptic_potential_max``, FEAGI's weight ceiling."""
-    if not isinstance(area, dict):
-        return None
-    for bag in (area, area.get("properties")):
-        if isinstance(bag, dict):
-            value = bag.get("neuron_post_synaptic_potential_max")
-            if isinstance(value, (int, float)) and not isinstance(value, bool):
-                return float(value)
-    return None
+def weight_cap_from_rules(
+    rules: Any, morphology_id: str | None = None
+) -> tuple[float | None, str | None]:
+    """``(cap, source)`` from the mapping's plastic rules: the burst engine's binding ceiling.
+
+    The cap is a plastic rule's ``max_weight`` (the rule for ``morphology_id`` when given and
+    present, else the largest). No plastic rule with a numeric ``max_weight`` returns
+    ``(None, None)``; the destination area's ``neuron_post_synaptic_potential_max`` is never
+    used because the burst engine does not read it.
+    """
+    caps: list[tuple[Any, float]] = []
+    for r in rules if isinstance(rules, list) else []:
+        if not isinstance(r, dict):
+            continue
+        plastic = bool(r.get("plasticity_flag")) or str(r.get("plasticity_mode", "")).lower() in {
+            "stdp",
+            "rstdp",
+            "r-stdp",
+        }
+        v = r.get("max_weight")
+        if plastic and isinstance(v, (int, float)) and not isinstance(v, bool):
+            caps.append((r.get("morphology_id"), float(v)))
+    if not caps:
+        return None, None
+    if morphology_id is not None:
+        for mid, v in caps:
+            if mid == morphology_id:
+                return v, "rule.max_weight"
+    return max(v for _, v in caps), "rule.max_weight"
+
+
+def _summary(point: dict[str, Any]) -> dict[str, Any]:
+    """One-shot weight summary from a series point."""
+    return {
+        key: point.get(key)
+        for key in ("count", "min", "max", "avg", "count_at_zero", "count_at_max_weight")
+    }
 
 
 async def watch_weights(
@@ -94,11 +125,16 @@ async def watch_weights(
     interval_s: float,
     *,
     cap: float | None,
+    cap_source: str | None = None,
+    max_samples: int | None = None,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     clock: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
     """Sample ``diagnose`` every ``interval_s`` for ``duration_s`` and return the series."""
     duration = max(0.0, min(float(duration_s), MAX_WATCH_S))
+    if max_samples is not None:
+        max_samples = max(1, int(max_samples))
+        duration = MAX_WATCH_S
     interval = max(MIN_INTERVAL_S, float(interval_s))
     start = clock()
     series: list[dict[str, Any]] = []
@@ -112,6 +148,8 @@ async def watch_weights(
             series.append(point)
         else:
             errors.append({"t": round(t0 - start, 3), "error": payload})
+        if max_samples is not None and len(series) + len(errors) >= max_samples:
+            break
         if clock() - start + interval > duration:
             break
         await sleep(max(0.0, interval - (clock() - t0)))
@@ -121,6 +159,8 @@ async def watch_weights(
         "interval_s": interval,
         "capped": float(duration_s) > MAX_WATCH_S,
         "weight_cap": cap,
+        "weight_cap_source": cap_source,
+        "summary": _summary(series[-1]) if series else None,
         "samples": series,
         "errors": errors,
         "avg_delta": round(avgs[-1] - avgs[0], 4) if len(avgs) >= 2 else None,

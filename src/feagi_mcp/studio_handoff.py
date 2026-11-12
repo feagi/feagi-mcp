@@ -13,6 +13,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from feagi_mcp.process_probe import pid_alive
+
 VIA_STUDIO_ENV = "FEAGI_MCP_VIA_STUDIO"
 ALLOW_DIRECT_ENV = "FEAGI_MCP_ALLOW_DIRECT"
 STUDIO_DIR_ENV = "FEAGI_STUDIO_DIR"
@@ -37,18 +39,6 @@ def _discovery_paths() -> list[Path]:
         return [Path(override).expanduser() / "mcp.json"]
     home = Path.home()
     return [home / ".feagi/studio/mcp.json", home / ".feagi-staging/studio/mcp.json"]
-
-
-def _pid_alive(pid: Any) -> bool:
-    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except PermissionError:
-        return True
-    except (ProcessLookupError, OSError):
-        return False
-    return True
 
 
 def _same_feagi(feagi_api: Any, host: str, port: int) -> bool:
@@ -80,7 +70,7 @@ def studio_manages_feagi(host: str, port: int) -> bool:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        if not isinstance(data, dict) or not _pid_alive(data.get("pid")):
+        if not isinstance(data, dict) or not pid_alive(data.get("pid")):
             continue
         if _same_feagi(data.get("feagi_api"), host, port):
             result = True
