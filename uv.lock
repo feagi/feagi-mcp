@@ -6,10 +6,10 @@ resolution-markers = [
     "python_full_version == '3.14.*' and sys_platform == 'win32'",
     "python_full_version == '3.14.*' and sys_platform != 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version < '3.11' and sys_platform == 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version == '3.11.*' and sys_platform != 'win32'",
+    "python_full_version < '3.11' and sys_platform == 'win32'",
     "python_full_version < '3.11' and sys_platform != 'win32'",
 ]
 
@@ -785,8 +785,8 @@ resolution-markers = [
     "python_full_version == '3.14.*' and sys_platform == 'win32'",
     "python_full_version == '3.14.*' and sys_platform != 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version == '3.11.*' and sys_platform != 'win32'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d2/79/e78bd8f75a9b8e32233ce92d4607f0a21ce88a9156cace2884e7175a82f5/coverage-7.17.0.tar.gz", hash = "sha256:cc010a0a7fbdd9bb8bdfd0d3f04a5151275860213cbd7e2b876b29778489c712", size = 991021, upload-time = "2026-10-22T16:06:50.009Z" }
@@ -1004,7 +1004,7 @@ wheels = [
 
 [[package]]
 name = "feagi-core"
-version = "2.6.12"
+version = "2.6.18"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -1016,9 +1016,9 @@ dependencies = [
     { name = "requests" },
     { name = "toml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ea/ba/95cd091c2735bb0d58c98fc430ad6231b84da76880f58c78f30a95ff2032/feagi_core-2.6.12.tar.gz", hash = "sha256:567b48000d975cbe9926b2346e55a937223ecb2e0263f95c54ff786dbd1db8b6", size = 34432278, upload-time = "2026-10-29T00:07:27.838Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6b/9b/b935fbb87d2db0082e1665eba08a6cfcda6cae20b28eaa7e343274e4e817/feagi_core-2.6.18.tar.gz", hash = "sha256:1ddb4d1f48d4a9b4d9a2e2f41c387b8b8d66e27f50fa948bd28a6731262413e9", size = 36259948, upload-time = "2026-11-12T21:22:40.258Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/30/5e/9aefb1b58f1d93064cb39b98cecb1e59b84390f1f58ead257cfe223b9f53/feagi_core-2.6.12-py3-none-any.whl", hash = "sha256:8b0381c475c9c4723c701301488c95cfcd4b2650e5814e09a90942c781ae08c2", size = 34665091, upload-time = "2026-10-29T00:07:24.252Z" },
+    { url = "https://files.pythonhosted.org/packages/b4/6c/00b558a7c8768f8278c2158c8e8ca58e3c6e1f9d2706ce545dd3bb9f33ec/feagi_core-2.6.18-py3-none-any.whl", hash = "sha256:f49aff4508c5ddb605441e83bae6f1313e2cd053f079bd4aa94dacd1139dad5c", size = 36493103, upload-time = "2026-11-12T21:22:37.461Z" },
 ]
 
 [[package]]
@@ -1047,7 +1047,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "feagi-core", specifier = "==2.6.12" },
+    { name = "feagi-core", specifier = "==2.6.18" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "mcp", specifier = ">=1.0.0,<2.0.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = "==2.4.1" },
@@ -1063,19 +1063,19 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "feagi-rust-py-libs"
-version = "0.0.120"
+version = "0.0.124"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/f8/0f/4c4183e8cf1f4644c6464132cb05c8ffa02b6ccf4d4cb7f08c17ece30e21/feagi_rust_py_libs-0.0.120.tar.gz", hash = "sha256:a8afaf91b3e6a221ff156a72aec804782c46706b87b84c77313b3bb8592740df", size = 130114, upload-time = "2026-10-26T13:20:42.146Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/3d/b4/4c5d90dca36e8de00c832738f8a323184f64ee412b596d1ef753c6d3eccb/feagi_rust_py_libs-0.0.124.tar.gz", hash = "sha256:d46523006667fe088d141397f770a947a44da67d3c18cb1c0d866acdc491c855", size = 154612, upload-time = "2026-11-12T14:36:12.035Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/44/2c/2a4ffda23488c5a8b956782fbe81f23c2d8d75b0f782b9e4d8dc0d6aae85/feagi_rust_py_libs-0.0.120-cp38-abi3-macosx_10_12_x86_64.whl", hash = "sha256:63386b1584f3b3bb09f15688cf53e3370d201f70cb117b64b91269691ec6d348", size = 8638320, upload-time = "2026-10-26T13:20:23.741Z" },
-    { url = "https://files.pythonhosted.org/packages/1b/9c/aebd6bec6fdd39b05668904376d3eaafeaa170e137951a80bf08a9eda498/feagi_rust_py_libs-0.0.120-cp38-abi3-macosx_11_0_arm64.whl", hash = "sha256:4da412107084d26a98fd477be399d8f826214d07616cc6f743a245823ee94492", size = 8314208, upload-time = "2026-10-26T13:20:25.74Z" },
-    { url = "https://files.pythonhosted.org/packages/e8/66/1b9b88d39c5c5500a24c6117703a95bee6f29067fb5a9a70b2048e9fd283/feagi_rust_py_libs-0.0.120-cp38-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:49301dae4b73cccb44dd34eb6e913ca7355abfe1724e105d3eaadb3c65af6d15", size = 9103491, upload-time = "2026-10-26T13:20:27.533Z" },
-    { url = "https://files.pythonhosted.org/packages/c5/e0/62b5fb995a7066987b9d670881ff87b550103feacf35df9206de52b20154/feagi_rust_py_libs-0.0.120-cp38-abi3-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:aa85661e68655dd1c1d7ea8e31b18a76701eb316cb81c2a6304c03d838d30dc6", size = 7656231, upload-time = "2026-10-26T13:20:29.338Z" },
-    { url = "https://files.pythonhosted.org/packages/d3/70/83939333dd2549f8791dd0d50d2b31cfebeaf83a0902425e2d6e9ba80629/feagi_rust_py_libs-0.0.120-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:948d0916f1a41680718cb9e0f39e50885cfcb89e3ccea66342a4cd3c2611dc44", size = 9412663, upload-time = "2026-10-26T13:20:31.198Z" },
-    { url = "https://files.pythonhosted.org/packages/c3/54/45e39df77b2b7194392d3b93a4fa47e3dad66b5dc206844ee16481c26b9d/feagi_rust_py_libs-0.0.120-cp38-abi3-musllinux_1_2_i686.whl", hash = "sha256:b6e24d19dea7038d1c88386b15c2611261d3376503fb3d1fc16af4fb9dd11d5d", size = 13844549, upload-time = "2026-10-26T13:20:33.199Z" },
-    { url = "https://files.pythonhosted.org/packages/c0/35/6ef3e72964a1a090a3a973ee5dfe24fee7ce0cf69458d9e081b682ef6b44/feagi_rust_py_libs-0.0.120-cp38-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:4c4effcf1ac5b924867db81d7d8c6d368eeefc668c1fd3fbb3b752ea0c851cb7", size = 16110920, upload-time = "2026-10-26T13:20:35.645Z" },
-    { url = "https://files.pythonhosted.org/packages/d5/80/40582fc3824f8b80fdf21e79c19646a1fc2c0dced4e9dbe0aa81908c1cb3/feagi_rust_py_libs-0.0.120-cp38-abi3-win32.whl", hash = "sha256:ca063d7dab89c54bba194ec10630e3ca9f079f099ea58be34e522a7e1c6ffca7", size = 5522738, upload-time = "2026-10-26T13:20:38.15Z" },
-    { url = "https://files.pythonhosted.org/packages/c1/dc/9e45c56703d7919b22862fb05408a9e3ac0a57078c14fba1ac1a016086e6/feagi_rust_py_libs-0.0.120-cp38-abi3-win_amd64.whl", hash = "sha256:b4dc32b49083f5c522352c497aaf7c24c1f1bc1413b16ab10a08b21ff416b3ba", size = 8012546, upload-time = "2026-10-26T13:20:40.013Z" },
+    { url = "https://files.pythonhosted.org/packages/33/1f/10266c07d4d2279860eef08671d6f15994024bb9e68d776ad60e5c308c35/feagi_rust_py_libs-0.0.124-cp38-abi3-macosx_10_12_x86_64.whl", hash = "sha256:2f694323ce2c2bbb51896016cbf17aad7879611d883a69ff1f811e3bdc78cb09", size = 8735489, upload-time = "2026-11-12T14:35:55.08Z" },
+    { url = "https://files.pythonhosted.org/packages/5c/b5/b9b953e23af06163bc826ac56ea7c4b804a2607d4a6ce19cde58938a5b66/feagi_rust_py_libs-0.0.124-cp38-abi3-macosx_11_0_arm64.whl", hash = "sha256:06fa8a254758f79ba65bd66dbc10839211d29fb2bc41d29d8fff58eeb98cd345", size = 8410434, upload-time = "2026-11-12T14:35:57.199Z" },
+    { url = "https://files.pythonhosted.org/packages/c0/91/0a8e72cd1cd49152aa1dee3993c5f3030ece356dac40b14bcd8b1e885e21/feagi_rust_py_libs-0.0.124-cp38-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:39279748cc682f50e02f62be75fcd8d24b7eb431a7e85075f93e667a8fcfad3e", size = 9213607, upload-time = "2026-11-12T14:35:59.064Z" },
+    { url = "https://files.pythonhosted.org/packages/47/b2/5f27eb665bf617864aa06cf48f4de2cf26e6410c253ec00227324ce0ff0d/feagi_rust_py_libs-0.0.124-cp38-abi3-manylinux2014_i686.manylinux_2_17_i686.whl", hash = "sha256:d63644db243910700e3ccb99db7b3d7a783ac9db28fab86114d1f465a7bec319", size = 9816396, upload-time = "2026-11-12T14:36:00.951Z" },
+    { url = "https://files.pythonhosted.org/packages/41/38/5ede08f0413ddd879ba8eec4fe351506315f6de25490cced9bd87efac441/feagi_rust_py_libs-0.0.124-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:2130b72acaa5c628d85c7a4317b4bfdc97c660f243e5c40271ac2243f9a00418", size = 9519677, upload-time = "2026-11-12T14:36:02.75Z" },
+    { url = "https://files.pythonhosted.org/packages/63/17/ab5f0b7fed2deb1f84e753a0dd7808f8c487027e1d2b3be983d9274fceea/feagi_rust_py_libs-0.0.124-cp38-abi3-musllinux_1_2_i686.whl", hash = "sha256:b55b6f54587286e058a56f764e55661165102934463a75ee0da9d5e2eca084ac", size = 15883485, upload-time = "2026-11-12T14:36:04.702Z" },
+    { url = "https://files.pythonhosted.org/packages/ea/2c/8282d7ae31775ad0763ab2c9a21812359d7dcc230011815a66206556a13c/feagi_rust_py_libs-0.0.124-cp38-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:99ea56c2705be3a26d5257f69122f36284102512edbb5cb97683cd9ffb6f1a28", size = 16225779, upload-time = "2026-11-12T14:36:07.074Z" },
+    { url = "https://files.pythonhosted.org/packages/52/83/7ded991f26154f7336bb0cec98d0e54f92dd70f45b31bfbb25c3dbe88f73/feagi_rust_py_libs-0.0.124-cp38-abi3-win32.whl", hash = "sha256:0c58fdcc22075452a3e652a44c421055f79b765d8a078632094c9ceac21a05da", size = 7237105, upload-time = "2026-11-12T14:36:09.356Z" },
+    { url = "https://files.pythonhosted.org/packages/0b/d2/e1bbc0b8ddd844eef11dc6e8a37433ac11bd9e4d33f67744c4f4f46ab94b/feagi_rust_py_libs-0.0.124-cp38-abi3-win_amd64.whl", hash = "sha256:0895061c91eb9752a737ea9c2d636a3d51cbad2e3b531025dd46251f70238394", size = 8095230, upload-time = "2026-11-12T14:36:10.758Z" },
 ]
 
 [[package]]
@@ -1100,8 +1100,8 @@ resolution-markers = [
     "python_full_version == '3.14.*' and sys_platform == 'win32'",
     "python_full_version == '3.14.*' and sys_platform != 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version == '3.11.*' and sys_platform != 'win32'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d8/28/3893324bcadf8f89b1616637468d766af3f625008c0735bf704fdfa86617/filelock-4.2.4.tar.gz", hash = "sha256:c6d8663535e1650ee430507b4ffbac7b464dd64b7647ea0112a9f406499d163d", size = 652444, upload-time = "2026-10-19T01:57:51.001Z" }
@@ -1683,8 +1683,8 @@ resolution-markers = [
     "python_full_version == '3.14.*' and sys_platform == 'win32'",
     "python_full_version == '3.14.*' and sys_platform != 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version == '3.11.*' and sys_platform != 'win32'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/7b/6b/29ef8e752f5854dcc267ded0652c475bec99b86f255957a0d4fcad657b18/multidict-7.2.1.tar.gz", hash = "sha256:e8af3e6f1bdbc31fd762b094133b478b89988eaebc63cbe82b1d9e3bbd15cede", size = 369994, upload-time = "2026-10-24T20:41:35.457Z" }
@@ -2195,8 +2195,8 @@ resolution-markers = [
     "python_full_version == '3.14.*' and sys_platform == 'win32'",
     "python_full_version == '3.14.*' and sys_platform != 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version == '3.11.*' and sys_platform != 'win32'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/40/28/1c058a9143d2304b3078f8dadcbb9dc27f7d3581b5d05157c84869c4cc0d/platformdirs-4.14.0.tar.gz", hash = "sha256:83f009c1e8c5fc36869b5171755b291887bd2cade7965233cdfabd23d754720b", size = 70387, upload-time = "2026-10-28T18:27:30.973Z" }
@@ -2242,8 +2242,8 @@ resolution-markers = [
     "python_full_version == '3.14.*' and sys_platform == 'win32'",
     "python_full_version == '3.14.*' and sys_platform != 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version == '3.11.*' and sys_platform != 'win32'",
 ]
 dependencies = [
@@ -2425,8 +2425,8 @@ resolution-markers = [
     "python_full_version == '3.14.*' and sys_platform == 'win32'",
     "python_full_version == '3.14.*' and sys_platform != 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version == '3.11.*' and sys_platform != 'win32'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/cb/27/eeb9f307bf07060f3d9f9aa0fb8c15b01bdfded0a941e4b2719c7f94cacd/pycparser-3.12.tar.gz", hash = "sha256:f03387877eab82ce01bbdfd0ba7252ee55a90b1c708d5129e2ce915475cf1db6", size = 158785, upload-time = "2026-10-22T13:40:03.56Z" }
@@ -2623,8 +2623,8 @@ resolution-markers = [
     "python_full_version == '3.14.*' and sys_platform == 'win32'",
     "python_full_version == '3.14.*' and sys_platform != 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version == '3.11.*' and sys_platform != 'win32'",
 ]
 dependencies = [
@@ -3005,8 +3005,8 @@ resolution-markers = [
     "python_full_version == '3.14.*' and sys_platform == 'win32'",
     "python_full_version == '3.14.*' and sys_platform != 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version == '3.11.*' and sys_platform != 'win32'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/42/68/3bd46b8a5e01d3c2ebdf9c5e9497912e3fe0cde02bac21a7130ca866e403/rpds_py-2026.9.1.tar.gz", hash = "sha256:4793ef7f78268b124b73fa933440f01d258bbae01de9fa53e9080c9ab0425a12", size = 63948, upload-time = "2026-10-04T16:32:36.469Z" }
@@ -3191,8 +3191,8 @@ resolution-markers = [
     "python_full_version == '3.14.*' and sys_platform == 'win32'",
     "python_full_version == '3.14.*' and sys_platform != 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version == '3.11.*' and sys_platform != 'win32'",
 ]
 dependencies = [
@@ -3230,8 +3230,8 @@ resolution-markers = [
     "python_full_version == '3.14.*' and sys_platform == 'win32'",
     "python_full_version == '3.14.*' and sys_platform != 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version == '3.11.*' and sys_platform != 'win32'",
 ]
 dependencies = [
