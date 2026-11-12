@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-11-12
+
 ### Added
 - **record_spikes**: burst-exact firing of up to 16 areas from the Fire Ledger (`/v1/burst_engine/fire_history`); compact per-area summary, optional CSV.
 - **hold_stimulus** / **get_stimulus_hold**: hold voxels firing on every burst (background option) with a ledger landing check.
