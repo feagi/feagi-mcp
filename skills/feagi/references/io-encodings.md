@@ -1,11 +1,10 @@
 # I/O encodings: how values become voxels
 
-How FEAGI's coders turn a sensor reading into IPU firing and OPU firing into a command. This
-is the one home for encoding rules; other files link here. Evidence tags: *code-read* (read in
+How FEAGI's coders turn sensor readings into IPU firing and OPU firing into commands; the
+one home for encoding rules, other files link here. Evidence tags: *code-read* (read in
 the `feagi-sensorimotor` coders and `feagi-structures` templates), *measured once*,
-*unverified*. Get the live coding of a channel instead of assuming it:
-`convert_io_value(area, channel, bin=...)` returns the variant, depth and decoded fraction,
-using FEAGI's own coder and the agent's registration.
+*unverified*. Read a channel's live coding with `convert_io_value(area, channel, bin=...)`: the variant,
+depth and decoded fraction, from FEAGI's own coder and the agent's registration.
 
 ## Contents
 
@@ -26,8 +25,8 @@ using FEAGI's own coder and the agent's registration.
   cortical ID, so changing it changes the ID. Bind areas with `compute_io_cortical_id()` /
   `create_io_area_for_unit()` ([concepts.md](concepts.md#cortical-area-ids)).
 - The controller must use the same map. A signed command does not match an unsigned area.
-- Read template shapes and defaults with `get_cortical_template()` and the live area's
-  dimensions, not from this file.
+- Read template shapes and defaults with `get_cortical_template()` and the live
+  area, not this file.
 
 ## Percentage codings along Z
 
@@ -41,8 +40,8 @@ using FEAGI's own coder and the agent's registration.
 | Signed two-lobe | signed 2D/3D/4D, linear | two X columns per axis, `+` then `-`; each lobe `1 - z/Z`; `v = pos - neg` | the lobe of the sign; 0 fires the last z of both |
 | Signed fractional | signed, fractional | two lobes, each `Σ 0.5^(z+1)`; `v = pos - neg` | greedy bits on the lobe of the sign |
 
-- Linear: one obvious "value is here" neuron; a deeper area gives finer steps. Fractional
-  (called exponential in some tools): a value is a small bit pattern of Z planes.
+- Linear: one "value is here" neuron; deeper areas give finer steps. Fractional
+  (also called exponential): a value is a small bit pattern of Z planes.
 - Encoder and decoder differ by up to one bin: the linear encoder scales by `Z`, the unsigned
   decoder by `Z-1`. To pick the bin that decodes to a wanted value, use `convert_io_value`
   with `fraction` (it inverts the decoder), never `(1-v)·Z` by hand. *code-read*
@@ -57,8 +56,7 @@ using FEAGI's own coder and the agent's registration.
 - Several active z on one channel: linear takes the **mean index** (so z 0 plus last z reads
   0.5), fractional **sums** the planes (a repeated z counts twice).
 - Firing strength (potential) does not change a percentage value; position does.
-- A silent channel is not decoded: the cached value **holds** and the channel is not marked
-  changed. Whether the controller then holds or zeroes the actuator is controller-defined
+- A silent channel is not decoded: the cached value **holds**, unmarked as changed. Whether the controller then holds or zeroes the actuator is controller-defined
   (*unverified* per controller; check with `get_motor_snapshot_last()`).
 
 ## Absolute and incremental
@@ -95,8 +93,8 @@ the registration's `physical_range`; never assume them.
 `incremental_step_size_0_1` (0 < s <= 1), read with `get_agent_device_registrations()`; the
 older two-area decoder uses a fixed 0.002 per burst that the registration does not carry.
 Per-fire joint motion is `net · step_size · (hi - lo)`. `convert_io_value()` on an incremental
-servo area returns, per column, the signed `step_fraction` and `step_value` of one fire at that bin;
-it reports the step as not registered for the two-area decoder.
+servo area returns each column's signed `step_fraction` and `step_value` per fire (not
+registered for the two-area decoder).
 
 **Speed area**: unsigned `1 - z/(Z-1)`, a per-channel speed limit. Before the first speed
 command a silent speed area means full speed (1.0); after one, silence keeps the last speed,
@@ -104,11 +102,11 @@ including 0. A speed-only fire republishes the cached target with the new speed.
 
 Design consequences (general):
 
-- An incremental servo is an integrator in the body: a joint keeps whatever target the last
-  fires left. A circuit that only fires on error needs no hold loop, but it has no "home"
-  unless something drives it there.
-- Size the step from the body: pick the z (or step size) so one fire moves the joint less
-  than the error the sensors can resolve, then check with a trace.
+- An incremental servo is an integrator in the body: a joint keeps the target the last fires
+  left. A circuit that fires only on error needs no hold loop, but has no "home" unless
+  something drives it there.
+- Size the step so one fire moves the joint less than the sensors can resolve, then check
+  with a trace.
 
 > **Worked example (measured once on one biped, derive your own):** joint range ±π/2, step
 > size 1.0. One fire at z 508 moved the joint target about 0.012 rad; a fire at z 0 swung the
@@ -135,9 +133,9 @@ time; Smart IMU uses the raw components. Read the cutoffs before mapping z to an
   cutoff `c` the component saturates at `θ = 2·asin(c)`: past that the lobe sits at z 0 and
   only `w` still changes. `w` is never scaled, so near upright it moves slowly.
 - An accelerometer at rest reads the support force, about 1 g pointing up in its own frame
-  (MuJoCo convention, general knowledge), so tilt shows on the X and Y columns.
+  (general knowledge), so tilt shows on the X and Y columns.
 - A burst with no new sample: the Raw IMU encoder clears that channel and emits nothing; the
-  Smart IMU (percentage) encoder re-emits its last voxels. *code-read*, not measured. For gaps
+  Smart IMU encoder re-emits its last voxels. *code-read*. For gaps
   and `sensory_hold_last_frame` see [embodiment.md](embodiment.md).
 
 > **Worked example (measured once on one biped, derive your own):** a still body pitched about
@@ -166,6 +164,8 @@ time; Smart IMU uses the raw components. Read the cutoffs before mapping z to an
 | Object segmentation | IPU/OPU | one layer, potential = (class + 1)/classes, 0 = unlabeled. Value planes: [value-planes-and-classifiers.md](value-planes-and-classifiers.md) |
 | Pose estimation | OPU | Z = joint id; per Z layer the potential-weighted centroid of firing on X, Y is the joint (0..1), mean potential is confidence; an incoherent cluster = not detected |
 | Audio in and out | IPU/OPU | X frequency column, Y phase step, potential = loudness on the registered dB floor and ceiling; potential 0 = silence. Output: the strongest phase row per column wins, and every decode is one tick (silence is written) |
+| MIDI output | OPU | one unit per instrument. Notes: X note, potential 0-255 = strength; firing = sounding, every decode is one frame. Expression: X control, Z unsigned level; silent = not driven |
+| MIDI input | IPU | inverse of MIDI output: one Notes voxel per sounding note (potential = strength x 255); Expression X control, Z level. One frame per burst, nothing latched; velocity reaches downstream only with `mp_driven_psp` ([concepts.md](concepts.md)) |
 | Text in and out | IPU/OPU | bits along Z at x 0, y 0, z 0 = highest bit, any potential > 0 sets a bit; integer = token id + 1, so a quiet frame is "no token" |
 | Miscellaneous | IPU/OPU | no meaning assigned; the dimensions are the contract between brain and controller |
 

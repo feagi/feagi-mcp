@@ -12,7 +12,7 @@ CONFIGURATION FLAG (u16) bit layout (Rust ``bit_indexes``):
 
     bits 0–3  — variant discriminant
     bits 4–7  — ``CorticalSubUnitIndex`` (0–15); this is BV / connectome ``subunit_id``
-    bit  8    — frame-change handling: absolute = 0, incremental = 1
+    bit  8    — frame-change handling: absolute = 0, incremental = 1 (Boolean has none)
     bit  9    — percentage neuron positioning: linear = 0, fractional = 1
     bits 10–12 — pose schema (PoseEstimation only)
 
@@ -50,6 +50,35 @@ _VARIANT_KINDS: dict[int, str] = {
 }
 #: Variants whose flag carries the positioning bit (bit 9); the others have no positioning axis.
 _POSITIONING_VARIANTS = frozenset(range(1, 9))
+
+
+def io_flag_datasheet_fields(flag: int) -> dict[str, Any] | None:
+    """Datasheet port fields the IO configuration flag defines, or None where Rust refuses the flag.
+
+    Mirrors ``IOCorticalAreaConfigurationFlag::try_from_data_type_configuration_flag``:
+    Boolean has kind and signed (false) only; ``Percentage*`` and ``SignedPercentage*``
+    also have frame and positioning; ``CartesianPlane``, ``Misc`` and ``PoseEstimation``
+    have kind and frame (no datasheet rule defines their ``signed``).
+    ``tests/io-flag-fixture.json`` is the table shared with Composer and feagi-core.
+    """
+    variant = flag & _VARIANT_MASK
+    kind = _VARIANT_KINDS.get(variant)
+    if kind is None:
+        return None
+    if variant == 0:
+        return {"kind": kind, "signed": False}
+    frame = "Incremental" if ((flag >> _FRAME_CHANGE_SHIFT) & 0x01) == 1 else "Absolute"
+    fractional = ((flag >> _POSITIONING_SHIFT) & 0x01) == 1
+    if variant in _POSITIONING_VARIANTS:
+        return {
+            "kind": kind,
+            "signed": variant >= 5,
+            "frame": frame,
+            "positioning": "Fractional" if fractional else "Linear",
+        }
+    if fractional:
+        return None
+    return {"kind": kind, "frame": frame}
 
 
 def _raw_from_cortical_id_string(cortical_id: str) -> tuple[bytes | None, str | None]:
@@ -111,8 +140,12 @@ def decode_cortical_id_interpretation(cortical_id: str) -> dict[str, Any]:
     flags = int.from_bytes(raw[4:6], "little")
     subunit = (flags >> _SUBUNIT_SHIFT) & _SUBUNIT_MASK
     unit_index = int.from_bytes(raw[6:8], "little")
-    frame_change = "Incremental" if ((flags >> _FRAME_CHANGE_SHIFT) & 0x01) == 1 else "Absolute"
     variant = flags & _VARIANT_MASK
+    # Rust's Boolean variant has no frame handling: bit 8 is ignored, so there
+    # is no frame to report.
+    frame_change: str | None = None
+    if variant != 0:
+        frame_change = "Incremental" if ((flags >> _FRAME_CHANGE_SHIFT) & 0x01) == 1 else "Absolute"
     kind = _VARIANT_KINDS.get(variant)
     positioning: str | None = None
     if variant in _POSITIONING_VARIANTS:

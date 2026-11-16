@@ -37,6 +37,7 @@ Mechanics and parameter names: [memory-and-plasticity.md](memory-and-plasticity.
 | Bind two inputs, or complete a pattern from a cue | Assembly: two memory areas, one `associative_memory` mapping A->B, a second B->A for the other direction | Seeing A should bring back B | You need both directions and built one mapping: recall is one-directional |
 | Predict the next state, replay a sequence | Chain of memory areas A -> B -> C, each link associative | The order is fixed and each step is a distinct state | Many branches: every co-fired pair links, so branches blur |
 | Abstraction, sequences of states, many timescales | Hierarchy: lower memory area episodic into an upper memory area; upper `temporal_depth` = sequence length in lower states | The unit of interest is a sequence of lower patterns | The lower area's pattern count is unbounded: the upper one inherits the blow-up |
+| Record a whole salient event of any length and replay it | `memory.capture` on the memory area plus a `sequential_memory` loop ([memory-capture.md](memory-capture.md)) | A salience area exists to drive the recording, and the event is longer than one window | You need the episode recognised from live input: v1 records and replays it, it does not recognise it |
 
 ### Memory areas are the learning mechanism for recognition
 

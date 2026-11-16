@@ -268,6 +268,39 @@ class TestMemoryAreaRuntimeConfigTool:
         assert plain["rematch"] is None
 
     @pytest.mark.asyncio
+    async def test_capture_fields_pass_through_and_null_on_older_feagi(self, monkeypatch):
+        """Capture fields come from the memory endpoint; absent ones are null, never errors."""
+        server = self._patch_memory_endpoints(monkeypatch, {}, None)
+        older = await server.get_memory_area_runtime_config("mem_id")
+        assert older["capture"] == {
+            "recording": None,
+            "episode_neuron_count": None,
+            "replay_blocked_by_lockout": None,
+            "replay_blocked_by_recording": None,
+        }
+
+        async def fake_bv_operation(_operation_id: str, **_kwargs):
+            return {
+                "short_term_neuron_count": 0,
+                "long_term_neuron_count": 0,
+                "total_memory_neuron_ids": 0,
+                "memory_parameters": {},
+                "recording": True,
+                "episode_neuron_count": 7,
+                "replay_blocked_by_lockout": 2,
+                "replay_blocked_by_recording": 5,
+            }
+
+        monkeypatch.setattr(server.feagi, "brain_visualizer_operation", fake_bv_operation)
+        result = await server.get_memory_area_runtime_config("mem_id")
+        assert result["capture"] == {
+            "recording": True,
+            "episode_neuron_count": 7,
+            "replay_blocked_by_lockout": 2,
+            "replay_blocked_by_recording": 5,
+        }
+
+    @pytest.mark.asyncio
     async def test_healthy_wiring_has_no_findings(self, monkeypatch):
         """An episodic_memory source and no stats yield no findings and unknown totals."""
         server = self._patch_memory_endpoints(monkeypatch, {}, None)

@@ -286,3 +286,24 @@ async def test_reset_episode_reports_controller_errors_and_missing_endpoint(
     )
     result = await MujocoSceneControl(poster=rejecting).reset_episode("home")
     assert result["ok"] is False and result["error"] == "control_url_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_read_config_omits_actions_the_controller_does_not_know(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "feagi_mcp.mujoco_scene_control.discover_endpoint",
+        lambda _controller_id: _endpoint(),
+    )
+
+    async def poster(_url: str, payload: dict[str, Any], _timeout: float) -> dict[str, Any]:
+        if payload["action"] == "get_loop_timing":
+            return {"ok": False, "error": "Unknown action: 'get_loop_timing'"}
+        return {"ok": True, "result": {"action": payload["action"]}}
+
+    result = await MujocoSceneControl(poster=poster).read_config()
+    assert result["ok"] is True
+    assert "get_loop_timing" not in result["sections"]
+    assert result["absent_actions"] == ["get_loop_timing"]
+    assert result["sections"]["status"] == {"action": "status"}

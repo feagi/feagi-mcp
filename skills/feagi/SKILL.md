@@ -145,7 +145,11 @@ locally with `interpret_cortical_id()`. Details: [references/concepts.md](refere
     Run `dry_run=true`, read `errors`, `sizing` and `calls`, then apply with `dry_run=false`;
     fall back to single calls only for what the spec cannot say. Check the result with
     `record_spikes()` and `analyze_run(csv_path, ...)` (ring period, port-in-window share,
-    spikes per phase window, duty and off-episodes) instead of reading rows by eye.
+    spikes per phase window, duty and off-episodes) instead of reading rows by eye. Rule
+    variants for a sweep go in the same call: list every new morphology in one spec's
+    `morphologies` (no areas or mappings needed) instead of one `create_morphology()` call
+    each, and use `scale_morphology_rows()` or `build_stance_relative_mapping()` when the
+    variants differ only by a gain or a stance offset.
 15. **Work top-down on behavior goals.** Go behavior, then region, then mapping, then synapse,
     and descend only when the level above pins the fault. State the region-level hypothesis
     and the behavior test for it before reading synapses. See
@@ -190,6 +194,7 @@ independent calls together in one turn, and never poll physics or logs in a loop
 | Build a whole circuit from one spec (port, onset pulse, ring CPG, servo rest voxels) | `build_circuit_from_spec(spec_json, dry_run=True)` | [building-circuits.md](references/building-circuits.md#build-from-a-spec) |
 | Connect area A to area B | `recommend_connectivity_rules()`, `apply_connectivity_rule()` | [connectivity.md](references/connectivity.md) |
 | Learning: STDP, R-STDP, memory areas, time series | `get_memory_area_runtime_config()`, `set_memory_mp_encoding()` | [memory-and-plasticity.md](references/memory-and-plasticity.md), [STDP and R-STDP](references/memory-plasticity-stdp.md), [design with memory](references/memory-design.md), [structures and mistakes](references/memory-design-structures.md) |
+| Record a salient event of any length and replay it as a sequence | `create_modulator()`, `set_area_modulators()`, `sequential_memory` mapping | [memory-capture.md](references/memory-capture.md) |
 | Classifiers (training with reward and punishment), segmentation, depth maps, value planes | `inspect_classifier()`, `wire_value_passthrough()`, `run_stimulus_protocol()` | [value-planes-and-classifiers.md](references/value-planes-and-classifiers.md), [checking and debugging](references/value-planes-debugging.md) | 
 | Homeostasis: hold an area's firing rate (`rate_modulated_leak`) | `update_cortical_area()`, `get_area_parameters()` | [memory-plasticity-homeostatic.md](references/memory-plasticity-homeostatic.md) |
 | Modulators: excitability, gain, gating, learning phases, `memory.formation` (stop new memories forming) | `list_modulator_types()`, `create_modulator()`, `modulator_usage()` | [modulators.md](references/modulators.md), [memory.formation](references/memory-and-plasticity.md) |

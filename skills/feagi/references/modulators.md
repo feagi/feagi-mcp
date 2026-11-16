@@ -55,6 +55,7 @@ Silent driver = rest value. Every type accepts `graded`; it scales s by driver M
 | `synaptic.gate` | mapping | closed (0) unless the driver fires; then the factor is s: +100 passes all, +50 half, m <= 0 never opens, m > 100 amplifies | closed, also before the first burst (engine:111-128; test_conditional_gate.rs:104-117) |
 | `memory.formation` | memory area | factor clamp(1+s, 0, 1); new memory neurons are blocked only at factor 0, so m = -100 at full drive; -50 and any positive m do nothing (engine:174-190) | forms normally; recall and existing memories keep running (plasticity/src/service.rs:4916-4950) |
 | `memory.freeze` | memory area | m > 0 only; area is frozen while the driver's combined signal > 0 (see recipe 2) | not frozen; non-memory areas reject it |
+| `memory.capture` | memory area | 1..100; records episodes ([memory-capture.md](memory-capture.md)) | off |
 
 ## Recipes
 
@@ -105,7 +106,7 @@ Verify each with `record_spikes()` (burst-exact `fire_fraction`) unless the line
    (1 + m/100) of the crossings (test_balance_circuit_regressions.rs:156-194).
 7. **Graded modulation from a magnitude area.** Adopt the area as driver (`driver_cortical_id`,
    duration 1, rest 0), `graded` true, `full_scale_potential` = the MP that means full strength.
-   Use a one-neuron area. Read: drive three MP levels with `stimulate_area()` and compare the
+   Use a one-neuron area. Read: drive three MP levels with `stimulate_area(potential=...)` and compare the
    target quantity against m/100 x min(MP / full_scale, 1).
 8. **Neuromodulated gain control.** `synaptic.transmission_gain` on the path to scale, graded
    driver from the level signal. Read: `probe_area_response()` destination response ratio

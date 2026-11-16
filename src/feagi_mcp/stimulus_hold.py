@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import math
 import time
 import uuid
 from typing import Any
@@ -27,6 +28,42 @@ MAX_BACKGROUND_HOLD_S = 600.0
 MAX_START_DELAY_S = 30.0
 POSTS_PER_BURST = 2.0
 SETTLE_BURSTS = 3
+
+
+POTENTIAL_TOLERANCE = 1e-6
+
+
+def validate_potential(potential: Any) -> str | None:
+    """An error message when ``potential`` is not None, a finite number and > 0."""
+    if potential is None:
+        return None
+    if isinstance(potential, bool) or not isinstance(potential, (int, float)):
+        return f"potential must be a finite number > 0, got {potential!r}"
+    if not math.isfinite(potential) or potential <= 0:
+        return f"potential must be a finite number > 0, got {potential!r}"
+    return None
+
+
+def check_applied_potential(potential: float | None, result: dict[str, Any]) -> str | None:
+    """An error message when FEAGI did not apply the requested ``potential``.
+
+    An older FEAGI ignores the request field and returns no ``applied_potential``; the probe
+    then fired at the server default, so the result must not pass as the requested probe.
+    """
+    if potential is None:
+        return None
+    applied = result.get("applied_potential")
+    if (
+        isinstance(applied, bool)
+        or not isinstance(applied, (int, float))
+        or abs(applied - potential) > POTENTIAL_TOLERANCE
+    ):
+        return (
+            f"the running FEAGI did not apply the requested potential {potential:g} "
+            f"(applied_potential={applied!r}); the neurons fired at its default. "
+            "Update FEAGI to a version that supports `potential`."
+        )
+    return None
 
 
 def validate_hold_args(
@@ -98,6 +135,7 @@ async def run_hold(
     duration_s: float,
     start_delay_s: float,
     verify: bool,
+    potential: float | None = None,
 ) -> dict[str, Any]:
     """Run one hold, updating ``state`` in place; returns the final summary."""
     cancel: asyncio.Event = state["_cancel"]
@@ -130,8 +168,10 @@ async def run_hold(
         next_at = started
         posts = failures = late = 0
         while time.monotonic() - started < duration_s and not cancel.is_set():
-            res = await client._post_stimulation(payload, "force_fire")
+            res = await client._post_stimulation(payload, "force_fire", potential)
             posts += 1
+            if res.get("applied_potential") is not None:
+                state["applied_potential"] = res["applied_potential"]
             if not res.get("success"):
                 failures += 1
                 state["first_failure"] = state.get("first_failure") or res.get("error")

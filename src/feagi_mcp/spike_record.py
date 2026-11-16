@@ -37,6 +37,8 @@ MAX_GAPS_LISTED = 50
 MAX_RUNS_LISTED = 20
 TOP_VOXELS = 8
 DEFAULT_TTL_S = 300.0
+# Fire kinds as FEAGI reports them (``fire_kind_names`` in the fire_history payload overrides).
+DEFAULT_FIRE_KIND_NAMES = {0: "stdp_eligible", 1: "episodic_memory"}
 
 
 class LedgerClient(Protocol):
@@ -61,10 +63,10 @@ class LedgerCollector:
         self.start_burst: int | None = None
         self.last_read_burst: int | None = None
         self.names: dict[str, str] = {}
-        # frames[area_id][burst] = (voxels, memory_neuron_ids)
-        self.frames: dict[str, dict[int, tuple[list[list[int]], list[int]]]] = {
-            a: {} for a in self.area_ids
-        }
+        # frames[area_id][burst] = (voxels, memory_neuron_ids, voxel_fire_kinds, memory_fire_kinds);
+        # the kind lists are empty when the server does not report fire kinds.
+        self.frames: dict[str, dict[int, tuple[Any, ...]]] = {a: {} for a in self.area_ids}
+        self.fire_kind_names: dict[int, str] = dict(DEFAULT_FIRE_KIND_NAMES)
         self.error: dict[str, Any] | None = None
         self._acquired = False
         self._stop = asyncio.Event()
@@ -106,6 +108,11 @@ class LedgerCollector:
                 }
             )
             return False
+        names = payload.get("fire_kind_names")
+        if isinstance(names, dict):
+            for k, v in names.items():
+                if isinstance(v, str) and str(k).lstrip("-").isdigit():
+                    self.fire_kind_names[int(k)] = v
         for area_id, entry in areas.items():
             if area_id not in self.frames or not isinstance(entry, dict):
                 continue
@@ -118,6 +125,8 @@ class LedgerCollector:
                 self.frames[area_id][frame["burst"]] = (
                     voxels,
                     [int(n) for n in frame.get("memory_neuron_ids") or []],
+                    [int(k) for k in frame.get("voxel_fire_kinds") or []],
+                    [int(k) for k in frame.get("memory_fire_kinds") or []],
                 )
         self.last_read_burst = current
         return True
@@ -193,6 +202,17 @@ def expand_region_refs(
     return list(dict.fromkeys(out)), expanded, None
 
 
+def fire_kind_name(collector: LedgerCollector, kind: int) -> str:
+    """Name of a fire kind value (``kind_<n>`` when the server named none)."""
+    return collector.fire_kind_names.get(kind, f"kind_{kind}")
+
+
+def _kinds(frame: tuple[Any, ...], i: int, n: int) -> list[int | None]:
+    """Fire kinds of a frame's voxel (i=2) or memory (i=3) spikes; None where unreported."""
+    kinds = list(frame[i]) if len(frame) > i else []
+    return [kinds[j] if j < len(kinds) else None for j in range(n)]
+
+
 def runs_of(bursts: list[int]) -> list[list[int]]:
     """Consecutive-burst runs ``[[start, end], ...]`` of a sorted burst list."""
     runs: list[list[int]] = []
@@ -218,10 +238,14 @@ def summarize_frames(
         fired = [b for b in observed if frames[b][0] or frames[b][1]]
         voxel_counts: dict[tuple[int, int, int], int] = {}
         memory_counts: dict[int, int] = {}
+        kind_counts: dict[int, int] = {}
         spikes = 0
         for b in fired:
-            voxels, memory = frames[b]
+            voxels, memory = frames[b][0], frames[b][1]
             spikes += len(voxels) + len(memory)
+            for k in _kinds(frames[b], 2, len(voxels)) + _kinds(frames[b], 3, len(memory)):
+                if k is not None:
+                    kind_counts[k] = kind_counts.get(k, 0) + 1
             for n in memory:
                 memory_counts[n] = memory_counts.get(n, 0) + 1
             for v in voxels:
@@ -240,6 +264,10 @@ def summarize_frames(
             # dynamic memory neurons have no voxel: counted here and in total_spikes, not in
             # top_voxels
             "memory_spikes": sum(memory_counts.values()),
+            # spikes per fire kind name (empty when the server reports no fire kinds)
+            "fire_kind_counts": {
+                fire_kind_name(collector, k): c for k, c in sorted(kind_counts.items())
+            },
             "top_memory_neurons": [
                 {
                     "neuron_id": nid,
@@ -278,18 +306,36 @@ def write_spikes_csv(collector: LedgerCollector, first: int, last: int, path: st
     rows = 0
     with target.open("w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
-        writer.writerow(["burst", "area_id", "area_name", "x", "y", "z", "memory_neuron_id"])
+        writer.writerow(
+            [
+                "burst",
+                "area_id",
+                "area_name",
+                "x",
+                "y",
+                "z",
+                "memory_neuron_id",
+                "fire_kind",
+                "fire_kind_name",
+            ]
+        )
         for burst in range(first, last + 1):
             for area_id in collector.area_ids:
                 frame = collector.frames[area_id].get(burst)
                 if not frame:
                     continue
                 name = collector.names.get(area_id, "")
-                for x, y, z in frame[0]:
-                    writer.writerow([burst, area_id, name, x, y, z, ""])
+                vk = _kinds(frame, 2, len(frame[0]))
+                mk = _kinds(frame, 3, len(frame[1]))
+
+                def kind_cols(k: int | None) -> list[Any]:
+                    return ["", ""] if k is None else [k, fire_kind_name(collector, k)]
+
+                for (x, y, z), k in zip(frame[0], vk, strict=True):
+                    writer.writerow([burst, area_id, name, x, y, z, "", *kind_cols(k)])
                     rows += 1
-                for neuron_id in frame[1]:
-                    writer.writerow([burst, area_id, name, "", "", "", neuron_id])
+                for neuron_id, k in zip(frame[1], mk, strict=True):
+                    writer.writerow([burst, area_id, name, "", "", "", neuron_id, *kind_cols(k)])
                     rows += 1
     return rows
 

@@ -371,6 +371,12 @@ async def get_memory_area_runtime_config(
       with a change mode), ``mp_delta_quantization`` (MP units) or ``mp_ratio_quantization``
       (percent per compounding step).
 
+    - ``capture``: ``memory.capture`` state from the memory endpoint. ``recording`` (the
+      area is inside a recording session, its capture driver is on), ``episode_neuron_count``
+      (active episode neurons), ``replay_blocked_by_lockout`` (replays blocked while a chain
+      replay ran) and ``replay_blocked_by_recording`` (replays blocked while the area was
+      recording; a tonic driver keeps this rising). Each is ``null`` on older FEAGI.
+
     Args:
         cortical_id: Memory cortical area ID (base64 wire ID).
         page_size: Memory endpoint page size for neuron IDs (default 1; max 50).
@@ -558,6 +564,22 @@ async def get_memory_area_runtime_config(
             "source": "health_check.memory_area_stats[cortical_id]",
         },
         "rematch": rematch,
+        "capture": {
+            "recording": (
+                memory_runtime["recording"]
+                if isinstance(memory_runtime.get("recording"), bool)
+                else None
+            ),
+            "episode_neuron_count": _positive_or_zero_int(
+                memory_runtime.get("episode_neuron_count")
+            ),
+            "replay_blocked_by_lockout": _positive_or_zero_int(
+                memory_runtime.get("replay_blocked_by_lockout")
+            ),
+            "replay_blocked_by_recording": _positive_or_zero_int(
+                memory_runtime.get("replay_blocked_by_recording")
+            ),
+        },
         "memory_pool": diagnostics["memory_pool"],
         "episodic_upstream": diagnostics["episodic_upstream"],
         "scan_sources": diagnostics["scan_sources"],
@@ -814,7 +836,13 @@ async def stimulate_area(
     Args:
         area_id: Cortical area identifier
         coordinates: [x, y, z] neuron coordinates within the area
-        potential: Unused; the manual_stimulation API takes no potential
+        potential: Membrane potential the forced neurons fire with (finite, > 0). Default None =
+            the server's own (100). It is a probe that bypasses threshold and refractory; a
+            neuron that already fired naturally in that burst keeps its own potential. Mechanisms
+            that read firing potential (MP-driven PSP, graded modulator drivers) see this value;
+            outputs that read strength clamp or scale it themselves. If FEAGI does not apply it
+            (older version) the call returns an error; ``applied_potential`` is returned when
+            reported.
         duration_ms: Hold time in milliseconds (default: one burst)
         bursts: Hold for exactly this many bursts (wins over duration_ms)
 
@@ -834,6 +862,7 @@ async def stimulate_area_batch(
     mode: str = "force_fire",
     duration_ms: int | None = None,
     bursts: int | None = None,
+    potential: float | None = None,
 ) -> dict[str, Any]:
     """Stimulate many voxels in one cortical area in a single request.
 
@@ -842,7 +871,7 @@ async def stimulate_area_batch(
     The FEAGI API receives one ``manual_stimulation`` payload for the whole
     list and fires one burst per call. Set ``duration_ms`` or ``bursts`` to
     hold the stimulus: the payload is re-posted once per burst (burst-counter
-    gated, capped at 30 s). ``potential`` is not sent.
+    gated, capped at 30 s). One ``potential`` applies to the whole request (no per-voxel values).
 
     Args:
         area_id: Cortical area identifier (base64 wire id)
@@ -851,12 +880,21 @@ async def stimulate_area_batch(
         mode: Stimulation mode (default ``force_fire``)
         duration_ms: Hold time in milliseconds (default: one burst)
         bursts: Hold for exactly this many bursts (wins over duration_ms)
+        potential: Membrane potential the forced neurons fire with (finite, > 0). Default None =
+            the server's own (100). It is a probe that bypasses threshold and refractory; a
+            neuron that already fired naturally in that burst keeps its own potential. Mechanisms
+            that read firing potential (MP-driven PSP, graded modulator drivers) see this value;
+            outputs that read strength clamp or scale it themselves. If FEAGI does not apply it
+            (older version) the call returns an error; ``applied_potential`` is returned when
+            reported.
 
     Returns:
         Success status and aggregate neuron / match counts from the API; with
         a hold also ``bursts_held``, ``first_burst`` and ``last_burst``
     """
-    result = await feagi.stimulate_area_batch(area_id, coordinates_list, mode, duration_ms, bursts)
+    result = await feagi.stimulate_area_batch(
+        area_id, coordinates_list, mode, duration_ms, bursts, potential
+    )
     return result
 
 
@@ -868,6 +906,7 @@ async def run_stimulus_protocol(
     mode: str = "force_fire",
     repeat: int = 1,
     compact: bool = False,
+    potential: float | None = None,
 ) -> dict[str, Any]:
     """Present a timed stimulus sequence and record per-burst firing in one call.
 
@@ -891,6 +930,14 @@ async def run_stimulus_protocol(
         compact: Per-step, per-area fire counts instead of per-voxel lines: each
             ``steps`` row gets ``fires`` (area -> ``firing_bursts``, ``neuron_fires``),
             ``areas`` keeps only ``firing_bursts``, and ``bursts`` is omitted.
+        potential: Membrane potential the forced neurons fire with (finite, > 0). Default None =
+            the server's own (100). It is a probe that bypasses threshold and refractory; a
+            neuron that already fired naturally in that burst keeps its own potential. Mechanisms
+            that read firing potential (MP-driven PSP, graded modulator drivers) see this value;
+            outputs that read strength clamp or scale it themselves. If FEAGI does not apply it
+            (older version) the call returns an error; ``applied_potential`` is returned when
+            reported.
+            One value for every stimulus of every step.
 
     Returns:
         ``steps`` (label, first/last posted burst, bursts posted), ``areas``
@@ -899,7 +946,7 @@ async def run_stimulus_protocol(
         ``bursts_missed`` (window bursts no read observed) and ``success``.
     """
     return await feagi.run_stimulus_protocol(
-        steps, record_areas, tail_bursts, mode, repeat, compact
+        steps, record_areas, tail_bursts, mode, repeat, compact, potential
     )
 
 
@@ -911,6 +958,7 @@ async def hold_stimulus(
     start_delay_s: float = 0.0,
     background: bool = False,
     verify: bool = True,
+    potential: float | None = None,
 ) -> dict[str, Any]:
     """Hold voxels of one area firing on every burst for ``duration_s`` seconds.
 
@@ -935,8 +983,18 @@ async def hold_stimulus(
         start_delay_s: Seconds to wait before the first post (default 0)
         background: Return immediately and hold in the background (default False)
         verify: Read back the ledger and report which bursts landed (default True)
+        potential: Membrane potential the forced neurons fire with (finite, > 0). Default None =
+            the server's own (100). It is a probe that bypasses threshold and refractory; a
+            neuron that already fired naturally in that burst keeps its own potential. Mechanisms
+            that read firing potential (MP-driven PSP, graded modulator drivers) see this value;
+            outputs that read strength clamp or scale it themselves. If FEAGI does not apply it
+            (older version) the call returns an error; ``applied_potential`` is returned when
+            reported.
+            One value for every post of the hold.
     """
-    return await feagi.hold_stimulus(area, voxels, duration_s, start_delay_s, background, verify)
+    return await feagi.hold_stimulus(
+        area, voxels, duration_s, start_delay_s, background, verify, potential
+    )
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -952,7 +1010,9 @@ async def get_stimulus_hold(hold_id: str | None = None, cancel: bool = False) ->
 
 @mcp.tool()
 async def schedule_stimulus(
-    entries: list[dict[str, Any]], repeat_period_bursts: int | None = None
+    entries: list[dict[str, Any]],
+    repeat_period_bursts: int | None = None,
+    potential: float | None = None,
 ) -> dict[str, Any]:
     """Force-fire voxels at exact burst offsets, inside the burst loop (no wall-clock jitter).
 
@@ -969,8 +1029,16 @@ async def schedule_stimulus(
         entries: Burst-offset entries (each needs a non-empty ``stimuli`` list)
         repeat_period_bursts: Optional. Replay the entries at ``offset + k * period`` until
             cancelled; must be greater than the largest ``burst_offset``
+        potential: Membrane potential the forced neurons fire with (finite, > 0). Default None =
+            the server's own (100). It is a probe that bypasses threshold and refractory; a
+            neuron that already fired naturally in that burst keeps its own potential. Mechanisms
+            that read firing potential (MP-driven PSP, graded modulator drivers) see this value;
+            outputs that read strength clamp or scale it themselves. If FEAGI does not apply it
+            (older version) the call returns an error; ``applied_potential`` is returned when
+            reported.
+            Sent once on every schedule entry (one value per entry, none per voxel).
     """
-    return await feagi.schedule_stimulus(entries, repeat_period_bursts)
+    return await feagi.schedule_stimulus(entries, repeat_period_bursts, potential)
 
 
 @mcp.tool()
@@ -1017,10 +1085,14 @@ async def record_spikes(
     Returns a compact summary, never rows: per area ``fired_bursts``, ``fire_fraction``,
     ``total_spikes`` (memory neurons included), ``memory_spikes`` and ``top_memory_neurons``
     (dynamic memory neurons have no voxel, so they never appear in ``top_voxels``),
-    ``first_fire_burst``/``last_fire_burst``, fire ``runs`` (capped) and the ``top_voxels``; plus
+    ``fire_kind_counts`` (spikes per fire kind name, e.g. ``stdp_eligible`` and
+    ``episodic_memory``; the kind is stored per fired neuron in the Fire Ledger, so it is
+    exact for every recorded area), ``first_fire_burst``/
+    ``last_fire_burst``, fire ``runs`` (capped) and the ``top_voxels``; plus
     ``first_burst``, ``last_burst``, ``bursts_observed`` and ``gaps``
     (bursts with no ledger frame). Pass ``csv_path`` to write every spike as
-    ``burst,area_id,area_name,x,y,z,memory_neuron_id``.
+    ``burst,area_id,area_name,x,y,z,memory_neuron_id,fire_kind,fire_kind_name`` (``fire_kind``
+    is the raw value, ``fire_kind_name`` its name).
 
     Args:
         areas: Area ids, names or region ids (1-64 after region expansion)
@@ -3923,7 +3995,10 @@ async def list_memory_neurons(
 
     Returns paginated neuron IDs, short-term and long-term counts, lifecycle
     parameters, upstream pattern-cache size, and synapse counts from
-    ``GET /v1/cortical_area/memory``.
+    ``GET /v1/cortical_area/memory``. For a memory area with ``memory.capture`` it also
+    returns ``episode_neuron_count``, ``recording`` (the area is inside a recording session)
+    and the blocked-replay counts ``replay_blocked_by_lockout`` / ``replay_blocked_by_recording``
+    (a tonic capture driver keeps the second rising: the twin stays silent while it records).
 
     Args:
         cortical_id: Base64 cortical ID of a memory area.
@@ -3931,7 +4006,9 @@ async def list_memory_neurons(
         page_size: Number of neuron IDs to return (1..50).
         detail: When true, also return ``memory_neuron_details`` for the page: per neuron
             ``creation_burst``, ``last_activation_burst``, ``activation_count``,
-            ``lifespan`` (remaining bursts) and ``is_long_term``. Off by default.
+            ``lifespan`` (remaining bursts), ``is_long_term``, ``kind`` (``state`` or ``episode``)
+            and ``episode_members`` (an episode neuron's ordered member ids; empty for a state).
+            Off by default.
     """
     return await feagi.list_memory_neurons(cortical_id, page, page_size, detail)
 
@@ -3963,6 +4040,12 @@ async def inspect_memory_neuron(neuron_id: int) -> dict[str, Any]:
     Calls ``GET /v1/connectome/memory_neuron`` and returns the pattern hash,
     short/long-term state, lifespan, activation history, cortical identity,
     and complete incoming/outgoing synapse details with weights.
+
+    ``kind`` is ``state`` or ``episode`` (an episode neuron of ``memory.capture``);
+    ``episode_members`` holds an episode neuron's ordered member ids (empty for a state).
+
+    Each synapse also carries ``edge_flags`` (raw byte), ``edge_flag_names`` (decoded, e.g.
+    ``associative_memory``) and ``modulation_group`` (0 = unmodulated).
 
     Args:
         neuron_id: Runtime memory-neuron ID returned by ``list_memory_neurons``.
@@ -4010,6 +4093,9 @@ async def list_area_synapses(
     edge list is required (``limit`` / ``offset``).
 
     ``direction=both`` returns one dict with ``outgoing`` and ``incoming`` keys.
+
+    ``view="edges"`` rows carry ``edge_flags`` (raw byte), ``edge_flag_names`` (decoded) and
+    ``modulation_group`` (0 = unmodulated).
 
     For morphology **rules** (morphology id, PSC, plasticity mode), use
     ``get_cortical_mapping`` or ``get_connectivity_summary`` instead of this tool.
@@ -5170,13 +5256,15 @@ async def reset_area_incoming_weights(cortical_ids: list[str]) -> dict[str, Any]
 
 @mcp.tool(annotations=READ_ONLY)
 async def get_mujoco_scene_config(controller_id: str = "mujoco") -> dict[str, Any]:
-    """Read the live MuJoCo settings: safety boundary, objects, cameras, embodiment, feedback, rate.
+    """Read the live MuJoCo settings: safety boundary, objects, cameras, embodiment,
+    feedback, rate, and loop timing.
 
     Call this before replacing a list (objects, cameras, embodiment bodies, feedback
     rules) so an edit keeps what is already in the scene. Positions are millimeters.
     Object weight is ``mass_g`` in grams and is used only when ``dynamic`` is true.
     Object friction is optional ``[sliding, torsional, rolling]``. Omit it to keep
-    MuJoCo's default contact.
+    MuJoCo's default contact. ``get_loop_timing`` is the controller loop's per-phase
+    timing (mean, p95, max ms), overruns and real-time factor over the last 10 s.
     """
     return await MujocoSceneControl().read_config(controller_id)
 

@@ -39,8 +39,10 @@ class FakeHoldClient:
     async def get_burst_counter(self) -> dict[str, Any]:
         return {"burst_counter": self.counter}
 
-    async def _post_stimulation(self, payload: dict[str, Any], mode: str) -> dict[str, Any]:
-        assert payload == {AREA: VOXELS} and mode == "force_fire"
+    async def _post_stimulation(
+        self, payload: dict[str, Any], mode: str, potential: float | None = None
+    ) -> dict[str, Any]:
+        assert payload == {AREA: VOXELS} and mode == "force_fire" and potential is None
         self.posts += 1
         if self.posts % 2 == 0:
             self.counter += 1

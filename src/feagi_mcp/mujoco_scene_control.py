@@ -38,6 +38,7 @@ LIVE_ACTIONS = frozenset(
         "list_embodiment_bodies",
         "apply_embodiment_attachments",
         "get_simulation_rate",
+        "get_loop_timing",
         "get_environment_feedback",
         "set_environment_feedback",
     }
@@ -49,6 +50,7 @@ _READ_ACTIONS = (
     "list_embodiment_bodies",
     "get_environment_feedback",
     "get_simulation_rate",
+    "get_loop_timing",
 )
 _DEFAULT_RGBA = [0.2, 0.6, 1.0, 1.0]
 
@@ -212,12 +214,20 @@ class MujocoSceneControl:
     async def read_config(self, controller_id: str = "mujoco") -> dict[str, Any]:
         """Read every live MuJoCo settings section the control server exposes."""
         sections: dict[str, Any] = {}
+        absent: list[str] = []
         ok = True
         for action in _READ_ACTIONS:
             outcome = await self.command(action, controller_id=controller_id)
+            if not outcome.get("ok") and _is_unknown_action(outcome):
+                # An older controller lacks this action: omit the section, note it.
+                absent.append(action)
+                continue
             sections[action] = outcome.get("result") if outcome.get("ok") else outcome
             ok = ok and bool(outcome.get("ok"))
-        return {"ok": ok, "controller_id": controller_id, "sections": sections}
+        result: dict[str, Any] = {"ok": ok, "controller_id": controller_id, "sections": sections}
+        if absent:
+            result["absent_actions"] = absent
+        return result
 
     async def add_scene_object(
         self,
@@ -263,6 +273,11 @@ class MujocoSceneControl:
         if response.is_error and body.get("ok") is not False:
             response.raise_for_status()
         return body
+
+
+def _is_unknown_action(outcome: dict[str, Any]) -> bool:
+    """True when the controller answered that it does not know the action."""
+    return str(outcome.get("error") or "").startswith("Unknown action")
 
 
 def _friction_or_none(friction: list[float] | None) -> list[float] | None:

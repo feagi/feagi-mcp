@@ -134,10 +134,12 @@ from feagi_mcp.spike_record import (
 )
 from feagi_mcp.stance_mapping import compile_stance_offset_rows
 from feagi_mcp.stimulus_hold import (
+    check_applied_potential,
     hold_summary,
     new_hold_state,
     run_hold,
     validate_hold_args,
+    validate_potential,
 )
 from feagi_mcp.synapse_counts import edge_synapse_counts
 from feagi_mcp.task_registry import (
@@ -3155,24 +3157,40 @@ class FeagiClient:
             return {"error": str(e)}
 
     async def _post_stimulation(
-        self, stimulation_payload: dict[str, list[list[int]]], mode: str
+        self,
+        stimulation_payload: dict[str, list[list[int]]],
+        mode: str,
+        potential: float | None = None,
     ) -> dict[str, Any]:
-        """POST one ``manual_stimulation`` payload (fires exactly one burst)."""
+        """POST one ``manual_stimulation`` payload (fires exactly one burst).
+
+        ``potential`` (finite, > 0) is sent as the top-level ``potential`` field only when
+        given; None leaves the server default. When given, the response must report the same
+        ``applied_potential``, else the result is an error (an older FEAGI ignores the field).
+        """
+        bad = validate_potential(potential)
+        if bad:
+            return {"success": False, "error": bad}
+        body: dict[str, Any] = {"stimulation_payload": stimulation_payload, "mode": mode}
+        if potential is not None:
+            body["potential"] = float(potential)
         response = await self._client.post(
-            f"{self.base_url}/v1/agent/manual_stimulation",
-            json={
-                "stimulation_payload": stimulation_payload,
-                "mode": mode,
-            },
+            f"{self.base_url}/v1/agent/manual_stimulation", json=body
         )
         if response.status_code == 200:
             result = _as_json_dict(response.json())
-            return {
+            out: dict[str, Any] = {
                 "success": result.get("success", False),
                 "neurons_stimulated": result.get("unique_neuron_ids", 0),
                 "matched_coordinates": result.get("matched_coordinates", 0),
                 "mode": result.get("mode", "unknown"),
             }
+            if result.get("applied_potential") is not None:
+                out["applied_potential"] = result["applied_potential"]
+            unapplied = check_applied_potential(potential, out)
+            if unapplied:
+                return {**out, "success": False, "error": unapplied}
+            return out
         return {
             "success": False,
             "error": f"HTTP {response.status_code}",
@@ -3215,6 +3233,7 @@ class FeagiClient:
         mode: str,
         duration_ms: int | None,
         bursts: int | None,
+        potential: float | None = None,
     ) -> dict[str, Any]:
         """Re-post the same payload once per burst for ``duration_ms`` or ``bursts``.
 
@@ -3225,7 +3244,7 @@ class FeagiClient:
         ``STIMULATION_HOLD_MAX_MS``. With neither set, one post is made.
         """
         if bursts is None and duration_ms is None:
-            return await self._post_stimulation(stimulation_payload, mode)
+            return await self._post_stimulation(stimulation_payload, mode, potential)
         config = await self.get_burst_engine_config()
         interval = config.get("burst_interval_seconds")
         if not isinstance(interval, (int, float)) or interval <= 0:
@@ -3248,7 +3267,7 @@ class FeagiClient:
 
         async def _post_hold(counter: int, _index: int) -> bool:
             nonlocal last_result, first_burst, last_burst
-            last_result = await self._post_stimulation(stimulation_payload, mode)
+            last_result = await self._post_stimulation(stimulation_payload, mode, potential)
             if not last_result.get("success"):
                 return False
             if first_burst is None:
@@ -3284,8 +3303,12 @@ class FeagiClient:
         mode: str = "force_fire",
         repeat: int = 1,
         compact: bool = False,
+        potential: float | None = None,
     ) -> dict[str, Any]:
         """Present a timed stimulus sequence and record per-burst firing.
+
+        ``potential`` (finite, > 0, default None = server default) is the one membrane potential
+        every forced neuron of every step fires with.
 
         ``repeat`` runs the step list that many times in a row (the tail follows the last
         repeat). ``compact`` returns per-step, per-area fire counts instead of per-voxel
@@ -3301,8 +3324,11 @@ class FeagiClient:
         ``STIMULATION_HOLD_MAX_MS``.
         """
         try:
+            bad = validate_potential(potential)
+            if bad:
+                return {"success": False, "error": bad}
             return await self._run_stimulus_protocol(
-                steps, record_areas, tail_bursts, mode, repeat, compact
+                steps, record_areas, tail_bursts, mode, repeat, compact, potential
             )
         except Exception as e:
             logger.error(f"run_stimulus_protocol failed: {e}")
@@ -3316,6 +3342,7 @@ class FeagiClient:
         mode: str,
         repeat: int = 1,
         compact: bool = False,
+        potential: float | None = None,
     ) -> dict[str, Any]:
         if not steps:
             return {"success": False, "error": "steps must be non-empty"}
@@ -3395,15 +3422,18 @@ class FeagiClient:
         recorded: dict[int, dict[str, list[list[int]]]] = {}
         errors: list[str] = []
         last_counter: int | None = None
+        applied: Any = None
 
         async def _on_burst(counter: int, index: int) -> bool:
-            nonlocal last_counter
+            nonlocal last_counter, applied
             last_counter = counter
             step_idx = schedule[index]
             if step_idx is not None:
                 payload = merged[step_idx]
                 if payload:
-                    res = await self._post_stimulation(payload, mode)
+                    res = await self._post_stimulation(payload, mode, potential)
+                    if res.get("applied_potential") is not None:
+                        applied = res["applied_potential"]
                     if not res.get("success"):
                         errors.append(f"post failed at burst {counter}: {res.get('error')}")
                         return False
@@ -3491,6 +3521,8 @@ class FeagiClient:
             "bursts_requested": wanted,
             "burst_interval_seconds": interval,
         }
+        if applied is not None:
+            result["applied_potential"] = applied
         if not compact:
             result["bursts"] = burst_rows
         if compact:
@@ -3511,7 +3543,7 @@ class FeagiClient:
         self,
         area_id: str,
         coordinates: list[int],
-        _potential: float | None = None,
+        potential: float | None = None,
         duration_ms: int | None = None,
         bursts: int | None = None,
     ) -> dict[str, Any]:
@@ -3520,7 +3552,8 @@ class FeagiClient:
         Args:
             area_id: Cortical area identifier
             coordinates: [x, y, z] coordinates within the area
-            _potential: Unused; the manual_stimulation API takes no potential
+            potential: Membrane potential (finite, > 0) the forced neuron fires with; None
+                leaves the server default. See :meth:`stimulate_areas`.
             duration_ms: Hold the stimulus for this long by re-posting once per
                 burst (capped at 30 s). Default None means one burst.
             bursts: Hold for exactly this many bursts (wins over duration_ms)
@@ -3531,7 +3564,7 @@ class FeagiClient:
         """
         try:
             return await self.stimulate_areas(
-                {area_id: [coordinates]}, "force_fire", duration_ms, bursts
+                {area_id: [coordinates]}, "force_fire", duration_ms, bursts, potential
             )
         except Exception as e:
             logger.error(f"stimulate_area failed: {e}")
@@ -3543,6 +3576,7 @@ class FeagiClient:
         mode: str = "force_fire",
         duration_ms: int | None = None,
         bursts: int | None = None,
+        potential: float | None = None,
     ) -> dict[str, Any]:
         """Stimulate multiple cortical areas in one request (same burst / tick).
 
@@ -3553,11 +3587,18 @@ class FeagiClient:
             mode: Stimulation mode (default ``force_fire``)
             duration_ms: Optional hold, re-posting once per burst (cap 30 s)
             bursts: Optional hold in bursts (wins over duration_ms)
+            potential: One membrane potential (finite, > 0) for every forced neuron of the
+                request, sent as the top-level ``potential`` field; None = server default.
+                A result carries ``applied_potential`` when FEAGI reports it; if a potential
+                was requested and FEAGI did not apply it, the result is an error.
 
         Returns:
             Same shape as :meth:`stimulate_area` (success, neuron counts, etc.)
         """
         try:
+            bad = validate_potential(potential)
+            if bad:
+                return {"success": False, "error": bad}
             refs = list(stimulation_payload)
             ids, problem = await self._resolve_known_areas(*refs)
             if problem:
@@ -3565,7 +3606,7 @@ class FeagiClient:
             resolved: dict[str, list[list[int]]] = {}
             for ref, area_id in zip(refs, ids, strict=True):
                 resolved.setdefault(area_id, []).extend(stimulation_payload[ref])
-            return await self._hold_stimulation(resolved, mode, duration_ms, bursts)
+            return await self._hold_stimulation(resolved, mode, duration_ms, bursts, potential)
         except Exception as e:
             logger.error(f"stimulate_areas failed: {e}")
             return {"success": False, "error": str(e)}
@@ -3577,6 +3618,7 @@ class FeagiClient:
         mode: str = "force_fire",
         duration_ms: int | None = None,
         bursts: int | None = None,
+        potential: float | None = None,
     ) -> dict[str, Any]:
         """Stimulate many voxels in one cortical area in a single HTTP request.
 
@@ -3588,6 +3630,8 @@ class FeagiClient:
             mode: Stimulation mode (default ``force_fire``).
             duration_ms: Optional hold, one post per burst (cap 30 s).
             bursts: Optional hold in bursts (wins over duration_ms).
+            potential: One membrane potential (finite, > 0) for all voxels of the request
+                (no per-voxel potentials); None = server default.
 
         Returns:
             Same aggregate shape as :meth:`stimulate_area` / :meth:`stimulate_areas`.
@@ -3609,7 +3653,11 @@ class FeagiClient:
                 }
             normalized.append([int(coords[0]), int(coords[1]), int(coords[2])])
         return await self.stimulate_areas(
-            {area_id: normalized}, mode=mode, duration_ms=duration_ms, bursts=bursts
+            {area_id: normalized},
+            mode=mode,
+            duration_ms=duration_ms,
+            bursts=bursts,
+            potential=potential,
         )
 
     async def get_embodiment_status(self) -> dict[str, Any]:
@@ -3860,9 +3908,16 @@ class FeagiClient:
         start_delay_s: float = 0.0,
         background: bool = False,
         verify: bool = True,
+        potential: float | None = None,
     ) -> dict[str, Any]:
-        """Hold ``voxels`` of ``area`` firing for ``duration_s`` (see :mod:`stimulus_hold`)."""
+        """Hold ``voxels`` of ``area`` firing for ``duration_s`` (see :mod:`stimulus_hold`).
+
+        ``potential`` (finite, > 0; None = server default) is the one potential for every post.
+        """
         try:
+            bad = validate_potential(potential)
+            if bad:
+                return {"success": False, "error": bad}
             norm = validate_hold_args(voxels, duration_s, start_delay_s, background)
             if isinstance(norm, str):
                 return {"success": False, "error": norm}
@@ -3873,7 +3928,7 @@ class FeagiClient:
             state = new_hold_state(area_id, clean, duration)
             self._holds[state["hold_id"]] = state
             prune_finished(self._holds, MAX_FINISHED_RECORDS)
-            run = run_hold(self, state, area_id, clean, duration, delay, verify)
+            run = run_hold(self, state, area_id, clean, duration, delay, verify, potential)
             if background:
                 state["_task"] = asyncio.create_task(run)
                 return {**hold_summary(state), "background": True}
@@ -3904,7 +3959,10 @@ class FeagiClient:
         return hold_summary(state)
 
     async def schedule_stimulus(
-        self, entries: list[dict[str, Any]], repeat_period_bursts: int | None = None
+        self,
+        entries: list[dict[str, Any]],
+        repeat_period_bursts: int | None = None,
+        potential: float | None = None,
     ) -> dict[str, Any]:
         """Schedule force-fire stimulation at burst offsets.
 
@@ -3918,8 +3976,15 @@ class FeagiClient:
 
         ``repeat_period_bursts`` (optional, int > the largest ``burst_offset``) replays the
         entries at ``offset + k * period`` until ``cancel_stimulus``.
+
+        ``potential`` (finite, > 0; None = server default) is sent as ``potential`` on every
+        schedule entry (one value per entry, none per voxel). FEAGI reports it as
+        ``applied_potential``; a missing or different value is an error (older FEAGI).
         """
         try:
+            bad = validate_potential(potential)
+            if bad:
+                return {"success": False, "error": bad}
             if not isinstance(entries, list) or not entries:
                 return {"success": False, "error": "entries must be a non-empty list"}
             if repeat_period_bursts is not None and (
@@ -3975,7 +4040,13 @@ class FeagiClient:
                     payload.setdefault(by_ref[stim["area_id"].strip()], []).extend(
                         [list(c) for c in stim["coordinates"]]
                     )
-                body.append({"burst_offset": entry["burst_offset"], "stimulation": payload})
+                item: dict[str, Any] = {
+                    "burst_offset": entry["burst_offset"],
+                    "stimulation": payload,
+                }
+                if potential is not None:
+                    item["potential"] = float(potential)
+                body.append(item)
             request: dict[str, Any] = {"entries": body}
             if repeat_period_bursts is not None:
                 last_offset = max(e["burst_offset"] for e in entries)
@@ -3990,7 +4061,11 @@ class FeagiClient:
                 f"{self.base_url}/v1/simulation/stimulus_schedule", json=request
             )
             if response.status_code == 200:
-                return {"success": True, **_as_json_dict(response.json())}
+                out = {"success": True, **_as_json_dict(response.json())}
+                unapplied = check_applied_potential(potential, out)
+                if unapplied:
+                    return {**out, "success": False, "error": unapplied}
+                return out
             return {
                 "success": False,
                 "error": f"HTTP {response.status_code}",

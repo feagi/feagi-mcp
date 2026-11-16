@@ -126,9 +126,9 @@ async def test_csv_has_one_row_per_spike(tmp_path: Any) -> None:
     path = tmp_path / "spikes.csv"
     result = await record_spikes_window(client, [AREA], bursts=50, csv_path=str(path))
     lines = path.read_text().splitlines()
-    assert lines[0] == "burst,area_id,area_name,x,y,z,memory_neuron_id"
+    assert lines[0] == "burst,area_id,area_name,x,y,z,memory_neuron_id,fire_kind,fire_kind_name"
     assert len(lines) - 1 == result["areas"][AREA]["total_spikes"]
-    assert lines[1].split(",")[1:] == [AREA, f"name_{AREA}", "0", "0", "1", ""]
+    assert lines[1].split(",")[1:] == [AREA, f"name_{AREA}", "0", "0", "1", "", "", ""]
     assert result["csv_path"] == str(path.resolve())
 
 
@@ -312,3 +312,26 @@ async def test_background_record_spikes_cancel_returns_partial_result() -> None:
     assert cancelled["state"] == "cancelled"
     assert cancelled["result"]["cancelled"] is True
     assert fake.released == [[AREA]]
+
+
+async def test_fire_kind_in_summary_and_csv(tmp_path: Any) -> None:
+    class KindLedger(FakeLedger):
+        async def get_fire_history(self, area_ids: list[str], bursts: int) -> dict[str, Any]:
+            payload = await super().get_fire_history(area_ids, bursts)
+            payload["fire_kind_names"] = {"0": "stdp_eligible", "1": "episodic_memory"}
+            for entry in payload["areas"].values():
+                for frame in entry["frames"]:
+                    frame["voxel_fire_kinds"] = [0] * len(frame["voxels"])
+                    if frame["voxels"]:
+                        frame["memory_neuron_ids"] = [50_000_000, 50_000_001]
+                        frame["memory_fire_kinds"] = [1, 0]
+            return payload
+
+    path = tmp_path / "kinds.csv"
+    result = await record_spikes_window(KindLedger(), [AREA], bursts=50, csv_path=str(path))
+    counts = result["areas"][AREA]["fire_kind_counts"]
+    assert set(counts) == {"stdp_eligible", "episodic_memory"}
+    assert counts["episodic_memory"] > 0 and counts["stdp_eligible"] > counts["episodic_memory"]
+    rows = [line.split(",") for line in path.read_text().splitlines()[1:]]
+    assert {(r[7], r[8]) for r in rows} == {("0", "stdp_eligible"), ("1", "episodic_memory")}
+    assert len(rows) == result["areas"][AREA]["total_spikes"]

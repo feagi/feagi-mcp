@@ -23,6 +23,11 @@ For manual tests:
 - `stimulate_area()` / `stimulate_area_batch()` fire one area for one burst by default;
   `bursts=N` (or `duration_ms`) holds the stimulus for N consecutive bursts. Separate calls
   run one after another, never together.
+- A forced fire is a probe: it bypasses threshold and refractory, and a neuron that already
+  fired naturally in that burst keeps its own potential. `potential=` sets the membrane
+  potential the forced neurons fire with (default is the server's); mechanisms that read firing
+  potential see it, and outputs that read strength clamp or scale it. A FEAGI too old to apply
+  it makes the call error rather than fire at the default.
 - To present several areas together (sample + label, two inputs of a gate), or a timed
   sequence with rests, use `run_stimulus_protocol(steps, record_areas)`: one request per burst
   carries all stimuli. It also reads the fire queue every burst, so at 200 Hz it skips about a

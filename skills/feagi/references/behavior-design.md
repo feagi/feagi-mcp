@@ -119,7 +119,9 @@ Keep sweeps cheap: put a condition's trials inside ONE cell as several attempts 
 `train_only`, `trainAttempts` N, condition `trials` 1) instead of one cell per trial. Each cell
 pays a fixed overhead (Trainer start, brain change and read-back, reset, restore) of about 30 s,
 which dominates short attempts; one cell of 5 attempts costs about a quarter of 5 cells. Read the
-per-attempt holds from the cell's run data.
+per-attempt holds from the cell's run data. Watch the plan while it runs: read the first cells and
+cancel a sweep that shows no effect (trainer skill, "Run plan (matrix)", "Check the trend early;
+stop a dud").
 
 Sweep a parameter that actually sets the gain. A mapping's PSC scales gain only when the
 target's threshold sits between the input values; into a target that fires on any input
