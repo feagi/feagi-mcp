@@ -91,7 +91,7 @@ Part 2 of 2. Other parts: [tool-index.md](tool-index.md).
 
 ## MuJoCo scene and simulator packs
 
-- `get_mujoco_scene_config()`: Read the live MuJoCo settings: safety boundary, objects, cameras, embodiment, feedback, rate.
+- `get_mujoco_scene_config()`: Read live MuJoCo settings: boundary, objects, cameras, embodiment, feedback, rate.
 - `configure_mujoco_scene()`: Apply one MuJoCo settings action on the running controller.
 - `add_mujoco_scene_object()`: Add one primitive to the running MuJoCo scene without removing the others.
 - `set_mujoco_safety_boundary()`: Turn the Cartesian safety box on or off in the running MuJoCo scene.

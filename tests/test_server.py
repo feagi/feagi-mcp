@@ -74,7 +74,7 @@ async def test_stimulate_area_batch_tool_delegates_to_client(monkeypatch):
     """MCP tool stimulate_area_batch calls FeagiClient.stimulate_area_batch."""
     from feagi_mcp import server
 
-    called: list[tuple[str, list, str, int | None, int | None]] = []
+    called: list[tuple[str, list, str, int | None, int | None, float | None]] = []
 
     async def fake_batch(
         area_id: str,
@@ -82,8 +82,9 @@ async def test_stimulate_area_batch_tool_delegates_to_client(monkeypatch):
         mode: str = "force_fire",
         duration_ms: int | None = None,
         bursts: int | None = None,
+        potential: float | None = None,
     ):
-        called.append((area_id, list(coordinates_list), mode, duration_ms, bursts))
+        called.append((area_id, list(coordinates_list), mode, duration_ms, bursts, potential))
         return {"success": True, "neurons_stimulated": 1}
 
     monkeypatch.setattr(server.feagi, "stimulate_area_batch", fake_batch)
@@ -92,11 +93,11 @@ async def test_stimulate_area_batch_tool_delegates_to_client(monkeypatch):
         [[0, 0, 0], [1, 0, 0]],
     )
     assert out["success"] is True
-    assert called == [("b3BzZQEAAAA=", [[0, 0, 0], [1, 0, 0]], "force_fire", None, None)]
+    assert called == [("b3BzZQEAAAA=", [[0, 0, 0], [1, 0, 0]], "force_fire", None, None, None)]
 
     called.clear()
     await server.stimulate_area_batch("b3BzZQEAAAA=", [[0, 0, 0]], duration_ms=250, bursts=5)
-    assert called == [("b3BzZQEAAAA=", [[0, 0, 0]], "force_fire", 250, 5)]
+    assert called == [("b3BzZQEAAAA=", [[0, 0, 0]], "force_fire", 250, 5, None)]
 
 
 @pytest.mark.asyncio

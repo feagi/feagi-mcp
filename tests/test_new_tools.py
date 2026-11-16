@@ -1863,7 +1863,7 @@ class TestStimulationHold:
     @pytest.mark.asyncio
     async def test_default_is_one_post_without_config_reads(self, mock_client):
         self._wire(mock_client, [1])
-        result = await mock_client.stimulate_area("YWJjZGVmZ2g=", [0, 0, 0], 1.0)
+        result = await mock_client.stimulate_area("YWJjZGVmZ2g=", [0, 0, 0])
         assert result["success"] is True
         assert "bursts_held" not in result
         assert mock_client._client.post.await_count == 1

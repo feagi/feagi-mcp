@@ -5256,8 +5256,7 @@ async def reset_area_incoming_weights(cortical_ids: list[str]) -> dict[str, Any]
 
 @mcp.tool(annotations=READ_ONLY)
 async def get_mujoco_scene_config(controller_id: str = "mujoco") -> dict[str, Any]:
-    """Read the live MuJoCo settings: safety boundary, objects, cameras, embodiment,
-    feedback, rate, and loop timing.
+    """Read live MuJoCo settings: boundary, objects, cameras, embodiment, feedback, rate.
 
     Call this before replacing a list (objects, cameras, embodiment bodies, feedback
     rules) so an edit keeps what is already in the scene. Positions are millimeters.
