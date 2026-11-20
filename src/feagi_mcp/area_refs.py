@@ -76,6 +76,7 @@ _LISTS: dict[str, tuple[str, ...]] = {
     "inspect_cortical_areas_minimal": ("cortical_ids",),
     "reset_cortical_neural_state": ("cortical_ids",),
     "reset_area_incoming_weights": ("cortical_ids",),
+    "move_io_area_groups": ("areas",),
     "monitor_activity_batch": ("area_ids",),
     "record_aligned_trace": ("areas",),
     "run_stimulus_protocol": ("record_areas",),

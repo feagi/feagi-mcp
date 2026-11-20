@@ -77,6 +77,7 @@ TOOL_CATEGORIES: dict[str, tuple[str, ...]] = {
     "Brain regions (circuits)": (
         "get_brain_regions",
         "get_region_circuit",
+        "get_region_io_blockers",
         "create_brain_region",
         "build_circuit_from_spec",
         "validate_brain_region_hierarchy",
@@ -103,6 +104,7 @@ TOOL_CATEGORIES: dict[str, tuple[str, ...]] = {
         "delete_cortical_area",
         "reset_cortical_neural_state",
         "reset_area_incoming_weights",
+        "move_io_area_groups",
         "get_cortical_template",
     ),
     "Input and output areas (IPU/OPU)": (
@@ -155,6 +157,7 @@ TOOL_CATEGORIES: dict[str, tuple[str, ...]] = {
         "watch_mapping_weights",
         "freeze_mapping_plasticity",
         "set_memory_area_learning_frozen",
+        "get_learning_frozen",
         "reset_mapping_weights",
         "get_fire_ledger_areas_window_config",
     ),
@@ -192,6 +195,7 @@ TOOL_CATEGORIES: dict[str, tuple[str, ...]] = {
         "get_stimulus_hold",
         "schedule_stimulus",
         "cancel_stimulus",
+        "renew_stimulus",
         "get_stimulus_schedule",
         "record_spikes",
         "get_spike_recording",

@@ -18,7 +18,7 @@ Two different gaps. Do not use the area gap as the circuit gap.
 
 **Area anchors.** New CUSTOM and MEMORY anchors must be at least 20 voxels from the world
 origin and at least 32 voxels from every existing anchor. `create_cortical_area()` enforces
-this; `skip_placement_validation=True` bypasses it only when the user insists. Inside one
+this (constants in `placement_policy.py`, not configurable); `skip_placement_validation=True` bypasses it only when the user insists. Inside one
 circuit, keep this grid (40 voxels is the usual step). It keeps areas from sitting on each
 other. It does not keep circuit titles readable.
 
@@ -86,7 +86,7 @@ starts with `c` will never form memory neurons: delete it and recreate it as MEM
 configure it (see [memory-and-plasticity.md](memory-and-plasticity.md)).
 
 **IPU / OPU for a known device**: prefer `create_io_area_for_unit(name, subtype, channels,
-depth, ...)`. It derives the canonical ID an agent's coder binds to, creates the area, and
+depth, ...)`. `channels` is the area's total x-width (split evenly across `device_count`). It derives the canonical ID an agent's coder binds to, creates the area, and
 verifies the ID. Use plain `create_cortical_area(cortical_type="OPU" or "IPU", cortical_id=<subtype>,
 group_id, device_count, per_device_dimensions, data_type_configs_by_subunit)` only when you
 need control the helper does not offer. `get_cortical_template()` lists the available
@@ -109,6 +109,8 @@ IPU/OPU templates. Before adding I/O for a robot, check what the agent registere
 - To move areas between regions, use `brain_visualizer_api(operation_id="put_region_relocate_members", ...)`.
   `list_brain_visualizer_operations()` lists every Brain Visualizer operation available
   through that pass-through.
+  Arguments: `operation_id`, `path_params`, `query`, `json_body`. Region updates take
+  `region_id` in `json_body`: `put_region_region`, `{"region_id": "<id>", "designated_inputs": ["<cortical_id>"]}`.
 
 ## Pattern sketches
 

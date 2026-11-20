@@ -287,3 +287,41 @@ def test_max_samples_three_takes_three() -> None:
         watch_weights(diagnose, 1.0, 1.0, cap=None, max_samples=3, sleep=clock.sleep, clock=clock)
     )
     assert len(out["samples"]) == 3
+
+
+async def test_get_mapping_learning_state_lists_frozen_switches_with_names() -> None:
+    from unittest.mock import AsyncMock
+
+    from feagi_mcp.feagi_client import FeagiClient
+
+    client = FeagiClient()
+    client.get_learning_frozen = AsyncMock(  # type: ignore[method-assign]
+        return_value={"memory_areas": ["m1"], "mappings": [["a", "b"]]}
+    )
+    client.get_cortical_id_name_mapping = AsyncMock(  # type: ignore[method-assign]
+        return_value={"a": "Src", "b": "Dst", "m1": "Mem"}
+    )
+    out = await client.get_mapping_learning_state()
+    assert out["frozen_mapping_count"] == 1 and out["frozen_memory_area_count"] == 1
+    assert out["frozen_mappings"] == [
+        {"src": {"area_id": "a", "name": "Src"}, "dst": {"area_id": "b", "name": "Dst"}}
+    ]
+    assert out["frozen_memory_areas"] == [{"area_id": "m1", "name": "Mem"}]
+
+
+async def test_get_mapping_learning_state_reads_one_mapping_and_checks_arguments() -> None:
+    from unittest.mock import AsyncMock
+
+    from feagi_mcp.feagi_client import FeagiClient
+
+    client = FeagiClient()
+    client._resolve_area_refs = AsyncMock(return_value=(["a", "b"], None))  # type: ignore[method-assign]
+    client.get_mapping_plasticity_frozen = AsyncMock(  # type: ignore[method-assign]
+        return_value={"src_cortical_area": "a", "dst_cortical_area": "b", "frozen": True}
+    )
+    out = await client.get_mapping_learning_state("Src", "Dst")
+    assert out["frozen"] is True
+    client.get_mapping_plasticity_frozen.assert_awaited_once_with("a", "b")
+    assert "error" in await client.get_mapping_learning_state("Src", None)
+    client.get_learning_frozen = AsyncMock(return_value={"error": "HTTP 404"})  # type: ignore[method-assign]
+    assert (await client.get_mapping_learning_state())["error"] == "HTTP 404"

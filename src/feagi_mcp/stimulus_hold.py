@@ -26,6 +26,7 @@ from feagi_mcp.task_registry import public_view
 MAX_HOLD_S = 30.0
 MAX_BACKGROUND_HOLD_S = 600.0
 MAX_START_DELAY_S = 30.0
+MAX_LABEL_LEN = 64
 POSTS_PER_BURST = 2.0
 SETTLE_BURSTS = 3
 
@@ -63,6 +64,34 @@ def check_applied_potential(potential: float | None, result: dict[str, Any]) -> 
             f"(applied_potential={applied!r}); the neurons fired at its default. "
             "Update FEAGI to a version that supports `potential`."
         )
+    return None
+
+
+def validate_label(label: Any) -> str | None:
+    """An error message when ``label`` is not None or a non-empty string of <= 64 characters."""
+    if label is None:
+        return None
+    if not isinstance(label, str) or not label.strip() or len(label.strip()) > MAX_LABEL_LEN:
+        return f"label must be a non-empty string of at most {MAX_LABEL_LEN} characters"
+    return None
+
+
+def renew_hold(state: dict[str, Any], seconds: float) -> str | None:
+    """Make a running or pending hold last ``seconds`` more from now; an error message if not.
+
+    A hold still in its start delay simply gets ``seconds`` as its length. The loop in
+    :func:`run_hold` reads ``state["duration_s"]`` on every post, so the new end applies at once.
+    """
+    if isinstance(seconds, bool) or not isinstance(seconds, (int, float)):
+        return "seconds must be a number"
+    if not math.isfinite(seconds) or not 0 < seconds <= MAX_BACKGROUND_HOLD_S:
+        return f"seconds must be in (0, {MAX_BACKGROUND_HOLD_S:g}]"
+    if state["state"] not in ("pending", "running"):
+        return f"hold is {state['state']}, not running"
+    started = state.get("_started")
+    elapsed = time.monotonic() - started if isinstance(started, float) else 0.0
+    state["duration_s"] = elapsed + float(seconds)
+    state["renewals"] = int(state.get("renewals", 0)) + 1
     return None
 
 
@@ -139,6 +168,8 @@ async def run_hold(
 ) -> dict[str, Any]:
     """Run one hold, updating ``state`` in place; returns the final summary."""
     cancel: asyncio.Event = state["_cancel"]
+    # the loop reads state["duration_s"] on every post, so renew_hold can extend a running hold
+    state.setdefault("duration_s", duration_s)
     collector: LedgerCollector | None = None
     try:
         cfg = await client.get_burst_engine_config()
@@ -165,9 +196,10 @@ async def run_hold(
         period = interval / POSTS_PER_BURST
         state["state"] = "running"
         started = time.monotonic()
+        state["_started"] = started
         next_at = started
         posts = failures = late = 0
-        while time.monotonic() - started < duration_s and not cancel.is_set():
+        while time.monotonic() - started < state["duration_s"] and not cancel.is_set():
             res = await client._post_stimulation(payload, "force_fire", potential)
             posts += 1
             if res.get("applied_potential") is not None:
@@ -211,9 +243,11 @@ async def run_hold(
     return hold_summary(state)
 
 
-def new_hold_state(area_id: str, voxels: list[list[int]], duration_s: float) -> dict[str, Any]:
-    """A fresh hold record."""
-    return {
+def new_hold_state(
+    area_id: str, voxels: list[list[int]], duration_s: float, label: str | None = None
+) -> dict[str, Any]:
+    """A fresh hold record; ``label`` (optional) groups holds for cancel and renew by label."""
+    state = {
         "hold_id": uuid.uuid4().hex[:12],
         "state": "pending",
         "area_id": area_id,
@@ -221,3 +255,6 @@ def new_hold_state(area_id: str, voxels: list[list[int]], duration_s: float) -> 
         "duration_s": duration_s,
         "_cancel": asyncio.Event(),
     }
+    if label is not None:
+        state["label"] = label.strip()
+    return state

@@ -1,0 +1,1073 @@
+{
+  "format": "nrs.body_roles/1",
+  "roles_version": "1.0",
+  "anatomical_zero": "Anatomical position: standing upright, arms by the sides, forearms mid-pronation (palms toward the thighs), wrists and fingers straight, thumb alongside, head level, torso above the pelvis.",
+  "units": {
+    "angle": "degrees from the anatomical zero",
+    "position": "normalised 0..1",
+    "quaternion_component": "raw -1..1"
+  },
+  "axes": {
+    "frame": "forward_left_up",
+    "x": "forward",
+    "y": "left",
+    "z": "up",
+    "handedness": "right",
+    "applies_at": "The anatomical zero. A robot arm uses its reference pose: upper arm and forearm pointing along -up, wrist in line, forearm roll turned to the anatomical zero (palm toward the thigh).",
+    "limb_side": "left",
+    "description": "positive.axis is the unit rotation axis, in the body frame (x forward, y left, z up of a body standing upright), of a positive angle by the right-hand rule. A sided limb's axis is the left limb's; a sideless limb's (torso, head, a single robot arm) is stated as is."
+  },
+  "naming": "<limb>.<joint>_<motion>; a sided limb is <limb>_left or <limb>_right in a channel key and sideless (<limb>) in a role id; a single-arm robot uses the sideless arm.",
+  "mirroring": {
+    "rule": "limb_swap",
+    "sign_flip": false,
+    "description": "Left and right share one sign convention, so a pose mirrors by swapping the left and right limb. No angle changes sign.",
+    "pairs": [
+      [
+        "arm_left",
+        "arm_right"
+      ],
+      [
+        "hand_left",
+        "hand_right"
+      ],
+      [
+        "leg_left",
+        "leg_right"
+      ],
+      [
+        "wrist_left",
+        "wrist_right"
+      ],
+      [
+        "ankle_left",
+        "ankle_right"
+      ]
+    ],
+    "axis_rule": "The right limb's axis is the left limb's mirrored across the left-right plane. A rotation axis is a pseudovector, so the mirror keeps its left component and flips its forward and up components: (x, y, z) -> (-x, y, -z). With that axis the right limb's positive angle has the same sign as the left limb's, which is why no angle changes sign when a pose is mirrored by swapping limbs."
+  },
+  "families": [
+    {
+      "id": "human",
+      "description": "Human body as read by Body Capture.",
+      "limbs": [
+        "arm",
+        "hand",
+        "leg",
+        "torso",
+        "head",
+        "wrist",
+        "ankle",
+        "torso_tilt"
+      ]
+    },
+    {
+      "id": "serial_arm",
+      "description": "One serial arm, sideless limb arm.",
+      "limbs": [
+        "arm"
+      ]
+    }
+  ],
+  "limbs": [
+    {
+      "id": "arm",
+      "sided": true
+    },
+    {
+      "id": "hand",
+      "sided": true
+    },
+    {
+      "id": "leg",
+      "sided": true
+    },
+    {
+      "id": "torso",
+      "sided": false
+    },
+    {
+      "id": "head",
+      "sided": false
+    },
+    {
+      "id": "wrist",
+      "sided": true
+    },
+    {
+      "id": "ankle",
+      "sided": true
+    },
+    {
+      "id": "torso_tilt",
+      "sided": false
+    }
+  ],
+  "segments": [
+    {
+      "id": "arm_left",
+      "limb": "arm",
+      "side": "left"
+    },
+    {
+      "id": "arm_right",
+      "limb": "arm",
+      "side": "right"
+    },
+    {
+      "id": "hand_left",
+      "limb": "hand",
+      "side": "left"
+    },
+    {
+      "id": "hand_right",
+      "limb": "hand",
+      "side": "right"
+    },
+    {
+      "id": "leg_left",
+      "limb": "leg",
+      "side": "left"
+    },
+    {
+      "id": "leg_right",
+      "limb": "leg",
+      "side": "right"
+    },
+    {
+      "id": "torso",
+      "limb": "torso",
+      "side": null
+    },
+    {
+      "id": "head",
+      "limb": "head",
+      "side": null
+    },
+    {
+      "id": "wrist_left",
+      "limb": "wrist",
+      "side": "left"
+    },
+    {
+      "id": "wrist_right",
+      "limb": "wrist",
+      "side": "right"
+    },
+    {
+      "id": "ankle_left",
+      "limb": "ankle",
+      "side": "left"
+    },
+    {
+      "id": "ankle_right",
+      "limb": "ankle",
+      "side": "right"
+    },
+    {
+      "id": "torso_tilt",
+      "limb": "torso_tilt",
+      "side": null
+    }
+  ],
+  "roles": [
+    {
+      "id": "arm.shoulder_pitch",
+      "limb": "arm",
+      "axis_kind": "angle",
+      "origin": "body_capture",
+      "families": [
+        "human",
+        "serial_arm"
+      ],
+      "zero": {
+        "zero_deg": 0,
+        "reference": "Upper arm hanging along the torso."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Arm raised forward.",
+        "axis": [
+          0,
+          -1,
+          0
+        ]
+      },
+      "range_deg": [
+        -60,
+        180
+      ],
+      "max_velocity_deg_s": 600
+    },
+    {
+      "id": "arm.shoulder_yaw",
+      "limb": "arm",
+      "axis_kind": "angle",
+      "origin": "body_capture",
+      "families": [
+        "human",
+        "serial_arm"
+      ],
+      "zero": {
+        "zero_deg": 0,
+        "reference": "Upper arm hanging along the torso."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Abduction: arm raised outward, away from the midline.",
+        "axis": [
+          1,
+          0,
+          0
+        ]
+      },
+      "range_deg": [
+        -30,
+        180
+      ],
+      "max_velocity_deg_s": 600
+    },
+    {
+      "id": "arm.upper_arm_twist",
+      "limb": "arm",
+      "axis_kind": "angle",
+      "origin": "body_capture",
+      "families": [
+        "human",
+        "serial_arm"
+      ],
+      "zero": {
+        "zero_deg": 0,
+        "reference": "Signed turn about the upper-arm axis of the elbow-bend plane normal against a torso reference; only defined while the elbow is bent."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Sign as measured by angles.ts (outward-mirrored so both sides agree).",
+        "axis": [
+          0,
+          0,
+          -1
+        ]
+      },
+      "range_deg": [
+        -90,
+        70
+      ],
+      "max_velocity_deg_s": 600
+    },
+    {
+      "id": "arm.elbow_bend",
+      "limb": "arm",
+      "axis_kind": "angle",
+      "origin": "body_capture",
+      "families": [
+        "human",
+        "serial_arm"
+      ],
+      "zero": {
+        "zero_deg": 0,
+        "reference": "Upper arm and forearm in line (straight)."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Flexion: forearm folds toward the upper arm.",
+        "axis": [
+          0,
+          -1,
+          0
+        ],
+        "axis_note": "Body Capture measures this as an unsigned magnitude (0 = straight); the axis is the flexion direction."
+      },
+      "range_deg": [
+        0,
+        145
+      ],
+      "max_velocity_deg_s": 800
+    },
+    {
+      "id": "arm.forearm_roll",
+      "limb": "arm",
+      "axis_kind": "angle",
+      "origin": "body_capture",
+      "families": [
+        "human",
+        "serial_arm"
+      ],
+      "zero": {
+        "zero_deg": 0,
+        "reference": "Mid-pronation (palm toward the thigh with the arm hanging)."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Supination: palm turns toward the front.",
+        "axis": [
+          0,
+          0,
+          1
+        ]
+      },
+      "range_deg": [
+        -80,
+        80
+      ],
+      "max_velocity_deg_s": 700
+    },
+    {
+      "id": "arm.wrist_flexion",
+      "limb": "arm",
+      "axis_kind": "angle",
+      "origin": "body_capture",
+      "families": [
+        "human",
+        "serial_arm"
+      ],
+      "zero": {
+        "zero_deg": 0,
+        "reference": "Hand in line with the forearm."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Flexion: hand tilts toward the palm side. Negative is extension.",
+        "axis": [
+          -1,
+          0,
+          0
+        ],
+        "axis_note": "At the anatomical zero the palm faces the thigh, so palm-side tilt is a turn about the forward axis. The axis follows the forearm roll: it turns with arm.forearm_roll."
+      },
+      "range_deg": [
+        -70,
+        80
+      ],
+      "max_velocity_deg_s": 700
+    },
+    {
+      "id": "arm.wrist_deviation",
+      "limb": "arm",
+      "axis_kind": "angle",
+      "origin": "body_capture",
+      "families": [
+        "human",
+        "serial_arm"
+      ],
+      "zero": {
+        "zero_deg": 0,
+        "reference": "Hand in line with the forearm."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Ulnar deviation: hand tilts toward the little finger. Negative is radial.",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "axis_note": "At the anatomical zero (palm toward the thigh, thumb forward) the little-finger side is behind. The axis follows the forearm roll: it turns with arm.forearm_roll."
+      },
+      "range_deg": [
+        -20,
+        30
+      ],
+      "max_velocity_deg_s": 500
+    },
+    {
+      "id": "hand.pinky",
+      "limb": "hand",
+      "axis_kind": "angle",
+      "origin": "body_capture",
+      "families": [
+        "human"
+      ],
+      "zero": {
+        "zero_deg": 0,
+        "reference": "Finger straight."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Flexion: sum of the three joint turns of the finger chain.",
+        "axis": [
+          -1,
+          0,
+          0
+        ],
+        "axis_note": "Body Capture measures the summed finger curl as an unsigned magnitude; the axis is the flexion direction (curl toward the palm)."
+      },
+      "range_deg": [
+        0,
+        240
+      ],
+      "max_velocity_deg_s": 1200
+    },
+    {
+      "id": "hand.ring",
+      "limb": "hand",
+      "axis_kind": "angle",
+      "origin": "body_capture",
+      "families": [
+        "human"
+      ],
+      "zero": {
+        "zero_deg": 0,
+        "reference": "Finger straight."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Flexion: sum of the three joint turns of the finger chain.",
+        "axis": [
+          -1,
+          0,
+          0
+        ],
+        "axis_note": "Body Capture measures the summed finger curl as an unsigned magnitude; the axis is the flexion direction (curl toward the palm)."
+      },
+      "range_deg": [
+        0,
+        240
+      ],
+      "max_velocity_deg_s": 1200
+    },
+    {
+      "id": "hand.middle",
+      "limb": "hand",
+      "axis_kind": "angle",
+      "origin": "body_capture",
+      "families": [
+        "human"
+      ],
+      "zero": {
+        "zero_deg": 0,
+        "reference": "Finger straight."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Flexion: sum of the three joint turns of the finger chain.",
+        "axis": [
+          -1,
+          0,
+          0
+        ],
+        "axis_note": "Body Capture measures the summed finger curl as an unsigned magnitude; the axis is the flexion direction (curl toward the palm)."
+      },
+      "range_deg": [
+        0,
+        240
+      ],
+      "max_velocity_deg_s": 1200
+    },
+    {
+      "id": "hand.index",
+      "limb": "hand",
+      "axis_kind": "angle",
+      "origin": "body_capture",
+      "families": [
+        "human"
+      ],
+      "zero": {
+        "zero_deg": 0,
+        "reference": "Finger straight."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Flexion: sum of the three joint turns of the finger chain.",
+        "axis": [
+          -1,
+          0,
+          0
+        ],
+        "axis_note": "Body Capture measures the summed finger curl as an unsigned magnitude; the axis is the flexion direction (curl toward the palm)."
+      },
+      "range_deg": [
+        0,
+        240
+      ],
+      "max_velocity_deg_s": 1200
+    },
+    {
+      "id": "hand.thumb_bend",
+      "limb": "hand",
+      "axis_kind": "angle",
+      "origin": "body_capture",
+      "families": [
+        "human"
+      ],
+      "zero": {
+        "zero_deg": 0,
+        "reference": "Thumb straight."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Flexion: sum of the two turns at the thumb knuckle and joint.",
+        "axis": null,
+        "axis_note": "No single body axis: an unsigned sum of two joint turns whose plane follows the thumb, not the body frame."
+      },
+      "range_deg": [
+        0,
+        120
+      ],
+      "max_velocity_deg_s": 900
+    },
+    {
+      "id": "hand.thumb_rotation",
+      "limb": "hand",
+      "axis_kind": "angle",
+      "origin": "body_capture",
+      "families": [
+        "human"
+      ],
+      "zero": {
+        "zero_deg": 0,
+        "reference": "Thumb first bone in the palm plane."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Thumb first bone leaves the palm plane toward the palm-normal side.",
+        "axis": null,
+        "axis_note": "No single body axis: the angle of the thumb's first bone out of the palm plane, measured against the palm normal."
+      },
+      "range_deg": [
+        0,
+        70
+      ],
+      "max_velocity_deg_s": 600
+    },
+    {
+      "id": "leg.hip_pitch",
+      "limb": "leg",
+      "axis_kind": "angle",
+      "origin": "body_capture",
+      "families": [
+        "human"
+      ],
+      "zero": {
+        "zero_deg": 0,
+        "reference": "Thigh straight down in the pelvis frame."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Flexion: thigh raised forward.",
+        "axis": [
+          0,
+          -1,
+          0
+        ]
+      },
+      "range_deg": [
+        -20,
+        120
+      ],
+      "max_velocity_deg_s": 400
+    },
+    {
+      "id": "leg.hip_roll",
+      "limb": "leg",
+      "axis_kind": "angle",
+      "origin": "body_capture",
+      "families": [
+        "human"
+      ],
+      "zero": {
+        "zero_deg": 0,
+        "reference": "Thigh straight down in the pelvis frame."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Abduction: thigh moves outward, away from the midline.",
+        "axis": [
+          1,
+          0,
+          0
+        ]
+      },
+      "range_deg": [
+        -30,
+        45
+      ],
+      "max_velocity_deg_s": 300
+    },
+    {
+      "id": "leg.hip_yaw",
+      "limb": "leg",
+      "axis_kind": "angle",
+      "origin": "body_capture",
+      "families": [
+        "human"
+      ],
+      "zero": {
+        "zero_deg": 0,
+        "reference": "Toes pointing straight ahead (foot direction against the pelvis forward axis, about the thigh axis)."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Sign as measured by angles.ts (outward-mirrored so both sides agree).",
+        "axis": [
+          0,
+          0,
+          -1
+        ]
+      },
+      "range_deg": [
+        -45,
+        45
+      ],
+      "max_velocity_deg_s": 300
+    },
+    {
+      "id": "leg.knee_bend",
+      "limb": "leg",
+      "axis_kind": "angle",
+      "origin": "body_capture",
+      "families": [
+        "human"
+      ],
+      "zero": {
+        "zero_deg": 0,
+        "reference": "Thigh and shank in line (straight)."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Flexion: shank folds toward the thigh.",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "axis_note": "Body Capture measures this as an unsigned magnitude (0 = straight); the axis is the flexion direction."
+      },
+      "range_deg": [
+        0,
+        140
+      ],
+      "max_velocity_deg_s": 600
+    },
+    {
+      "id": "leg.ankle_pitch",
+      "limb": "leg",
+      "axis_kind": "angle",
+      "origin": "body_capture",
+      "families": [
+        "human"
+      ],
+      "zero": {
+        "zero_deg": 0,
+        "reference": "Foot at a right angle to the shank."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Dorsiflexion: toes up.",
+        "axis": [
+          0,
+          -1,
+          0
+        ]
+      },
+      "range_deg": [
+        -20,
+        50
+      ],
+      "max_velocity_deg_s": 500
+    },
+    {
+      "id": "leg.ankle_roll",
+      "limb": "leg",
+      "axis_kind": "angle",
+      "origin": "body_capture",
+      "families": [
+        "human"
+      ],
+      "zero": {
+        "zero_deg": 0,
+        "reference": "Foot flat under the shank (foot plane normal along the shank axis)."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Sign as measured by angles.ts (outward-mirrored so both sides agree).",
+        "axis": [
+          1,
+          0,
+          0
+        ]
+      },
+      "range_deg": [
+        -20,
+        35
+      ],
+      "max_velocity_deg_s": 400
+    },
+    {
+      "id": "torso.bend",
+      "limb": "torso",
+      "axis_kind": "angle",
+      "origin": "body_capture",
+      "families": [
+        "human"
+      ],
+      "zero": {
+        "zero_deg": 0,
+        "reference": "Torso axis straight above the pelvis."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Torso leans forward.",
+        "axis": [
+          0,
+          1,
+          0
+        ]
+      },
+      "range_deg": [
+        -30,
+        80
+      ],
+      "max_velocity_deg_s": 300
+    },
+    {
+      "id": "torso.lean",
+      "limb": "torso",
+      "axis_kind": "angle",
+      "origin": "body_capture",
+      "families": [
+        "human"
+      ],
+      "zero": {
+        "zero_deg": 0,
+        "reference": "Torso axis straight above the pelvis."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Torso leans toward the subject's left.",
+        "axis": [
+          -1,
+          0,
+          0
+        ]
+      },
+      "range_deg": [
+        -35,
+        35
+      ],
+      "max_velocity_deg_s": 300
+    },
+    {
+      "id": "torso.twist",
+      "limb": "torso",
+      "axis_kind": "angle",
+      "origin": "body_capture",
+      "families": [
+        "human"
+      ],
+      "zero": {
+        "zero_deg": 0,
+        "reference": "Shoulders square to the hips."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Shoulder line turns toward the subject's left (left shoulder back).",
+        "axis": [
+          0,
+          0,
+          1
+        ]
+      },
+      "range_deg": [
+        -45,
+        45
+      ],
+      "max_velocity_deg_s": 300
+    },
+    {
+      "id": "head.nod",
+      "limb": "head",
+      "axis_kind": "angle",
+      "origin": "body_capture",
+      "families": [
+        "human"
+      ],
+      "zero": {
+        "zero_deg": 0,
+        "reference": "Looking straight ahead."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Head pitches down.",
+        "axis": [
+          0,
+          1,
+          0
+        ]
+      },
+      "range_deg": [
+        -50,
+        60
+      ],
+      "max_velocity_deg_s": 500
+    },
+    {
+      "id": "head.turn",
+      "limb": "head",
+      "axis_kind": "angle",
+      "origin": "body_capture",
+      "families": [
+        "human"
+      ],
+      "zero": {
+        "zero_deg": 0,
+        "reference": "Looking straight ahead."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Head turns toward the subject's left.",
+        "axis": [
+          0,
+          0,
+          1
+        ]
+      },
+      "range_deg": [
+        -80,
+        80
+      ],
+      "max_velocity_deg_s": 600
+    },
+    {
+      "id": "head.tilt",
+      "limb": "head",
+      "axis_kind": "angle",
+      "origin": "body_capture",
+      "families": [
+        "human"
+      ],
+      "zero": {
+        "zero_deg": 0,
+        "reference": "Ears level."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Top of the head tilts toward the subject's left.",
+        "axis": [
+          -1,
+          0,
+          0
+        ]
+      },
+      "range_deg": [
+        -45,
+        45
+      ],
+      "max_velocity_deg_s": 400
+    },
+    {
+      "id": "arm.base_yaw",
+      "limb": "arm",
+      "axis_kind": "angle",
+      "origin": "robot_only",
+      "families": [
+        "serial_arm"
+      ],
+      "zero": {
+        "zero_deg": 0,
+        "reference": "Arm plane pointing straight ahead of the mounted base."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Arm turns counter-clockwise seen from above, about the base up axis.",
+        "axis": [
+          0,
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "id": "arm.tool_roll",
+      "limb": "arm",
+      "axis_kind": "angle",
+      "origin": "robot_only",
+      "families": [
+        "serial_arm"
+      ],
+      "zero": {
+        "zero_deg": 0,
+        "reference": "Tool in its neutral orientation about the last link axis."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Same turn sense as arm.forearm_roll (supination).",
+        "axis": [
+          0,
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "id": "wrist.x",
+      "limb": "wrist",
+      "axis_kind": "position",
+      "origin": "body_capture",
+      "families": [
+        "human"
+      ],
+      "zero": {
+        "zero_deg": null,
+        "reference": "Offset of the joint from its limb root in a box of one limb length, normalised 0..1; 0.5 = at the root."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Normalised position axis x of the box."
+      }
+    },
+    {
+      "id": "wrist.y",
+      "limb": "wrist",
+      "axis_kind": "position",
+      "origin": "body_capture",
+      "families": [
+        "human"
+      ],
+      "zero": {
+        "zero_deg": null,
+        "reference": "Offset of the joint from its limb root in a box of one limb length, normalised 0..1; 0.5 = at the root."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Normalised position axis y of the box."
+      }
+    },
+    {
+      "id": "wrist.z",
+      "limb": "wrist",
+      "axis_kind": "position",
+      "origin": "body_capture",
+      "families": [
+        "human"
+      ],
+      "zero": {
+        "zero_deg": null,
+        "reference": "Offset of the joint from its limb root in a box of one limb length, normalised 0..1; 0.5 = at the root."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Normalised position axis z of the box."
+      }
+    },
+    {
+      "id": "ankle.x",
+      "limb": "ankle",
+      "axis_kind": "position",
+      "origin": "body_capture",
+      "families": [
+        "human"
+      ],
+      "zero": {
+        "zero_deg": null,
+        "reference": "Offset of the joint from its limb root in a box of one limb length, normalised 0..1; 0.5 = at the root."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Normalised position axis x of the box."
+      }
+    },
+    {
+      "id": "ankle.y",
+      "limb": "ankle",
+      "axis_kind": "position",
+      "origin": "body_capture",
+      "families": [
+        "human"
+      ],
+      "zero": {
+        "zero_deg": null,
+        "reference": "Offset of the joint from its limb root in a box of one limb length, normalised 0..1; 0.5 = at the root."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Normalised position axis y of the box."
+      }
+    },
+    {
+      "id": "ankle.z",
+      "limb": "ankle",
+      "axis_kind": "position",
+      "origin": "body_capture",
+      "families": [
+        "human"
+      ],
+      "zero": {
+        "zero_deg": null,
+        "reference": "Offset of the joint from its limb root in a box of one limb length, normalised 0..1; 0.5 = at the root."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Normalised position axis z of the box."
+      }
+    },
+    {
+      "id": "torso_tilt.qx",
+      "limb": "torso_tilt",
+      "axis_kind": "quaternion_component",
+      "origin": "body_capture",
+      "families": [
+        "human"
+      ],
+      "zero": {
+        "zero_deg": null,
+        "reference": "Torso tilt quaternion against the learned vertical; identity quaternion = upright."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Quaternion component qx, raw -1..1."
+      }
+    },
+    {
+      "id": "torso_tilt.qy",
+      "limb": "torso_tilt",
+      "axis_kind": "quaternion_component",
+      "origin": "body_capture",
+      "families": [
+        "human"
+      ],
+      "zero": {
+        "zero_deg": null,
+        "reference": "Torso tilt quaternion against the learned vertical; identity quaternion = upright."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Quaternion component qy, raw -1..1."
+      }
+    },
+    {
+      "id": "torso_tilt.qz",
+      "limb": "torso_tilt",
+      "axis_kind": "quaternion_component",
+      "origin": "body_capture",
+      "families": [
+        "human"
+      ],
+      "zero": {
+        "zero_deg": null,
+        "reference": "Torso tilt quaternion against the learned vertical; identity quaternion = upright."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Quaternion component qz, raw -1..1."
+      }
+    },
+    {
+      "id": "torso_tilt.qw",
+      "limb": "torso_tilt",
+      "axis_kind": "quaternion_component",
+      "origin": "body_capture",
+      "families": [
+        "human"
+      ],
+      "zero": {
+        "zero_deg": null,
+        "reference": "Torso tilt quaternion against the learned vertical; identity quaternion = upright."
+      },
+      "positive": {
+        "sign": 1,
+        "direction": "Quaternion component qw, raw -1..1."
+      }
+    }
+  ]
+}

@@ -40,7 +40,8 @@ Part 2 of 2. Other parts: [tool-index.md](tool-index.md).
 - `hold_stimulus()`: Hold voxels of one area firing on every burst for `duration_s` seconds.
 - `get_stimulus_hold()`: Outcome of a `hold_stimulus` hold (state, posts, `landed` check), or list holds.
 - `schedule_stimulus()`: Force-fire voxels at exact burst offsets, inside the burst loop (no wall-clock jitter).
-- `cancel_stimulus()`: Cancel the entries of a `schedule_stimulus` schedule that have not fired yet.
+- `cancel_stimulus()`: Cancel one `schedule_stimulus` schedule, or a whole labelled group of stimuli.
+- `renew_stimulus()`: Make every running `hold_stimulus` hold with `label` last `seconds` more from now.
 - `get_stimulus_schedule()`: Active `schedule_stimulus` schedules: ids, burst range, remaining entries, next burst.
 - `record_spikes()`: Burst-exact firing of up to 64 areas over the next `bursts` bursts.
 - `get_spike_recording()`: State of a `record_spikes(background=True)` recording, or the list of recordings.
@@ -79,7 +80,7 @@ Part 2 of 2. Other parts: [tool-index.md](tool-index.md).
 - `send_motor_command()`: Command one robot channel to a fraction or a physical value via OPU stimulation.
 - `auto_polarity_probe()`: Empirically discover OPU column -> sensor direction by force-firing each column.
 - `list_controller_bridges()`: List all active controller bridges (xARM, MuJoCo, ROS2, etc.) discovered on this machine.
-- `get_embodiment_status()`: Get status of connected embodiment controllers (GET /v1/embodiment/status when available).
+- `get_embodiment_status()`: Get the robot controller's own status (the controller's `GET /status`).
 - `embodiment_discover_introspection_endpoint()`: Locate a controller's introspection HTTP endpoint via the launcher descriptor.
 - `embodiment_get_physics_state()`: GET ground-truth physics state from an embodiment controller.
 - `embodiment_measure_bodies()`: Read tilt, height and contacts of named bodies from the MuJoCo controller (read-only).

@@ -56,6 +56,7 @@ from feagi_mcp.placement_policy import (
 from feagi_mcp.run_analysis import analyze_spikes_csv
 from feagi_mcp.snapshots import SnapshotManager, validate_label
 from feagi_mcp.spike_record import FOREGROUND_BUDGET_S
+from feagi_mcp.steps_file import resolve_steps
 from feagi_mcp.studio_handoff import (
     handoff_message,
     snapshot_handoff,
@@ -797,25 +798,31 @@ async def get_area_parameters(area_id: str) -> dict[str, Any]:
 
 
 @mcp.tool(annotations=READ_ONLY)
-async def get_embodiment_status() -> dict[str, Any]:
-    """Get status of connected embodiment controllers (GET /v1/embodiment/status when available).
+async def get_embodiment_status(
+    controller_id: str | None = None,
+    timeout_s: float = 2.0,
+) -> dict[str, Any]:
+    """Get the robot controller's own status (the controller's ``GET /status``).
 
-    When the **HTTP** embodiment status route is up, you get full registration
-    metadata. If it is **unavailable**, this tool returns ``status=live_registry``
-    from ``get_registered_agents`` plus ``list_io_areas_compact``. That is live
-    session state, not a genome dump.
+    Finds running controllers through the launcher descriptors (see
+    ``embodiment_discover_introspection_endpoint`` / ``list_controller_bridges``)
+    and calls each one's control-server ``/status``.
 
-    For **which OPU / IPU the agent actually bound in this session** (cortical
-    ids, group order, control modes), prefer
-    ``get_agent_device_registrations`` with a concrete ``agent_id`` from
-    ``get_registered_agents`` — that is the least ambiguous source when the
-    agent is online.
+    - One controller reachable: ``status="controller_status"`` with
+      ``controller_id``, ``controller_url`` and ``controller_status``.
+    - Several reachable: ``status="multiple_controllers"`` with ``controllers``;
+      pass ``controller_id`` to pick one.
+    - None reachable: ``status="no_running_controller"``, plus a labelled
+      ``feagi_registry_secondary`` (FEAGI agent registry and I/O catalog; not a
+      controller status). Stale descriptors are listed under ``unreachable``.
 
-    Returns:
-        Online embodiment JSON, or live registry + compact I/O catalog.
+    For which OPU / IPU an agent bound, use ``get_agent_device_registrations``.
+
+    Args:
+        controller_id: Select one controller by id; omit to query all.
+        timeout_s: HTTP timeout per controller.
     """
-    result = await feagi.get_embodiment_status()
-    return result
+    return await feagi.get_embodiment_status(controller_id=controller_id, timeout_s=timeout_s)
 
 
 @mcp.tool()
@@ -900,13 +907,14 @@ async def stimulate_area_batch(
 
 @mcp.tool()
 async def run_stimulus_protocol(
-    steps: list[dict[str, Any]],
-    record_areas: list[str],
+    steps: list[dict[str, Any]] | None = None,
+    record_areas: list[str] | None = None,
     tail_bursts: int = 0,
     mode: str = "force_fire",
     repeat: int = 1,
     compact: bool = False,
     potential: float | None = None,
+    steps_file: str | None = None,
 ) -> dict[str, Any]:
     """Present a timed stimulus sequence and record per-burst firing in one call.
 
@@ -921,7 +929,11 @@ async def run_stimulus_protocol(
         steps: List of ``{"bursts": N, "stimuli": [{"area_id": str,
             "coordinates": [[x, y, z], ...]}], "label": optional str}``.
             Empty ``stimuli`` is a rest step.
-        record_areas: Area ids whose firing is recorded
+        steps_file: Path to a JSON file holding the same list as ``steps`` (use it for long
+            protocols, such as replaying recorded values, so the steps cost no tokens). Pass
+            ``steps`` or ``steps_file``, not both. Errors name the problem: missing file,
+            invalid JSON, not a list, empty list, or an item that is not an object.
+        record_areas: Area ids whose firing is recorded (required)
         tail_bursts: Bursts to record after the last step (default 0)
         mode: Stimulation mode (default ``force_fire``)
         repeat: Run the step list this many times in a row (default 1); the tail
@@ -945,8 +957,11 @@ async def run_stimulus_protocol(
         bursts where a recorded area fired: burst, step, areas),
         ``bursts_missed`` (window bursts no read observed) and ``success``.
     """
+    resolved, err = resolve_steps(steps, steps_file, "steps")
+    if err or resolved is None:
+        return {"success": False, "error": err}
     return await feagi.run_stimulus_protocol(
-        steps, record_areas, tail_bursts, mode, repeat, compact, potential
+        resolved, record_areas or [], tail_bursts, mode, repeat, compact, potential
     )
 
 
@@ -959,6 +974,7 @@ async def hold_stimulus(
     background: bool = False,
     verify: bool = True,
     potential: float | None = None,
+    label: str | None = None,
 ) -> dict[str, Any]:
     """Hold voxels of one area firing on every burst for ``duration_s`` seconds.
 
@@ -973,7 +989,8 @@ async def hold_stimulus(
     ``background=True`` returns at once with a ``hold_id`` and keeps holding, so a trace or
     ``record_spikes`` can run beside it; read the outcome with ``get_stimulus_hold``. A
     background hold keeps firing after the caller leaves; ``get_stimulus_hold(cancel=True)``
-    stops it.
+    stops it. Give related holds the same ``label`` to cancel them together with
+    ``cancel_stimulus(label=...)`` or extend them together with ``renew_stimulus(label=...)``.
     ``start_delay_s`` delays the first post (a trace-relative start).
 
     Args:
@@ -991,9 +1008,11 @@ async def hold_stimulus(
             (older version) the call returns an error; ``applied_potential`` is returned when
             reported.
             One value for every post of the hold.
+        label: Optional group name (<= 64 characters) for ``cancel_stimulus`` and
+            ``renew_stimulus``; several holds may share one label
     """
     return await feagi.hold_stimulus(
-        area, voxels, duration_s, start_delay_s, background, verify, potential
+        area, voxels, duration_s, start_delay_s, background, verify, potential, label
     )
 
 
@@ -1010,9 +1029,11 @@ async def get_stimulus_hold(hold_id: str | None = None, cancel: bool = False) ->
 
 @mcp.tool()
 async def schedule_stimulus(
-    entries: list[dict[str, Any]],
+    entries: list[dict[str, Any]] | None = None,
     repeat_period_bursts: int | None = None,
     potential: float | None = None,
+    steps_file: str | None = None,
+    label: str | None = None,
 ) -> dict[str, Any]:
     """Force-fire voxels at exact burst offsets, inside the burst loop (no wall-clock jitter).
 
@@ -1027,6 +1048,10 @@ async def schedule_stimulus(
 
     Args:
         entries: Burst-offset entries (each needs a non-empty ``stimuli`` list)
+        steps_file: Path to a JSON file holding the same list as ``entries`` (for long
+            schedules, such as replaying recorded values, so they cost no tokens). Pass
+            ``entries`` or ``steps_file``, not both. Errors name the problem: missing file,
+            invalid JSON, not a list, empty list, or an item that is not an object.
         repeat_period_bursts: Optional. Replay the entries at ``offset + k * period`` until
             cancelled; must be greater than the largest ``burst_offset``
         potential: Membrane potential the forced neurons fire with (finite, > 0). Default None =
@@ -1037,18 +1062,48 @@ async def schedule_stimulus(
             (older version) the call returns an error; ``applied_potential`` is returned when
             reported.
             Sent once on every schedule entry (one value per entry, none per voxel).
+        label: Optional group name (<= 64 characters). ``cancel_stimulus(label=...)`` then
+            cancels every schedule (and hold) with it. Kept in this MCP server only, so it is
+            lost when the server restarts; use the ``schedule_id`` then.
     """
-    return await feagi.schedule_stimulus(entries, repeat_period_bursts, potential)
+    resolved, err = resolve_steps(entries, steps_file, "entries")
+    if err or resolved is None:
+        return {"success": False, "error": err}
+    return await feagi.schedule_stimulus(resolved, repeat_period_bursts, potential, label)
 
 
 @mcp.tool()
-async def cancel_stimulus(schedule_id: int) -> dict[str, Any]:
-    """Cancel the entries of a ``schedule_stimulus`` schedule that have not fired yet.
+async def cancel_stimulus(
+    schedule_id: int | None = None, label: str | None = None
+) -> dict[str, Any]:
+    """Cancel one ``schedule_stimulus`` schedule, or a whole labelled group of stimuli.
+
+    Give exactly one argument. ``schedule_id`` cancels the entries of that schedule that have
+    not fired yet. ``label`` cancels every running ``hold_stimulus`` hold and every
+    ``schedule_stimulus`` schedule that was started with that label (a schedule that already
+    finished is listed as ``schedules_already_finished``). The label-to-schedule map lives in
+    this MCP server, so schedule labels are forgotten when it restarts.
 
     Args:
         schedule_id: Id returned by ``schedule_stimulus`` (404 once the schedule has finished)
+        label: Group name given to ``hold_stimulus`` / ``schedule_stimulus``
     """
-    return await feagi.cancel_stimulus(schedule_id)
+    return await feagi.cancel_stimulus(schedule_id, label)
+
+
+@mcp.tool()
+async def renew_stimulus(label: str, seconds: float) -> dict[str, Any]:
+    """Make every running ``hold_stimulus`` hold with ``label`` last ``seconds`` more from now.
+
+    Use it to keep a set of background holds alive without restarting each one. A hold that
+    has already finished or been cancelled is listed under ``skipped`` (start a new hold).
+    Applies to holds only: a repeating schedule has no end to extend.
+
+    Args:
+        label: Group name given to ``hold_stimulus``
+        seconds: New remaining length of each hold, in (0, 600]
+    """
+    return await feagi.renew_stimulus(label, seconds)
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -1068,6 +1123,7 @@ async def record_spikes(
     csv_path: str | None = None,
     max_runs: int = 20,
     background: bool = False,
+    modal_summary: bool = False,
 ) -> dict[str, Any]:
     """Burst-exact firing of up to 64 areas over the next ``bursts`` bursts.
 
@@ -1094,6 +1150,13 @@ async def record_spikes(
     ``burst,area_id,area_name,x,y,z,memory_neuron_id,fire_kind,fire_kind_name`` (``fire_kind``
     is the raw value, ``fire_kind_name`` its name).
 
+    ``modal_summary=True`` adds ``modal_pattern`` to each area: a pattern is the set of voxels
+    that fired in one burst. It reports ``distinct_patterns``, ``modal`` (the most common
+    pattern: its voxels, ``bursts``, ``share_of_fired``, ``share_of_observed``, first/last
+    burst), ``empty_bursts`` and the ``empty_runs`` (runs of consecutive silent bursts, with
+    ``empty_run_count`` and ``longest_empty_run``). Memory neurons have no voxel and are not
+    part of a pattern. ``gaps`` still means bursts with no ledger frame.
+
     Args:
         areas: Area ids, names or region ids (1-64 after region expansion)
         bursts: Bursts to record (1-20000, default 200)
@@ -1102,8 +1165,9 @@ async def record_spikes(
             ``run_count`` is always the full count)
         background: Return a ``recording_id`` at once and record in the background
             (default False)
+        modal_summary: Add the per-area modal firing pattern summary (default False)
     """
-    return await feagi.record_spikes(areas, bursts, csv_path, max_runs, background)
+    return await feagi.record_spikes(areas, bursts, csv_path, max_runs, background, modal_summary)
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -1214,6 +1278,14 @@ async def build_circuit_from_spec(spec_json: str, dry_run: bool = True) -> dict[
     after its rules are written and read back; flag and mode kept; needs a plastic rule). The
     freeze is a brain-instance switch, not part of the genome: a genome reload clears it.
     Illegal mixes fail the dry run.
+
+    Ports: ``ports`` ({inputs: [area names], outputs: [area names]}) declares the block's
+    interface; a real run writes it to the region's ``designated_inputs`` / ``designated_outputs``
+    (``PUT /v1/region/region``, existing entries kept, read back) and returns ``created.ports``.
+    A direction given in ``ports`` replaces the template defaults (``port``: area in and out;
+    ``onset_pulse``: ``<name>_Onset`` out; ``ring_cpg``: ring + readouts out, ``drive`` in when
+    it is a spec area; ``phase_window_gate``: gate out). With none declared the result warns
+    "block has no declared ports" and nothing is guessed.
 
     Also: ``delete`` ([{src, dst}]: remove those mappings before the new ones are written) and
     ``edit_areas`` ([{name, properties}] on live areas of ``region.region_id``, which must be an
@@ -2588,7 +2660,8 @@ async def create_io_area_for_unit(
     Args:
         name: Human-readable area name (BV / genome label).
         subtype: 4-char ``cortical_subtype`` (e.g. ``icnt`` count input, ``ocnt`` count output).
-        channels: Number of channels (the area's x-width per device).
+        channels: TOTAL x-width of the area (per-device width sent is
+            ``channels // device_count``; must divide evenly).
         depth: Neuron depth / bins (z-extent); must match the coder's bins. Value-coded units
             (Depth Map ``idpt``, Object Segmentation ``iseg``/``oseg``) are always 1: the
             payload is the potential. Build bins with ``expand_value_to_bins`` instead.
@@ -3243,6 +3316,26 @@ async def get_region_circuit(
         synapse_counts: With compact, include per-edge synapse counts (default True).
     """
     return await feagi.get_region_circuit(region_id, include_child_regions, compact, synapse_counts)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def get_region_io_blockers(area: str, region_id: str | None = None) -> dict[str, Any]:
+    """Which mappings block designating an area as an input or output of its brain region.
+
+    Mirrors FEAGI's region IO designation rule (read-only; nothing is changed): an area cannot
+    be designated a region input while it has an outgoing mapping to an area outside its region,
+    and cannot be designated an output while it has an incoming mapping from outside. "Its
+    region" is the region that lists the area directly (nested child regions do not count).
+    Returns ``can_be_input`` / ``can_be_output``, the blocking mappings (the other area, its
+    name and region) under ``blocks_input.outgoing_to_outside`` and
+    ``blocks_output.incoming_from_outside``, and whether the area is already designated. Remove
+    or move the listed mappings (or route them through a port) before designating.
+
+    Args:
+        area: Area id or name
+        region_id: Optional region id to check the area really belongs to it
+    """
+    return await feagi.get_region_io_blockers(area.strip(), region_id)
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -4642,7 +4735,9 @@ async def get_feagi_link_health(controller_id: str = "mujoco") -> dict[str, Any]
     - FEAGI core reachability (health endpoint),
     - agent registry and capability registry accessibility,
     - burst engine endpoint accessibility,
-    - controller descriptor + matching registration state.
+    - controller descriptor + matching registration state,
+    - ``feed_stalled``: sensory agents still registered whose IPU areas carried no
+      sensor data across two snapshot reads 2 s apart.
 
     Use this first when MCP calls start failing intermittently.
     """
@@ -5138,7 +5233,8 @@ async def check_live_state_drift(controller_id: str = "mujoco") -> dict[str, Any
     the controller descriptor's ``agent_id`` vs the registered agents, and each
     IPU's width vs the columns present in the last sensor snapshot, and any active
     stimulus schedule (a repeating hold left by a crashed run keeps firing; the
-    restore is ``cancel_stimulus()``). Every finding
+    restore is ``cancel_stimulus()``), and ``feed_stalled`` (a sensory agent still
+    registered whose IPU areas carried no data across two snapshot reads 2 s apart). Every finding
     names the subject, both values and the ``update_cortical_area()`` /
     ``set_burst_engine_frequency()`` call that restores the live value (or says
     that a controller restart is needed). An empty ``findings`` list means nothing
@@ -5210,6 +5306,28 @@ async def freeze_mapping_plasticity(
     return await freeze_mapping(feagi, src_area.strip(), dst_area.strip(), bool(frozen))
 
 
+@mcp.tool(annotations=READ_ONLY)
+async def get_learning_frozen(
+    src_area: str | None = None, dst_area: str | None = None
+) -> dict[str, Any]:
+    """Read learning-freeze state: one mapping, or every frozen mapping and memory area.
+
+    Read-only counterpart of ``freeze_mapping_plasticity`` and
+    ``set_memory_area_learning_frozen``. With ``src_area`` and ``dst_area`` it reads FEAGI's
+    ``GET /v1/cortical_mapping/plasticity_frozen`` and returns ``frozen`` (true/false, null when
+    the mapping does not exist). With neither it reads ``GET /v1/connectome/learning_frozen``:
+    ``frozen_mappings`` (src and dst, id and name) and ``frozen_memory_areas``, with counts.
+    The switches belong to the running brain: cleared when a genome is reloaded.
+
+    Args:
+        src_area: Source area id or name (with ``dst_area``)
+        dst_area: Destination area id or name (with ``src_area``)
+    """
+    return await feagi.get_mapping_learning_state(
+        src_area.strip() if src_area else None, dst_area.strip() if dst_area else None
+    )
+
+
 @mcp.tool()
 async def set_memory_area_learning_frozen(area: str, frozen: bool = True) -> dict[str, Any]:
     """Freeze (or resume) learning on one memory area: a full snapshot of what it holds.
@@ -5252,6 +5370,29 @@ async def reset_area_incoming_weights(cortical_ids: list[str]) -> dict[str, Any]
     resolve_cortical_area_by_name first. Needs a FEAGI with the route (404/405 otherwise).
     """
     return await feagi.reset_area_incoming_weights(cortical_ids)
+
+
+@mcp.tool()
+async def move_io_area_groups(
+    areas: list[str],
+    group_ids: list[int],
+    requester_agent_id: str | None = None,
+) -> dict[str, Any]:
+    """Move input/output areas to other group numbers (POST cortical_area/move_groups).
+
+    ``areas`` (cortical ids or exact names) and ``group_ids`` are parallel lists: area i
+    moves to group ``group_ids[i]``. All-or-nothing: if any target group is occupied
+    nothing moves (409). Learned weights, synapses and memory are kept; each area gets a
+    new cortical id. Result: ``moved`` list of ``old_id``/``new_id``. Each app moves only
+    its own areas: an area fed by another connected agent needs that agent's id in
+    ``requester_agent_id`` (409 otherwise). Afterwards the app that sends to the moved
+    areas must re-register with the new group numbers. A FEAGI without the route returns
+    "this FEAGI version does not support move_groups yet" (404).
+    """
+    if len(areas) != len(group_ids):
+        raise ToolError("areas and group_ids must have the same length")
+    moves = [{"cortical_id": a, "group_id": g} for a, g in zip(areas, group_ids, strict=True)]
+    return await feagi.move_io_area_groups(moves, requester_agent_id)
 
 
 @mcp.tool(annotations=READ_ONLY)

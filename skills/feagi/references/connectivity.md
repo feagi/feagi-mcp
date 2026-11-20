@@ -28,6 +28,7 @@ them. One src to dst edge can carry several rules (for example `episodic_memory`
 | Full detail on one edge, with synapse counts | `get_connectivity(src_area, dst_area)` |
 | Outgoing map for every area | `get_cortical_map_detailed()` |
 | One region's edges | `get_region_circuit(region_id)` |
+| Which mappings stop an area being a region input or output | `get_region_io_blockers(area)` |
 | Paths between two areas | `trace_signal_path(from_area, to_area, max_hops)` |
 | Synapses that actually exist | `get_cortical_synapse_counts()`, `list_area_synapses(direction="incoming")` |
 

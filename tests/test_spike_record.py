@@ -335,3 +335,43 @@ async def test_fire_kind_in_summary_and_csv(tmp_path: Any) -> None:
     rows = [line.split(",") for line in path.read_text().splitlines()[1:]]
     assert {(r[7], r[8]) for r in rows} == {("0", "stdp_eligible"), ("1", "episodic_memory")}
     assert len(rows) == result["areas"][AREA]["total_spikes"]
+
+
+def test_modal_pattern_summary_reports_share_empty_runs_and_distinct_patterns() -> None:
+    collector = LedgerCollector(FakeLedger(), [AREA])  # type: ignore[arg-type]
+    a, b = [[0, 0, 1], [0, 0, 2]], [[0, 0, 3]]
+    collector.frames[AREA] = {
+        1: (a, []),
+        2: ([], []),
+        3: (list(reversed(a)), []),  # same set, other order: same pattern
+        4: ([], []),
+        5: ([], []),
+        6: (b, []),
+        7: (a, [9]),  # memory neuron ignored
+    }
+    plain = summarize_frames(collector, 1, 7)["areas"][AREA]
+    assert "modal_pattern" not in plain
+    m = summarize_frames(collector, 1, 7, modal=True)["areas"][AREA]["modal_pattern"]
+    assert m["distinct_patterns"] == 2 and m["empty_bursts"] == 3
+    assert m["empty_runs"] == [[2, 2], [4, 5]] and m["longest_empty_run"] == 2
+    assert m["modal"]["voxels"] == [[0, 0, 1], [0, 0, 2]] and m["modal"]["bursts"] == 3
+    assert m["modal"]["share_of_fired"] == 0.75 and m["modal"]["share_of_observed"] == round(
+        3 / 7, 4
+    )
+    assert (m["modal"]["first_burst"], m["modal"]["last_burst"]) == (1, 7)
+
+
+def test_modal_pattern_of_a_silent_area_has_no_modal() -> None:
+    collector = LedgerCollector(FakeLedger(), [AREA])  # type: ignore[arg-type]
+    collector.frames[AREA] = {1: ([], []), 2: ([], [])}
+    m = summarize_frames(collector, 1, 2, modal=True)["areas"][AREA]["modal_pattern"]
+    assert m["modal"] is None and m["distinct_patterns"] == 0 and m["empty_bursts"] == 2
+
+
+async def test_record_spikes_window_modal_flag() -> None:
+    out = await record_spikes_window(FakeLedger(), [AREA], 20, modal=True)
+    m = out["areas"][AREA]["modal_pattern"]
+    assert m["distinct_patterns"] == 1 and m["modal"]["voxels"] == [[0, 0, 1]]
+    assert m["empty_bursts"] > 0
+    out = await record_spikes_window(FakeLedger(), [AREA], 20)
+    assert "modal_pattern" not in out["areas"][AREA]

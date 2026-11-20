@@ -100,12 +100,13 @@ from feagi_mcp.io_value_conversion import (
 from feagi_mcp.memory_diagnostics import annotate_shared_edges
 from feagi_mcp.morphology_scaling import ScaleRowsError, plan_scaled_rows
 from feagi_mcp.motor_channel_explain import LINT_VOXEL_BUDGET, explain_channel, lint_areas
+from feagi_mcp.mujoco_scene_control import loopback_base_url
 from feagi_mcp.percentage_coding import UnitCoding
 from feagi_mcp.placement_policy import (
     check_min_separation_to_existing,
     check_origin_exclusion,
 )
-from feagi_mcp.region_circuit import summarize_region_circuit
+from feagi_mcp.region_circuit import region_io_blockers, summarize_region_circuit
 from feagi_mcp.registration_units import (
     ChannelRegistration,
     RegistrationError,
@@ -126,6 +127,7 @@ from feagi_mcp.runtime_diagnostics import (
     log_missing_reason,
     select_local_log_diagnosis,
 )
+from feagi_mcp.sensor_feed_health import gather_feed_stalled
 from feagi_mcp.spike_record import (
     FOREGROUND_BUDGET_S,
     expand_region_refs,
@@ -137,8 +139,10 @@ from feagi_mcp.stimulus_hold import (
     check_applied_potential,
     hold_summary,
     new_hold_state,
+    renew_hold,
     run_hold,
     validate_hold_args,
+    validate_label,
     validate_potential,
 )
 from feagi_mcp.synapse_counts import edge_synapse_counts
@@ -1352,6 +1356,8 @@ class FeagiClient:
         self._client = httpx.AsyncClient(timeout=timeout, headers=headers)
         self._fire_history_refs: dict[str, int] = {}
         self._holds: dict[str, dict[str, Any]] = {}
+        # label -> schedule ids (client-side bookkeeping of ids FEAGI returned)
+        self._schedule_labels: dict[str, list[int]] = {}
         self._recordings: dict[str, dict[str, Any]] = {}
 
     async def close(self) -> None:
@@ -2618,6 +2624,27 @@ class FeagiClient:
             logger.error(f"get_regions_members failed: {e}")
             return {"error": str(e)}
 
+    async def get_region_io_blockers(
+        self, area: str, region_id: str | None = None
+    ) -> dict[str, Any]:
+        """Mappings that block designating ``area`` as an input or output of its region."""
+        (area_id,), problem = await self._resolve_area_refs(area)
+        if problem:
+            return {"error": problem}
+        regions, cortical_map, names = await asyncio.gather(
+            self.get_regions_members(),
+            self.get_cortical_map_detailed(),
+            self.get_cortical_id_name_mapping(),
+        )
+        for label, payload in (
+            ("regions_members", regions),
+            ("cortical_map_detailed", cortical_map),
+            ("cortical_id_name_mapping", names),
+        ):
+            if "error" in payload:
+                return {"error": f"{label} failed", "detail": payload}
+        return region_io_blockers(regions, cortical_map, names, area_id, region_id)
+
     async def get_region_circuit(
         self,
         region_id: str,
@@ -2964,6 +2991,43 @@ class FeagiClient:
             logger.error(f"set_memory_area_learning_frozen failed: {e}")
             return {"error": str(e)}
 
+    async def get_mapping_learning_state(
+        self, src_area: str | None = None, dst_area: str | None = None
+    ) -> dict[str, Any]:
+        """Learning-freeze state: one mapping (``src_area`` and ``dst_area``) or all switches.
+
+        With no areas it reads ``GET /v1/connectome/learning_frozen`` and returns the frozen
+        memory areas and frozen mappings with names. With both areas it reads the mapping's
+        ``GET /v1/cortical_mapping/plasticity_frozen`` (``frozen`` is null when the mapping does
+        not exist).
+        """
+        if (src_area is None) != (dst_area is None):
+            return {"error": "give both src_area and dst_area, or neither"}
+        if src_area is not None and dst_area is not None:
+            (src, dst), problem = await self._resolve_area_refs(src_area, dst_area)
+            if problem:
+                return {"error": problem}
+            return await self.get_mapping_plasticity_frozen(src, dst)
+        state, names = await asyncio.gather(
+            self.get_learning_frozen(), self.get_cortical_id_name_mapping()
+        )
+        if "error" in state:
+            return state
+        if "error" in names:
+            names = {}
+
+        def label(cid: str) -> dict[str, str]:
+            return {"area_id": cid, "name": str(names.get(cid, ""))}
+
+        mappings = [m for m in state.get("mappings") or [] if isinstance(m, list) and len(m) == 2]
+        areas = [a for a in state.get("memory_areas") or [] if isinstance(a, str)]
+        return {
+            "frozen_memory_areas": [label(a) for a in areas],
+            "frozen_mappings": [{"src": label(s), "dst": label(d)} for s, d in mappings],
+            "frozen_memory_area_count": len(areas),
+            "frozen_mapping_count": len(mappings),
+        }
+
     async def get_learning_frozen(self) -> dict[str, Any]:
         """GET /v1/connectome/learning_frozen: ``{memory_areas: [id], mappings: [[src, dst]]}``."""
         try:
@@ -2990,6 +3054,40 @@ class FeagiClient:
             }
         except Exception as e:
             logger.error(f"reset_area_incoming_weights failed: {e}")
+            return {"error": str(e)}
+
+    async def move_io_area_groups(
+        self,
+        moves: list[dict[str, Any]],
+        requester_agent_id: str | None = None,
+    ) -> dict[str, Any]:
+        """POST /v1/cortical_area/move_groups — move IO areas to other group numbers."""
+        body: dict[str, Any] = {"moves": moves}
+        if requester_agent_id:
+            body["requester_agent_id"] = requester_agent_id
+        try:
+            response = await self._client.post(
+                f"{self.base_url}/v1/cortical_area/move_groups", json=body
+            )
+            if response.status_code == 200:
+                return _as_json_dict(response.json())
+            if response.status_code == 404:
+                return {
+                    "error": "HTTP 404",
+                    "message": "this FEAGI version does not support move_groups yet",
+                }
+            if response.status_code == 409:
+                return {
+                    "error": "HTTP 409",
+                    "message": (
+                        "conflict, nothing moved: a target group is occupied, or the area "
+                        "is fed by another connected agent and requester_agent_id does "
+                        f"not name it. {response.text}"
+                    ),
+                }
+            return {"error": f"HTTP {response.status_code}", "message": response.text}
+        except Exception as e:
+            logger.error(f"move_io_area_groups failed: {e}")
             return {"error": str(e)}
 
     async def clone_cortical_area_via_api(
@@ -3660,30 +3758,80 @@ class FeagiClient:
             potential=potential,
         )
 
-    async def get_embodiment_status(self) -> dict[str, Any]:
-        """Get status of connected embodiment controllers."""
+    async def _fetch_controller_status(
+        self, desc: IntrospectionEndpoint, timeout_s: float
+    ) -> dict[str, Any]:
+        """GET ``<control_url>/status`` for one discovered controller."""
+        entry: dict[str, Any] = {
+            "controller_id": desc.controller_id,
+            "controller_url": desc.control_url,
+        }
+        if not desc.control_url:
+            entry["error"] = "control_url_unavailable"
+            return entry
         try:
-            response = await self._client.get(f"{self.base_url}/v1/embodiment/status")
-            if response.status_code == 200:
-                return _as_json_dict(response.json())
+            base = loopback_base_url(desc.control_url)
+            async with httpx.AsyncClient(timeout=timeout_s) as client:
+                response = await client.get(f"{base}/status")
+            if response.status_code != 200:
+                entry["error"] = f"HTTP {response.status_code}"
+                return entry
+            entry["controller_status"] = _as_json_dict(response.json())
+        except Exception as e:
+            entry["error"] = str(e) or type(e).__name__
+        return entry
 
-            agents = await self.get_registered_agents()
-            io_areas = await self.list_io_areas_compact()
+    async def get_embodiment_status(
+        self,
+        controller_id: str | None = None,
+        timeout_s: float = 2.0,
+    ) -> dict[str, Any]:
+        """Report the running robot controller's own status (``GET /status``).
+
+        Controllers are found through the launcher-written descriptors (same
+        discovery as ``embodiment_discover_introspection_endpoint``); each
+        descriptor's ``control_url`` serves ``/status``.
+        """
+        try:
+            if controller_id and controller_id.strip():
+                one = discover_endpoint(controller_id.strip())
+                descriptors = [one] if one is not None else []
+            else:
+                descriptors = discover_all_endpoints()
+        except ValueError as exc:
+            return {"status": "error", "error": str(exc), "controller_id": controller_id}
+
+        entries = [await self._fetch_controller_status(d, timeout_s) for d in descriptors]
+        reachable = [e for e in entries if "controller_status" in e]
+        unreachable = [e for e in entries if "controller_status" not in e]
+
+        if len(reachable) == 1:
+            return {"status": "controller_status", **reachable[0], "unreachable": unreachable}
+        if len(reachable) > 1:
             return {
-                "status": "live_registry",
-                "embodiment_status_endpoint": "unavailable",
-                "http_status": response.status_code,
-                "registered_agents": agents,
-                "io_areas": io_areas,
-                "message": (
-                    "GET /v1/embodiment/status is not on this FEAGI. "
-                    "This payload is the live agent registry plus compact I/O "
-                    "catalog, not a genome dump."
-                ),
+                "status": "multiple_controllers",
+                "controllers": reachable,
+                "unreachable": unreachable,
+                "message": "Several controllers answered; pass controller_id to select one.",
+            }
+        result: dict[str, Any] = {
+            "status": "no_running_controller",
+            "message": (
+                "No running controller endpoint is reachable. Start the experiment from "
+                "Studio (descriptors appear when a controller launches)."
+            ),
+            "unreachable": unreachable,
+        }
+        try:
+            result["feagi_registry_secondary"] = {
+                "note": "FEAGI registry summary only; this is not the controller's status.",
+                "registered_agents": await self.get_registered_agents(),
+                "io_areas": await self.list_io_areas_compact(),
             }
         except Exception as e:
-            logger.error(f"get_embodiment_status failed: {e}")
-            return {"error": str(e)}
+            logger.error("get_embodiment_status registry summary failed: %s", e)
+            result["feagi_registry_secondary"] = {"error": str(e)}
+        return result
 
     async def get_burst_engine_status(self) -> dict[str, Any]:
         """Get burst engine runtime status."""
@@ -3801,8 +3949,11 @@ class FeagiClient:
         csv_path: str | None = None,
         max_runs: int = 20,
         background: bool = False,
+        modal_summary: bool = False,
     ) -> dict[str, Any]:
         """Burst-exact firing of ``areas`` (ids or names) for ``bursts`` bursts.
+
+        ``modal_summary`` adds each area's ``modal_pattern`` (see :mod:`spike_record`).
 
         See :mod:`feagi_mcp.spike_record`. Returns a compact summary; spikes go to
         ``csv_path`` when given. A foreground call is refused when the window would outlast
@@ -3817,9 +3968,17 @@ class FeagiClient:
             if problem:
                 return {"success": False, "error": problem}
             if background:
-                return self._start_spike_recording(ids, expanded, bursts, csv_path, max_runs)
+                return self._start_spike_recording(
+                    ids, expanded, bursts, csv_path, max_runs, modal_summary
+                )
             result = await record_spikes_window(
-                self, ids, bursts, csv_path, max_runs, budget_s=FOREGROUND_BUDGET_S
+                self,
+                ids,
+                bursts,
+                csv_path,
+                max_runs,
+                budget_s=FOREGROUND_BUDGET_S,
+                modal=modal_summary,
             )
             if expanded:
                 result["regions_expanded"] = expanded
@@ -3835,6 +3994,7 @@ class FeagiClient:
         bursts: int,
         csv_path: str | None,
         max_runs: int,
+        modal_summary: bool = False,
     ) -> dict[str, Any]:
         """Register a background recording and start its task."""
         state: dict[str, Any] = {
@@ -3850,7 +4010,13 @@ class FeagiClient:
         async def run() -> None:
             try:
                 result = await record_spikes_window(
-                    self, ids, bursts, csv_path, max_runs, cancel=state["_cancel"]
+                    self,
+                    ids,
+                    bursts,
+                    csv_path,
+                    max_runs,
+                    cancel=state["_cancel"],
+                    modal=modal_summary,
                 )
                 if expanded:
                     result["regions_expanded"] = expanded
@@ -3909,13 +4075,15 @@ class FeagiClient:
         background: bool = False,
         verify: bool = True,
         potential: float | None = None,
+        label: str | None = None,
     ) -> dict[str, Any]:
         """Hold ``voxels`` of ``area`` firing for ``duration_s`` (see :mod:`stimulus_hold`).
 
         ``potential`` (finite, > 0; None = server default) is the one potential for every post.
+        ``label`` groups holds so :meth:`cancel_stimulus` / :meth:`renew_stimulus` act on all.
         """
         try:
-            bad = validate_potential(potential)
+            bad = validate_potential(potential) or validate_label(label)
             if bad:
                 return {"success": False, "error": bad}
             norm = validate_hold_args(voxels, duration_s, start_delay_s, background)
@@ -3925,7 +4093,7 @@ class FeagiClient:
             (area_id,), problem = await self._resolve_area_refs(area)
             if problem:
                 return {"success": False, "error": problem}
-            state = new_hold_state(area_id, clean, duration)
+            state = new_hold_state(area_id, clean, duration, label)
             self._holds[state["hold_id"]] = state
             prune_finished(self._holds, MAX_FINISHED_RECORDS)
             run = run_hold(self, state, area_id, clean, duration, delay, verify, potential)
@@ -3944,7 +4112,12 @@ class FeagiClient:
         if hold_id is None:
             return {
                 "holds": [
-                    {"hold_id": h["hold_id"], "state": h["state"], "area_id": h["area_id"]}
+                    {
+                        "hold_id": h["hold_id"],
+                        "state": h["state"],
+                        "area_id": h["area_id"],
+                        **({"label": h["label"]} if "label" in h else {}),
+                    }
                     for h in self._holds.values()
                 ]
             }
@@ -3963,6 +4136,7 @@ class FeagiClient:
         entries: list[dict[str, Any]],
         repeat_period_bursts: int | None = None,
         potential: float | None = None,
+        label: str | None = None,
     ) -> dict[str, Any]:
         """Schedule force-fire stimulation at burst offsets.
 
@@ -3980,9 +4154,12 @@ class FeagiClient:
         ``potential`` (finite, > 0; None = server default) is sent as ``potential`` on every
         schedule entry (one value per entry, none per voxel). FEAGI reports it as
         ``applied_potential``; a missing or different value is an error (older FEAGI).
+
+        ``label`` (optional) is remembered with the returned ``schedule_id`` in this server so
+        :meth:`cancel_stimulus` can cancel every schedule of one label; FEAGI itself knows ids only.
         """
         try:
-            bad = validate_potential(potential)
+            bad = validate_potential(potential) or validate_label(label)
             if bad:
                 return {"success": False, "error": bad}
             if not isinstance(entries, list) or not entries:
@@ -4065,6 +4242,10 @@ class FeagiClient:
                 unapplied = check_applied_potential(potential, out)
                 if unapplied:
                     return {**out, "success": False, "error": unapplied}
+                sid = out.get("schedule_id")
+                if label is not None and isinstance(sid, int):
+                    self._schedule_labels.setdefault(label.strip(), []).append(sid)
+                    out["label"] = label.strip()
                 return out
             return {
                 "success": False,
@@ -4075,9 +4256,21 @@ class FeagiClient:
             logger.error(f"schedule_stimulus failed: {e}")
             return {"success": False, "error": str(e)}
 
-    async def cancel_stimulus(self, schedule_id: int) -> dict[str, Any]:
-        """Cancel a schedule's unfired entries (``DELETE .../stimulus_schedule/{id}``)."""
+    async def cancel_stimulus(
+        self, schedule_id: int | None = None, label: str | None = None
+    ) -> dict[str, Any]:
+        """Cancel one schedule by id, or every hold and schedule of one ``label``.
+
+        An id cancels the unfired entries (``DELETE .../stimulus_schedule/{id}``). A label
+        cancels the running ``hold_stimulus`` holds with that label and deletes each schedule
+        registered under it by ``schedule_stimulus``; schedules that already finished (HTTP
+        404) are reported as ``already_finished``. Give exactly one of the two.
+        """
         try:
+            if (schedule_id is None) == (label is None):
+                return {"success": False, "error": "give exactly one of schedule_id or label"}
+            if label is not None:
+                return await self._cancel_stimulus_label(label)
             if isinstance(schedule_id, bool) or not isinstance(schedule_id, int) or schedule_id < 0:
                 return {"success": False, "error": "schedule_id must be an int >= 0"}
             response = await self._client.delete(
@@ -4092,6 +4285,88 @@ class FeagiClient:
             }
         except Exception as e:
             logger.error(f"cancel_stimulus failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def _cancel_stimulus_label(self, label: str) -> dict[str, Any]:
+        """Cancel the active holds and the registered schedules of ``label``."""
+        bad = validate_label(label)
+        if bad:
+            return {"success": False, "error": bad}
+        key = label.strip()
+        holds = [h for h in self._holds.values() if h.get("label") == key]
+        cancelled_holds: list[str] = []
+        for h in holds:
+            if h["state"] in ACTIVE_STATES:
+                h["_cancel"].set()
+                task = h.get("_task")
+                if task is not None:
+                    await asyncio.wait_for(asyncio.shield(task), timeout=10.0)
+                cancelled_holds.append(h["hold_id"])
+        cancelled: list[int] = []
+        finished: list[int] = []
+        errors: list[dict[str, Any]] = []
+        for sid in self._schedule_labels.get(key, []):
+            response = await self._client.delete(
+                f"{self.base_url}/v1/simulation/stimulus_schedule/{sid}"
+            )
+            if response.status_code == 200:
+                cancelled.append(sid)
+            elif response.status_code == 404:
+                finished.append(sid)
+            else:
+                errors.append({"schedule_id": sid, "error": f"HTTP {response.status_code}"})
+        if not errors:
+            self._schedule_labels.pop(key, None)
+        if not holds and not cancelled and not finished and not errors:
+            return {
+                "success": False,
+                "error": f"no hold or schedule with label {key!r}",
+                "known_labels": sorted(
+                    {h["label"] for h in self._holds.values() if "label" in h}
+                    | set(self._schedule_labels)
+                ),
+            }
+        return {
+            "success": not errors,
+            "label": key,
+            "holds_cancelled": cancelled_holds,
+            "holds_not_active": [
+                h["hold_id"] for h in holds if h["hold_id"] not in cancelled_holds
+            ],
+            "schedules_cancelled": cancelled,
+            "schedules_already_finished": finished,
+            "schedule_errors": errors,
+        }
+
+    async def renew_stimulus(self, label: str, seconds: float) -> dict[str, Any]:
+        """Make every running or pending hold of ``label`` last ``seconds`` more from now."""
+        try:
+            bad = validate_label(label)
+            if bad or label is None:
+                return {"success": False, "error": bad or "label is required"}
+            key = label.strip()
+            holds = [h for h in self._holds.values() if h.get("label") == key]
+            if not holds:
+                return {"success": False, "error": f"no hold with label {key!r}"}
+            renewed: list[str] = []
+            skipped: list[dict[str, str]] = []
+            for h in holds:
+                err = renew_hold(h, seconds)
+                if err is None:
+                    renewed.append(h["hold_id"])
+                elif err.startswith("seconds"):
+                    return {"success": False, "error": err}
+                else:
+                    skipped.append({"hold_id": h["hold_id"], "reason": err})
+            return {
+                "success": bool(renewed),
+                "label": key,
+                "renewed": renewed,
+                "skipped": skipped,
+                "seconds": float(seconds),
+            }
+        except Exception as e:
+            logger.error(f"renew_stimulus failed: {e}")
             return {"success": False, "error": str(e)}
 
     async def get_stimulus_schedule(self) -> dict[str, Any]:
@@ -4762,7 +5037,9 @@ class FeagiClient:
             name: Human-readable area name (BV / genome label).
             subtype: 4-char ``cortical_subtype`` (e.g. ``icnt`` count input, ``ocnt`` count
                 output); the first char selects input (``i``) vs output (``o``).
-            channels: Number of channels (the area's x-width per device).
+            channels: TOTAL x-width of the area (FEAGI sizes it per-device width x
+                ``device_count``, so the per-device width sent is ``channels // device_count``;
+                ``channels`` must divide evenly).
             depth: Neuron depth / bins (the area's z-extent); must match the coder's bins.
                 Value-coded units (Depth Map ``idpt``, Object Segmentation ``iseg``/``oseg``)
                 are always 1: their payload is the potential, not a Z index.
@@ -4795,7 +5072,19 @@ class FeagiClient:
         cortical_type = "IPU" if encoded["io_kind"] == "sensory" else "OPU"
         if not isinstance(height, int) or isinstance(height, bool) or height < 1:
             return {"error": "invalid_height", "message": "height must be an int >= 1"}
-        per_device_dimensions = [int(channels), int(height), int(depth)]
+        if not isinstance(device_count, int) or isinstance(device_count, bool) or device_count < 1:
+            return {"error": "invalid_device_count", "message": "device_count must be an int >= 1"}
+        if int(channels) % device_count != 0:
+            return {
+                "error": "invalid_channels",
+                "message": (
+                    f"channels ({channels}) is the TOTAL area x-width and must divide evenly "
+                    f"by device_count ({device_count})"
+                ),
+            }
+        # FEAGI sizes the area as per_device_dimensions[0] * device_count, so the per-device
+        # width is the total width divided by the device count (channels stays the area width).
+        per_device_dimensions = [int(channels) // device_count, int(height), int(depth)]
         create_result = await self.create_cortical_area(
             name=name,
             cortical_type=cortical_type,
@@ -4816,7 +5105,12 @@ class FeagiClient:
             }
 
         assigned = create_result.get("cortical_id") if isinstance(create_result, dict) else None
+        name_result: dict[str, Any] | None = None
+        if isinstance(name, str) and name.strip() and isinstance(assigned, str) and assigned:
+            # The IPU/OPU create endpoint derives its own name from the id; apply ``name``.
+            name_result = await self.update_cortical_area(assigned, {"cortical_name": name.strip()})
         return {
+            "name_result": name_result,
             "computed_cortical_id": encoded["cortical_id"],
             "assigned_cortical_id": assigned,
             "verified": assigned == encoded["cortical_id"],
@@ -6900,8 +7194,17 @@ class FeagiClient:
             if isinstance(payload, dict) and "error" in payload:
                 errors[key] = payload
 
+        feed = (
+            await gather_feed_stalled(self, capabilities=caps_res)
+            if caps_ok
+            else {"feed_stalled": []}
+        )
+        if "error" in feed:
+            errors["feed_stalled"] = feed["error"]
+
         return {
             "timestamp_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
+            "feed_stalled": feed["feed_stalled"],
             "feagi_reachable": health_ok or agents_ok or caps_ok,
             "health_check_ok": health_ok,
             "agent_registry_ok": agents_ok,

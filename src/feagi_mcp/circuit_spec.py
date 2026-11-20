@@ -17,6 +17,7 @@ Spec::
                    "frozen"?: bool}],
      "delete": [{"src", "dst"}],
      "edit_areas": [{"name", "properties"}],
+     "ports": {"inputs": [area names], "outputs": [area names]}?,
      "templates": [{"template": "port|onset_pulse|ring_cpg|servo_channel_two_rest|"
                                 "phase_window_gate", "name": str, ...}]}
 
@@ -28,6 +29,14 @@ through ``PUT /v1/cortical_mapping/plasticity_frozen`` (a brain-instance switch,
 genome reload) and read back with the GET route; the
 rules keep their ``plasticity_flag`` and mode, and FEAGI keeps the synapses and weights. The
 mapping must hold a plastic rule, or FEAGI rejects the freeze and the run stops there.
+
+``ports`` declares the block's interface: the areas written to the region's
+``designated_inputs`` / ``designated_outputs`` (``PUT /v1/region/region``), the lists the Trainer
+and Brain Hub packaging read. A direction given in ``ports`` replaces the templates' default for
+it (``port``: the area is input and output; ``onset_pulse``: ``<name>_Onset`` output;
+``ring_cpg``: ring and readouts output, ``drive`` input when it is a spec area;
+``phase_window_gate``: gate output). A spec that ends with none declared gets the warning
+"block has no declared ports"; nothing is guessed.
 
 Names in ``src``/``dst`` are spec areas or live areas (resolved when run). Membrane model used
 for sizing (feagi-core ``neural_dynamics``): ``V <- V * (1 - leak) + I``, fire at ``V >= T``,
@@ -207,6 +216,7 @@ def normalize_rule(raw: Any) -> dict[str, Any]:
 
 
 PLASTICITY_MODES = ("off", "stdp", "rstdp")
+PLASTIC_REQUIRED_FIELDS = ("ltp_multiplier", "ltd_multiplier")
 MEMORY_MORPHOLOGIES = ("episodic_memory", "associative_memory")
 MEMORY_KEYS = frozenset(
     {
@@ -285,6 +295,15 @@ def validate_plasticity(rule_: dict[str, Any]) -> None:
         "eligibility_decay_bursts",
     )
     given = [k for k in plastic_fields if k in rule_]
+    if rule_.get("plasticity_flag"):
+        # The core registers every plastic rule (associative_memory included) from these
+        # fields and rejects the mapping when one is missing, rolling the build back.
+        missing = [k for k in PLASTIC_REQUIRED_FIELDS if k not in rule_]
+        if missing:
+            raise SpecError(
+                f"rule for '{m}': a plastic rule needs {missing} "
+                f"(the core rejects it without them); set all of {list(PLASTIC_REQUIRED_FIELDS)}"
+            )
     if given and not rule_.get("plasticity_flag"):
         raise SpecError(
             f"rule for '{m}': {given} need plasticity_mode stdp/rstdp (or plasticity_flag true)"
@@ -486,6 +505,9 @@ def auto_region_2d(regions: dict[str, Any], parent_region_id: str | None) -> lis
     return [xs[-1] + step, row_y]
 
 
+_DIRECTIONS = ("inputs", "outputs")
+
+
 class Plan:
     """Areas, morphologies and mappings collected while expanding a spec."""
 
@@ -498,8 +520,72 @@ class Plan:
         self.edits: list[dict[str, Any]] = []
         self.sizing: dict[str, Any] = {}
         self.warnings: list[str] = []
+        # template-default and explicitly declared region ports (area names)
+        self.default_ports: dict[str, list[str]] = {"inputs": [], "outputs": []}
+        self.explicit_ports: dict[str, list[str]] = {}
+        # ``port`` template areas: input by default, output when the block projects out of them
+        self.flex_ports: set[str] = set()
         # registered unit coding per existing OPU area name (see ``servo_channel_two_rest``)
         self.coders: dict[str, UnitCoding] = {}
+
+    def default_port(self, direction: str, name: str) -> None:
+        """Record a template's natural port (an area of this plan)."""
+        if name not in self.default_ports[direction]:
+            self.default_ports[direction].append(name)
+
+    @property
+    def ports(self) -> dict[str, list[str]]:
+        """Final ports: an explicit direction replaces the template defaults."""
+        own = {a["name"] for a in self.areas}
+        defaults = {d: [n for n in self.default_ports[d] if n in own] for d in _DIRECTIONS}
+        sends_out = {
+            n for n in self.flex_ports if any(s == n and t not in own for s, t in self.mappings)
+        }
+        defaults["inputs"] = [n for n in defaults["inputs"] if n not in sends_out]
+        defaults["outputs"] += [n for n in sorted(sends_out) if n in own]
+        return {
+            d: list(self.explicit_ports[d]) if d in self.explicit_ports else defaults[d]
+            for d in _DIRECTIONS
+        }
+
+    def port_direction_errors(self) -> list[str]:
+        """Planned mappings that FEAGI would refuse for the declared ports (it answers 409).
+
+        Mirrors feagi-core ``region_io_designation.rs``: an output cannot have an incoming
+        mapping from outside the region, an input cannot have an outgoing mapping to outside
+        it, and an area cannot be both. A mapping endpoint that is not a block area counts as
+        outside the region.
+        """
+        own = {a["name"] for a in self.areas}
+        ports = self.ports
+        # Template defaults other than ``port`` may be fed by same-region areas the spec does
+        # not create, so only ``port`` areas and explicitly declared ports are checked.
+        explicit = {n for d in self.explicit_ports.values() for n in d} | self.flex_ports
+        ports = {d: [n for n in ports[d] if n in explicit] for d in _DIRECTIONS}
+        errs = [
+            f"port '{n}' is declared as both input and output; an area crossing the region "
+            "boundary both ways can be neither: use a relay area so one area is the input "
+            "and another the output"
+            for n in ports["inputs"]
+            if n in ports["outputs"]
+        ]
+        for n in ports["outputs"]:
+            for src, dst in self.mappings:
+                if dst == n and src not in own:
+                    errs.append(
+                        f"area '{n}' cannot be a region output: mapping {src} -> {dst} enters "
+                        "it from outside the block (FEAGI refuses with 409); add a relay area "
+                        "inside the block as the input and keep this one as the output"
+                    )
+        for n in ports["inputs"]:
+            for src, dst in self.mappings:
+                if src == n and dst not in own:
+                    errs.append(
+                        f"area '{n}' cannot be a region input: mapping {src} -> {dst} leaves "
+                        "it to outside the block (FEAGI refuses with 409); add a relay area "
+                        "inside the block as the output and keep this one as the input"
+                    )
+        return errs
 
     def add_area(
         self,
@@ -569,14 +655,23 @@ class Plan:
 
 
 def _tpl_port(t: dict[str, Any], plan: Plan) -> None:
-    """A ``[1,1,N]`` leaky integrator with an optional self-hold mapping."""
+    """A ``[1,1,N]`` leaky integrator with an optional self-hold mapping.
+
+    The area sets ``neuron_psp_uniform_distribution: true``. Without it the area splits its PSP
+    across its outgoing synapses, so a source does not drive a threshold-1 target at weight 1
+    and PSP 1 (observed live). All templates that make relay areas set it for the same reason.
+    """
     name = _name(t)
     bins = _inum(t, "bins", minimum=1)
     threshold = _fnum(t, "threshold", positive=True)
     psp = _fnum(t, "psp", positive=True)
     leak = _fnum(t, "leak", 0.0, minimum=0.0)
     refractory = _inum(t, "refractory", 0)
-    plan.add_area(name, [1, 1, bins], neuron_props(threshold, psp, leak, refractory))
+    plan.add_area(
+        name,
+        [1, 1, bins],
+        neuron_props(threshold, psp, leak, refractory, psp_uniform=True),
+    )
     sizing: dict[str, Any] = {"threshold": threshold, "psp": psp}
     if t.get("self_hold", True):
         inp = _fnum(t, "input", positive=True)
@@ -606,11 +701,20 @@ def _tpl_port(t: dict[str, Any], plan: Plan) -> None:
                     "hold_psc": _clean(psc),
                 }
             )
+    # Direction-correct default: FEAGI refuses an input with outgoing cross-region mappings and
+    # an output with incoming ones, so a port is an input unless the block sends out of it.
+    plan.flex_ports.add(name)
+    plan.default_port("inputs", name)
     plan.sizing[name] = {"template": "port", **sizing}
 
 
 def _tpl_onset_pulse(t: dict[str, Any], plan: Plan) -> None:
-    """gate -> Onset; a one-burst Delay copy of the gate inhibits Onset from the next burst."""
+    """gate -> Onset; a one-burst Delay copy of the gate inhibits Onset from the next burst.
+
+    Both areas set ``neuron_psp_uniform_distribution: true``: without it the PSP is split across
+    outgoing synapses and the gate does not drive a threshold-1 Onset at weight 1 and PSP 1
+    (observed live).
+    """
     name = _name(t)
     gate = _ref(t, "gate")
     assert gate is not None
@@ -631,12 +735,13 @@ def _tpl_onset_pulse(t: dict[str, Any], plan: Plan) -> None:
             f"{gate_psp * exc:g}; Onset would keep firing"
         )
     onset, delay = f"{name}_Onset", f"{name}_Delay"
-    props = neuron_props(threshold, psp, accumulate=False)
+    props = neuron_props(threshold, psp, accumulate=False, psp_uniform=True)
     plan.add_area(onset, [1, 1, 1], props)
     plan.add_area(delay, [1, 1, 1], props)
     plan.add_rules(gate, onset, [rule("all_to_0-0-0", exc)])
     plan.add_rules(gate, delay, [rule("all_to_0-0-0", exc)])
     plan.add_rules(delay, onset, [rule("block_to_block", -inh)])
+    plan.default_port("outputs", onset)
     plan.sizing[name] = {
         "template": "onset_pulse",
         "gate_input": gate_psp * exc,
@@ -774,13 +879,19 @@ def _tpl_ring_cpg(t: dict[str, Any], plan: Plan) -> None:
             raise SpecError(f"ring_cpg '{name}': readout shift {shift} must be < bins {bins}")
         ro_thr = _fnum(ro, "threshold", 1.0, positive=True)
         ro_psc = _fnum(ro, "psc", float(math.ceil(ro_thr / psp - EPS)), positive=True)
-        plan.add_area(ro_name, [1, 1, bins], neuron_props(ro_thr, 1.0, accumulate=False))
+        plan.add_area(
+            ro_name, [1, 1, bins], neuron_props(ro_thr, 1.0, accumulate=False, psp_uniform=True)
+        )
         if shift == 0:
             plan.add_rules(name, ro_name, [rule("block_to_block", ro_psc)])
         else:
             morph = f"{name}_readout_{ro_name}_shift{shift}"
             plan.add_patterns(morph, _shift_rows(bins, shift))
             plan.add_rules(name, ro_name, [rule(morph, ro_psc)])
+    plan.default_port("outputs", name)
+    for ro in t.get("readouts") or []:
+        plan.default_port("outputs", str(ro["name"]).strip())
+    plan.default_port("inputs", drive)
     plan.sizing[name] = sizing
 
 
@@ -1121,7 +1232,11 @@ def _tpl_phase_window_gate(t: dict[str, Any], plan: Plan) -> None:
         )
     if problems:
         raise SpecError(f"phase_window_gate '{name}': " + "; ".join(problems))
-    plan.add_area(name, [1, 1, 1], neuron_props(threshold, gate_psp, leak, refractory, accumulate))
+    plan.add_area(
+        name,
+        [1, 1, 1],
+        neuron_props(threshold, gate_psp, leak, refractory, accumulate, psp_uniform=True),
+    )
     plan.add_rules(pulse, name, [rule("all_to_0-0-0", pulse_psc)])
     if enable is not None:
         plan.add_rules(enable, name, [rule("all_to_0-0-0", enable_psc)])
@@ -1135,6 +1250,7 @@ def _tpl_phase_window_gate(t: dict[str, Any], plan: Plan) -> None:
     plan.add_rules(
         name, target, [rule(str(t.get("target_morphology", "0-0-0_to_all")), target_psc)]
     )
+    plan.default_port("outputs", name)
     plan.sizing[name] = {
         "template": "phase_window_gate",
         "threshold": threshold,
@@ -1159,6 +1275,17 @@ TEMPLATES: dict[str, Callable[[dict[str, Any], Plan], None]] = {
 
 
 # ------------------------------------------------------------------ expansion
+
+
+def _read_ports(plan: Plan, ports: Any) -> None:
+    if ports is None:
+        return
+    if not isinstance(ports, dict) or set(ports) - set(_DIRECTIONS):
+        raise SpecError('\'ports\' must be {"inputs": [area names], "outputs": [area names]}')
+    for direction, names in ports.items():
+        if not (isinstance(names, list) and all(isinstance(n, str) and n.strip() for n in names)):
+            raise SpecError(f"ports.{direction} must be a list of area names")
+        plan.explicit_ports[direction] = list(dict.fromkeys(n.strip() for n in names))
 
 
 def _expand_region(spec: dict[str, Any]) -> dict[str, Any] | None:
@@ -1275,6 +1402,17 @@ def calls_for(plan: Plan) -> list[dict[str, Any]]:
                     "args": {"src_area": mp["src"], "dst_area": mp["dst"], "frozen": True},
                 }
             )
+    ports = {d: names for d, names in plan.ports.items() if names}
+    if ports:
+        calls.append(
+            {
+                "call": "update_brain_region",
+                "args": {
+                    "region_id": region_ref,
+                    "properties": {f"designated_{d}": names for d, names in ports.items()},
+                },
+            }
+        )
     for i, c in enumerate(calls, start=1):
         c["n"] = i
     return calls
@@ -1316,6 +1454,7 @@ def expand_spec(
             "templates",
             "delete",
             "edit_areas",
+            "ports",
         }
     )
     if unknown:
@@ -1401,7 +1540,9 @@ def expand_spec(
             raise SpecError(
                 "edit_areas needs 'region': {region_id} of the region holding the areas"
             )
+        _read_ports(plan, spec.get("ports"))
         check_memory_wiring(plan)
+        errors.extend(plan.port_direction_errors())
         _place(plan, spec)
     except (SpecError, AttributeError, TypeError) as e:
         errors.append(str(e))
@@ -1414,6 +1555,15 @@ def expand_spec(
         plan.warnings.append(
             "no 'region': areas need a parent region; the real run requires 'region'"
         )
+    ports = plan.ports
+    if plan.areas and not (ports["inputs"] or ports["outputs"]):
+        plan.warnings.append(
+            "block has no declared ports: the region's designated inputs and outputs stay "
+            "empty, so the Trainer and Brain Hub packaging cannot find it; add "
+            "'ports': {'inputs': [...], 'outputs': [...]} (area names) or use a template"
+        )
+    touched.update(n for names in ports.values() for n in names)
+    external = sorted(touched - own)
     report = {
         "valid": not errors,
         "errors": errors,
@@ -1425,6 +1575,7 @@ def expand_spec(
             "deletions": len(plan.deletions),
             "edits": len(plan.edits),
         },
+        "ports": ports,
         "sizing": plan.sizing,
         "external": external,
         "calls": calls_for(plan) if not errors else [],
@@ -1538,6 +1689,7 @@ async def _run_plan(client: Any, plan: Plan, created: dict[str, Any]) -> dict[st
     ids: dict[str, str] = {}
     needed = [n for pair in [*plan.mappings, *plan.deletions] for n in pair]
     needed += [e["name"] for e in plan.edits]
+    needed += [n for names in plan.ports.values() for n in names]
     for n in needed:
         if n in own or n in ids:
             continue
@@ -1706,8 +1858,47 @@ async def _run_plan(client: Any, plan: Plan, created: dict[str, Any]) -> dict[st
                 return {"created": created, "failed": {"step": frozen_step, "detail": read}}
             created["frozen_mappings"].append({"src": mp["src"], "dst": mp["dst"]})
         created["mappings"].append({"src": mp["src"], "dst": mp["dst"], "rules": len(mp["rules"])})
+    failed = await _declare_ports(client, plan, ids, region_id, created)
+    if failed:
+        return {"created": created, "failed": failed}
     verification = await _verify(client, plan, ids, edge_synapse_counts)
     return {"created": created, "failed": None, "verification": verification}
+
+
+async def _declare_ports(
+    client: Any, plan: Plan, ids: dict[str, str], region_id: str | None, created: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Write the plan's ports to the region's designated lists and read them back.
+
+    Uses ``PUT /v1/region/region`` (``designated_inputs`` / ``designated_outputs``, lists of
+    cortical ids). Entries already designated on the region are kept. Returns a ``failed``
+    entry, or None when nothing was declared or the read-back matches.
+    """
+    wanted = {d: [ids[n] for n in names] for d, names in plan.ports.items() if names}
+    if not wanted or not region_id:
+        return None
+    regions = await client.get_regions_members()
+    entry = regions.get(region_id) if isinstance(regions, dict) else None
+    entry = entry if isinstance(entry, dict) else {}
+    props: dict[str, list[str]] = {}
+    for d, cids in wanted.items():
+        key = f"designated_{d}"
+        existing = [c for c in entry.get(key) or [] if isinstance(c, str)]
+        props[key] = list(dict.fromkeys([*existing, *cids]))
+    res = await client.update_brain_region(region_id, props)
+    if _is_error(res):
+        return {"step": "declare ports (update_brain_region)", "detail": res}
+    after = await client.get_regions_members()
+    entry = after.get(region_id) if isinstance(after, dict) else None
+    entry = entry if isinstance(entry, dict) else {}
+    missing = {
+        key: [c for c in cids if c not in (entry.get(key) or [])] for key, cids in props.items()
+    }
+    missing = {k: v for k, v in missing.items() if v}
+    if missing:
+        return {"step": "verify declared ports", "error": "not stored", "missing": missing}
+    created["ports"] = {d: list(names) for d, names in plan.ports.items()}
+    return None
 
 
 def _expected_rows(morphology: dict[str, Any]) -> int:

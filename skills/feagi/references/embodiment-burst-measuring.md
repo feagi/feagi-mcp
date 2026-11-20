@@ -27,19 +27,24 @@ robot.
   the brain grows. Burst-counted settings keep their meaning, because every timing is in
   bursts. A low default is never a reason to run slowly, and neither is a body rule carried
   over from robot work.
+- **Brain and body run on independent clocks.** The body (simulator or hardware) advances
+  on its own wall clock and sends sensory frames at its own rate. FEAGI sends a motor frame
+  only when output neurons fire, plus one trailing empty frame when output stops; the body
+  applies a frame when it arrives and holds the last command otherwise. Each burst FEAGI uses
+  the newest sensory frame per source. Nothing waits for the other side, so measure all
+  timing on the wall clock (design intent; check `get_runtime_metrics` and the controller's
+  timing stats for the achieved rates).
 - **Count loop latency in bursts.** Synaptic hops from sensor IPU to motor OPU
   (`trace_signal_path()`), plus about one burst each way for transport. Latency in seconds
-  is bursts / burst_hz, or bursts x sim time per burst in lock-step.
+  is bursts / burst_hz.
 - **Rule of thumb: loop latency at most tau/4 for stabilizing feedback.** So
-  `burst_hz >= 4*(hops + 2)/tau`, or sim time per burst `<= tau/(4*(hops + 2))`. Example
-  (one small biped, a worked example to derive your own from): 3 hops + 2 transport, tau about 0.1 s needs at least 200 Hz in real
-  time, or at most 5 ms of sim time per burst in lock-step. The same biped at 10 Hz: latency
+  `burst_hz >= 4*(hops + 2)/tau`. Example
+  (one small biped, a worked example to derive your own from): 3 hops + 2 transport, tau about 0.1 s needs at least 200 Hz. The same biped at 10 Hz: latency
   0.30 s equaled the median fall time, so no circuit could balance it.
 - **Ceilings.** The burst must finish inside its period (`get_runtime_metrics(measure_s=5)`: `burst_timing.measured` gives the achieved rate and shortfall; burst duration and missed bursts are not reported by FEAGI, `burst_timing.gap` names the endpoints); the
   controller and sensors must keep up (no gain above the sensor sample rate); servo slew
   limits. When the required rate exceeds the ceiling, shorten the sensor-to-motor path (a
-  direct reflex path) or run the simulator in lock-step (sim time advances a fixed step per
-  burst). Never slow the robot's physics as a stand-in.
+  direct reflex path). Never slow the robot's physics as a stand-in.
 - **Also check the sensor frame rate (frames per burst) and the motor step size** against the chosen rate: a burst faster than the frame rate repeats stale frames, and the per-burst motor step must stay inside servo slew.
 - **Burst-counted settings change meaning in seconds when the rate changes:** R-STDP
   windows, modulator holds, memory `temporal_depth`, refractory and leak timing, Trainer

@@ -130,3 +130,76 @@ def summarize_region_circuit(
         "edges": {"internal": internal, "incoming": incoming, "outgoing": outgoing},
         "isolated_area_ids": [c for c in member_ids if c not in touched],
     }
+
+
+def direct_region_of(regions: dict[str, Any], area_id: str) -> str | None:
+    """Id of the region whose own ``areas`` list holds ``area_id`` (child regions not searched).
+
+    feagi-core's region IO rule uses this direct containment (``find_region_containing_area``),
+    not the nested subtree.
+    """
+    for rid, entry in regions.items():
+        if isinstance(entry, dict) and area_id in _string_list(entry, "areas"):
+            return rid
+    return None
+
+
+def region_io_blockers(
+    regions: dict[str, Any],
+    cortical_map: dict[str, Any],
+    names: dict[str, Any],
+    area_id: str,
+    region_id: str | None = None,
+) -> dict[str, Any]:
+    """Which mappings block designating ``area_id`` as an input or an output of its region.
+
+    Mirrors feagi-core ``region_io_designation.rs`` (read-only): an area cannot be designated
+    a region *input* while it has an outgoing mapping to an area in another region (or in no
+    region), and cannot be designated an *output* while it has an incoming mapping from an
+    area in another region (or in no region). "Its region" is the region whose own ``areas``
+    list holds the area. When ``region_id`` is given it must be that region.
+    """
+    region = direct_region_of(regions, area_id)
+    if region is None:
+        return {"error": "area_not_in_a_region", "area_id": area_id}
+    if region_id is not None and region_id.strip() != region:
+        return {
+            "error": "area_not_in_region",
+            "area_id": area_id,
+            "region_id": region_id.strip(),
+            "area_region_id": region,
+        }
+
+    def row(other: str) -> dict[str, Any]:
+        other_region = direct_region_of(regions, other)
+        return {
+            "area_id": other,
+            "name": names.get(other, ""),
+            "region_id": other_region,
+            "region_title": (regions.get(other_region) or {}).get("title", "")
+            if other_region
+            else None,
+        }
+
+    outgoing: list[dict[str, Any]] = []
+    incoming: list[dict[str, Any]] = []
+    for src, dst in mapping_edges(cortical_map):
+        if src == area_id and direct_region_of(regions, dst) != region:
+            outgoing.append(row(dst))
+        if dst == area_id and direct_region_of(regions, src) != region:
+            incoming.append(row(src))
+    entry = regions[region]
+    return {
+        "area_id": area_id,
+        "name": names.get(area_id, ""),
+        "region_id": region,
+        "region_title": entry.get("title", ""),
+        "designated_input": area_id in _string_list(entry, "designated_inputs"),
+        "designated_output": area_id in _string_list(entry, "designated_outputs"),
+        "can_be_input": not outgoing,
+        "can_be_output": not incoming,
+        "blocks_input": {"outgoing_to_outside": outgoing},
+        "blocks_output": {"incoming_from_outside": incoming},
+        "rule": "input is blocked by a mapping to another region; output is blocked by a "
+        "mapping from another region (feagi-core region_io_designation.rs)",
+    }

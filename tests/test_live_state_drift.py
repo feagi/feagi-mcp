@@ -159,6 +159,7 @@ async def test_gather_live_state_drift_uses_client_and_reports_fetch_errors() ->
     }
     client.get_sensor_snapshot_last.return_value = {"error": "HTTP 500"}
     client.get_stimulus_schedule.return_value = {"schedules": []}
+    client.list_agent_capabilities_all.return_value = {}
     result = await gather_live_state_drift(client, controller_id="mujoco")
     checks = sorted(f["check"] for f in result["findings"])
     assert checks == ["agent_registration", "burst_frequency", "cortical_dimensions"]

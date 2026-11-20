@@ -16,6 +16,7 @@ import asyncio
 from typing import Any
 
 from feagi_mcp.introspection_discovery import match_descriptor_to_registered_agents
+from feagi_mcp.sensor_feed_health import gather_feed_stalled
 
 BURST_RATE_TOLERANCE = 0.01  # relative
 
@@ -327,6 +328,15 @@ async def gather_live_state_drift(client: Any, controller_id: str = "mujoco") ->
         registered_agents=[a for a in (agent_records or []) if isinstance(a, dict)],
         stimulus_schedules=schedules if isinstance(schedules, dict) else None,
     )
+    feed = await gather_feed_stalled(
+        client,
+        live_areas=live_areas,
+        first_snapshot=snapshot if isinstance(snapshot, dict) else None,
+    )
+    if "error" in feed:
+        errors["feed_stalled"] = feed["error"]
+    result["findings"].extend(feed["feed_stalled"])
+    result["finding_count"] = len(result["findings"])
     if errors:
         result["fetch_errors"] = errors
     return result

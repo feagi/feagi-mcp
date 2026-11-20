@@ -333,6 +333,7 @@ class FakeBrain:
         self.log: list[tuple[str, Any]] = []
         self.sent: dict[str, Any] = {}
         self.store_empty = False
+        self.designated: dict[str, Any] = {}
 
     async def get_cortical_id_name_mapping(self) -> dict[str, str]:
         return dict(self.live)
@@ -346,6 +347,7 @@ class FakeBrain:
     async def update_brain_region(self, region_id: str, props: dict[str, Any]) -> dict[str, Any]:
         self.log.append(("region_update", props))
         self.region_moves_to = None
+        self.designated.update({k: v for k, v in props.items() if k.startswith("designated_")})
         return {"message": "Brain region updated", "region_id": region_id}
 
     async def delete_cortical_area(self, cid: str) -> dict[str, Any]:
@@ -358,7 +360,12 @@ class FakeBrain:
         return {"message": "deleted"}
 
     async def get_regions_members(self) -> dict[str, Any]:
-        return {"region-1": {"coordinate_2d": self.log[-1][1]["coordinate_2d"]}}
+        return {
+            "region-1": {
+                "coordinate_2d": self.region_args.get("coordinates_2d"),
+                **self.designated,
+            }
+        }
 
     async def create_cortical_area(self, **kw: Any) -> dict[str, Any]:
         self.log.append(("area", kw["name"]))
@@ -420,7 +427,9 @@ async def test_execute_plan_creates_in_order_and_verifies() -> None:
     assert out["created"]["region_id"] == "region-1"
     assert out["created"]["areas"] == {"S_Onset": "id_S_Onset", "S_Delay": "id_S_Delay"}
     order = [k for k, _ in brain.log]
-    assert order == ["region", "area", "area", "mapping", "mapping", "mapping"]
+    assert order == ["region", "area", "area", "mapping", "mapping", "mapping", "region_update"]
+    assert brain.designated == {"designated_outputs": ["id_S_Onset"]}
+    assert out["created"]["ports"] == {"inputs": [], "outputs": ["S_Onset"]}
     ver = out["verification"]
     assert ver["areas"] == {"expected": 2, "found": 2}
     rows = {(r["src"], r["dst"]): r for r in ver["mappings"]}
@@ -624,7 +633,7 @@ async def test_execute_plan_does_not_touch_a_region_placed_as_asked() -> None:
     brain = FakeBrain(existing={"id_Gate": "Gate"})
     out = await execute_plan(brain, plan)
     assert out["created"]["region_coordinates_2d"] == {"requested": [0, 0], "actual": [0, 0]}
-    assert not any(k == "region_update" for k, _ in brain.log)
+    assert not any(k == "region_update" and "coordinate_2d" in v for k, v in brain.log)
 
 
 SCHEMA = [
@@ -1383,3 +1392,152 @@ async def test_execute_plan_accepts_a_fully_stored_pattern_list() -> None:
     brain = FakeBrain()
     _, plan = expand_spec(_patterns_spec([[[1, 0, 0], ["*", "*", "*"]]]))
     assert (await execute_plan(brain, plan))["failed"] is None
+
+
+# ---- declared ports
+def test_spec_ports_reach_the_region_update_call() -> None:
+    spec = {
+        "region": REGION,
+        "areas": [
+            {"name": "In", "dimensions": [1, 1, 2], "position": [0, 0, 0]},
+            {"name": "Out", "dimensions": [1, 1, 2], "position": [1, 0, 0]},
+        ],
+        "ports": {"inputs": ["In"], "outputs": ["Out"]},
+    }
+    report, plan = expand_spec(spec)
+    assert report["errors"] == [] and report["ports"] == {"inputs": ["In"], "outputs": ["Out"]}
+    assert not any("no declared ports" in w for w in report["warnings"])
+    call = report["calls"][-1]
+    assert call["call"] == "update_brain_region"
+    assert call["args"]["properties"] == {
+        "designated_inputs": ["In"],
+        "designated_outputs": ["Out"],
+    }
+
+
+async def test_execute_plan_sends_ids_keeps_existing_and_reads_back() -> None:
+    spec = {
+        "region": REGION,
+        "areas": [{"name": "In", "dimensions": [1, 1, 2], "position": [0, 0, 0]}],
+        "ports": {"inputs": ["In"]},
+    }
+    _, plan = expand_spec(spec)
+    brain = FakeBrain()
+    brain.designated = {"designated_inputs": ["old"]}
+    out = await execute_plan(brain, plan)
+    assert out["failed"] is None
+    assert brain.designated == {"designated_inputs": ["old", "id_In"]}
+    assert out["created"]["ports"] == {"inputs": ["In"], "outputs": []}
+
+
+def test_template_default_ports() -> None:
+    report, _ = expand_spec(
+        {
+            "region": REGION,
+            "templates": [
+                {
+                    "template": "port",
+                    "name": "P",
+                    "bins": 3,
+                    "threshold": 2.5,
+                    "psp": 3,
+                    "input": 1,
+                },
+                {
+                    "template": "ring_cpg",
+                    "name": "Ring",
+                    "bins": 4,
+                    "threshold": 6,
+                    "psp": 1,
+                    "drive": "P",
+                    "drive_d": 0.05,
+                    "lateral_psc": 0.5,
+                    "readouts": [{"name": "Phase", "shift": 0}],
+                },
+            ],
+        }
+    )
+    assert report["errors"] == []
+    assert report["ports"] == {"inputs": ["P"], "outputs": ["Ring", "Phase"]}
+
+
+def test_explicit_direction_replaces_template_default() -> None:
+    report, _ = expand_spec(
+        {
+            "region": REGION,
+            "templates": [{"template": "onset_pulse", "name": "S", "gate": "Gate"}],
+            "ports": {"outputs": ["S_Delay"]},
+        }
+    )
+    assert report["ports"] == {"inputs": [], "outputs": ["S_Delay"]}
+
+
+def test_no_ports_warns_and_makes_no_region_update() -> None:
+    report, _ = expand_spec(
+        {"region": REGION, "areas": [{"name": "A", "dimensions": [1, 1, 1], "position": [0, 0, 0]}]}
+    )
+    assert any("block has no declared ports" in w for w in report["warnings"])
+    assert all(c["call"] != "update_brain_region" for c in report["calls"])
+
+
+def test_bad_ports_shape_is_an_error() -> None:
+    report, _ = expand_spec({"region": REGION, "ports": {"sideways": ["A"]}})
+    assert report["errors"]
+
+
+_PORT = {"template": "port", "name": "P", "bins": 3, "threshold": 2.5, "psp": 3, "input": 1}
+
+
+def test_port_default_is_input_only() -> None:
+    report, _ = expand_spec({"region": REGION, "templates": [_PORT]})
+    assert report["errors"] == []
+    assert report["ports"] == {"inputs": ["P"], "outputs": []}
+
+
+def test_port_that_sends_out_defaults_to_output() -> None:
+    report, _ = expand_spec(
+        {
+            "region": REGION,
+            "templates": [_PORT],
+            "mappings": [
+                {"src": "P", "dst": "Ext", "rules": [{"morphology": "block_to_block", "psc": 1}]}
+            ],
+        }
+    )
+    assert report["errors"] == []
+    assert report["ports"] == {"inputs": [], "outputs": ["P"]}
+
+
+def test_output_with_incoming_outside_mapping_is_an_error() -> None:
+    report, _ = expand_spec(
+        {
+            "region": REGION,
+            "templates": [_PORT],
+            "mappings": [
+                {"src": "Ext", "dst": "P", "rules": [{"morphology": "block_to_block", "psc": 1}]}
+            ],
+            "ports": {"outputs": ["P"]},
+        }
+    )
+    assert any("'P' cannot be a region output" in e and "Ext -> P" in e for e in report["errors"])
+
+
+def test_input_with_outgoing_outside_mapping_is_an_error() -> None:
+    report, _ = expand_spec(
+        {
+            "region": REGION,
+            "templates": [_PORT],
+            "mappings": [
+                {"src": "P", "dst": "Ext", "rules": [{"morphology": "block_to_block", "psc": 1}]}
+            ],
+            "ports": {"inputs": ["P"]},
+        }
+    )
+    assert any("'P' cannot be a region input" in e and "P -> Ext" in e for e in report["errors"])
+
+
+def test_both_directions_on_one_area_is_an_error() -> None:
+    report, _ = expand_spec(
+        {"region": REGION, "templates": [_PORT], "ports": {"inputs": ["P"], "outputs": ["P"]}}
+    )
+    assert any("both input and output" in e for e in report["errors"])

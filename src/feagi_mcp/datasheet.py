@@ -14,8 +14,9 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 from feagi_mcp.cortical_id_decode import decode_cortical_id_interpretation
 
@@ -45,6 +46,28 @@ POSITIONING_ENUM = VOCABULARY["positioning"]
 PORT_DIR_ENUM = ("in", "out")
 MAX_FITS = 8
 
+#: Body vocabulary (``nrs.body_roles/1``). Single home: ``nrs-embodiments/schemas/body-roles.json``;
+#: this is a vendored, byte-equal copy (a copy test in nrs-embodiments checks it).
+BODY_ROLES_PATH = Path(__file__).with_name("body-roles.json")
+_BODY_ROLES: dict[str, Any] = json.loads(BODY_ROLES_PATH.read_text(encoding="utf-8"))
+BODY_FORMAT = "nrs.body/1"
+BODY_FAMILIES = tuple(f["id"] for f in _BODY_ROLES["families"])
+BODY_ROLES_MAJOR = int(_BODY_ROLES["roles_version"].split(".")[0])
+#: Joint key -> families that drive it: every role id (``arm.elbow_bend``) and every sided channel
+#: key (``arm_right.elbow_bend``).
+BODY_JOINT_FAMILIES: dict[str, frozenset[str]] = {}
+for _role in _BODY_ROLES["roles"]:
+    _motion = _role["id"].split(".", 1)[1]
+    BODY_JOINT_FAMILIES[_role["id"]] = frozenset(_role["families"])
+    for _seg in _BODY_ROLES["segments"]:
+        if _seg["limb"] == _role["limb"]:
+            BODY_JOINT_FAMILIES[f"{_seg['id']}.{_motion}"] = frozenset(_role["families"])
+BODY_GRIPPER_ENUM = ("none", "optional", "required")
+MAX_BODY_JOINTS = 64
+MAX_BODY_USE_CASES = 8
+MAX_BODY_SEEDS = 64
+_VERSION_RE = re.compile(r"^(\d+)\.(\d+)$")
+
 #: Top-level keys the author may send. Anything else is rejected unless generated.
 AUTHOR_TOP_KEYS = frozenset(
     {
@@ -58,6 +81,7 @@ AUTHOR_TOP_KEYS = frozenset(
         "acceptance",
         "mistakes",
         "notes",
+        "body",
     }
 )
 #: Top-level keys Composer computes; accepted and ignored (never an error).
@@ -107,7 +131,8 @@ _ACCEPTANCE_KEYS = frozenset({"tool", "expect", "result", "conditions"})
 _NOTE_KEYS = frozenset({"body", "text"})
 
 
-def _is_int(value: Any) -> bool:
+def _is_int(value: Any) -> TypeGuard[int]:
+    """True for an int that is not a bool, so callers can compare and store the value."""
     return isinstance(value, int) and not isinstance(value, bool)
 
 
@@ -250,7 +275,97 @@ def validate_author_fields(doc: Any) -> list[str]:
     if "notes" in doc:
         for i, row in enumerate(_check_list(doc["notes"], "notes", MAX_NOTES, out)):
             _check_object(row, _NOTE_KEYS, f"notes[{i}]", ("body", "text"), out)
+
+    if doc.get("body") is not None:
+        _validate_body(doc["body"], out)
     return out
+
+
+def _validate_body(body: Any, out: list[str]) -> None:
+    """The optional ``body`` descriptor (``nrs.body/1``). Unknown keys inside it are ignored."""
+    if not isinstance(body, dict):
+        out.append("body: must be an object")
+        return
+    if body.get("format") != BODY_FORMAT:
+        out.append(f"body.format: required, must be {BODY_FORMAT!r}")
+    version = body.get("roles_version")
+    match = _VERSION_RE.match(version) if isinstance(version, str) else None
+    if not match:
+        out.append("body.roles_version: required, a string like '1.0'")
+    elif int(match.group(1)) != BODY_ROLES_MAJOR:
+        out.append(f"body.roles_version: unsupported major version {version!r}")
+    family = body.get("family")
+    if not isinstance(family, str) or family not in BODY_FAMILIES:
+        out.append(f"body.family: required, one of {list(BODY_FAMILIES)}")
+        family = None
+    if body.get("mount") is not None:
+        _check_text(body["mount"], "body.mount", out)
+    if body.get("use_cases") is not None:
+        cases = _check_list(body["use_cases"], "body.use_cases", MAX_BODY_USE_CASES, out)
+        for i, item in enumerate(cases):
+            _check_text(item, f"body.use_cases[{i}]", out, nullable=False)
+    if body.get("gripper") is not None and body["gripper"] not in BODY_GRIPPER_ENUM:
+        out.append(f"body.gripper: must be one of {list(BODY_GRIPPER_ENUM)}")
+
+    used: set[str] = set()
+    if "joints_used" not in body:
+        out.append("body.joints_used: required, a list of joint roles")
+    else:
+        joints = _check_list(body["joints_used"], "body.joints_used", MAX_BODY_JOINTS, out)
+        if isinstance(body["joints_used"], list) and not joints:
+            out.append("body.joints_used: must hold at least one joint role")
+        for i, key in enumerate(joints):
+            where = f"body.joints_used[{i}]"
+            if not isinstance(key, str) or key not in BODY_JOINT_FAMILIES:
+                out.append(f"{where}: unknown joint role {key!r}")
+            elif family and family not in BODY_JOINT_FAMILIES[key]:
+                out.append(f"{where}: role {key!r} is not in family {family!r}")
+            elif key in used:
+                out.append(f"{where}: {key!r} is listed twice")
+            else:
+                used.add(key)
+    if body.get("joints_required") is not None:
+        for i, key in enumerate(
+            _check_list(body["joints_required"], "body.joints_required", MAX_BODY_JOINTS, out)
+        ):
+            if not isinstance(key, str) or key not in used:
+                out.append(f"body.joints_required[{i}]: {key!r} is not in joints_used")
+    if body.get("home_deg") is not None:
+        _check_pose(body["home_deg"], "body.home_deg", used, out)
+    if body.get("seeds") is not None:
+        slots: set[int] = set()
+        for i, seed in enumerate(_check_list(body["seeds"], "body.seeds", MAX_BODY_SEEDS, out)):
+            where = f"body.seeds[{i}]"
+            if not isinstance(seed, dict):
+                out.append(f"{where}: must be an object")
+                continue
+            slot = seed.get("slot")
+            if not _is_int(slot) or slot < 0:
+                out.append(f"{where}.slot: required, an integer >= 0")
+            elif slot in slots:
+                out.append(f"{where}.slot: {slot} is used by an earlier seed")
+            else:
+                slots.add(slot)
+            move = seed.get("move_id")
+            if not isinstance(move, str) or not move.strip():
+                out.append(f"{where}.move_id: required, a non-empty string")
+            else:
+                _check_text(move, f"{where}.move_id", out, nullable=False)
+            if "pose_deg" not in seed:
+                out.append(f"{where}.pose_deg: required, joint role -> degrees from the zero")
+            else:
+                _check_pose(seed["pose_deg"], f"{where}.pose_deg", used, out)
+
+
+def _check_pose(pose: Any, where: str, used: set[str], out: list[str]) -> None:
+    if not isinstance(pose, dict):
+        out.append(f"{where}: must be an object of joint role -> degrees")
+        return
+    for key, angle in pose.items():
+        if key not in used:
+            out.append(f"{where}.{key}: not in joints_used")
+        elif not _is_num(angle) or not math.isfinite(angle):
+            out.append(f"{where}.{key}: must be a finite number of degrees")
 
 
 def _validate_port(port: Any, where: str, out: list[str]) -> None:

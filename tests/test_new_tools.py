@@ -2114,27 +2114,116 @@ class TestAgentLiveness:
         assert "prune_in_s" not in result
 
 
-class TestEmbodimentStatusLiveRegistry:
-    """Missing /v1/embodiment/status must use live registry, not a genome dump."""
+def _desc(controller_id: str, control_url: str | None = "http://127.0.0.1:9100"):
+    from feagi_mcp.introspection_discovery import IntrospectionEndpoint
+
+    return IntrospectionEndpoint(
+        controller_id=controller_id,
+        host="127.0.0.1",
+        port=9000,
+        url="http://127.0.0.1:9000",
+        control_url=control_url,
+        schema_version="1.0",
+        pid=1,
+        controller_version="0",
+        started_at="",
+        descriptor_path="",
+    )
+
+
+def _patch_status_http(monkeypatch, responses):
+    """Patch httpx.AsyncClient in feagi_client; responses maps URL -> payload or Exception."""
+    import feagi_mcp.feagi_client as fc
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url):
+            r = responses[url]
+            if isinstance(r, Exception):
+                raise r
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.json.return_value = r
+            return resp
+
+    monkeypatch.setattr(fc.httpx, "AsyncClient", _Client)
+
+
+class TestEmbodimentStatusControllerStatus:
+    """get_embodiment_status reports the controller's own /status."""
 
     @pytest.mark.asyncio
-    async def test_uses_registered_agents_when_route_missing(self, mock_client):
-        missing = MagicMock()
-        missing.status_code = 404
-        missing.text = "Not Found"
-        mock_client._client.get.return_value = missing
-        mock_client.get_registered_agents = AsyncMock(
-            return_value={"count": 1, "agent_ids": ["video-1"]}
-        )
-        mock_client.list_io_areas_compact = AsyncMock(return_value={"count": 2, "areas": []})
+    async def test_reachable_controller(self, mock_client, monkeypatch):
+        import feagi_mcp.feagi_client as fc
 
+        monkeypatch.setattr(fc, "discover_all_endpoints", lambda: [_desc("mujoco")])
+        _patch_status_http(monkeypatch, {"http://127.0.0.1:9100/status": {"running": True}})
         result = await mock_client.get_embodiment_status()
+        assert result["status"] == "controller_status"
+        assert result["controller_id"] == "mujoco"
+        assert result["controller_url"] == "http://127.0.0.1:9100"
+        assert result["controller_status"] == {"running": True}
+        assert "feagi_registry_secondary" not in result
 
-        assert result["status"] == "live_registry"
-        assert result["registered_agents"]["agent_ids"] == ["video-1"]
-        assert result["io_areas"]["count"] == 2
-        assert "opu_areas" not in result
-        assert "ipu_areas" not in result
+    @pytest.mark.asyncio
+    async def test_unreachable_returns_no_running_controller(self, mock_client, monkeypatch):
+        import feagi_mcp.feagi_client as fc
+
+        monkeypatch.setattr(fc, "discover_all_endpoints", lambda: [_desc("mujoco")])
+        _patch_status_http(
+            monkeypatch, {"http://127.0.0.1:9100/status": ConnectionError("refused")}
+        )
+        mock_client.get_registered_agents = AsyncMock(return_value={"count": 1})
+        mock_client.list_io_areas_compact = AsyncMock(return_value={"count": 2})
+        result = await mock_client.get_embodiment_status()
+        assert result["status"] == "no_running_controller"
+        assert "controller_status" not in result
+        assert result["unreachable"][0]["controller_id"] == "mujoco"
+        assert result["feagi_registry_secondary"]["registered_agents"] == {"count": 1}
+        assert "not the controller" in result["feagi_registry_secondary"]["note"]
+
+    @pytest.mark.asyncio
+    async def test_no_descriptors(self, mock_client, monkeypatch):
+        import feagi_mcp.feagi_client as fc
+
+        monkeypatch.setattr(fc, "discover_all_endpoints", lambda: [])
+        mock_client.get_registered_agents = AsyncMock(return_value={})
+        mock_client.list_io_areas_compact = AsyncMock(return_value={})
+        result = await mock_client.get_embodiment_status()
+        assert result["status"] == "no_running_controller"
+        assert result["unreachable"] == []
+
+    @pytest.mark.asyncio
+    async def test_multiple_controllers_and_selection(self, mock_client, monkeypatch):
+        import feagi_mcp.feagi_client as fc
+
+        descs = {
+            "mujoco": _desc("mujoco", "http://127.0.0.1:9100"),
+            "xarm": _desc("xarm", "http://127.0.0.1:9200"),
+        }
+        monkeypatch.setattr(fc, "discover_all_endpoints", lambda: list(descs.values()))
+        monkeypatch.setattr(fc, "discover_endpoint", lambda cid: descs.get(cid))
+        _patch_status_http(
+            monkeypatch,
+            {
+                "http://127.0.0.1:9100/status": {"a": 1},
+                "http://127.0.0.1:9200/status": {"b": 2},
+            },
+        )
+        result = await mock_client.get_embodiment_status()
+        assert result["status"] == "multiple_controllers"
+        assert {c["controller_id"] for c in result["controllers"]} == {"mujoco", "xarm"}
+        one = await mock_client.get_embodiment_status(controller_id="xarm")
+        assert one["status"] == "controller_status"
+        assert one["controller_status"] == {"b": 2}
 
 
 class TestLogTailDisabledHint:
@@ -3071,3 +3160,31 @@ class TestReflexMappingExistingMorphology:
         result = await self._call(mock_client, ltp_multiplier=500)
         assert "ltp_multiplier" in result["error"]
         mock_client.create_morphology.assert_not_awaited()
+
+
+class TestMoveIoAreaGroups:
+    """move_io_area_groups client method."""
+
+    @pytest.mark.asyncio
+    async def test_success_and_body(self, mock_client):
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {"moved": [{"old_id": "A", "new_id": "B"}]}
+        mock_client._client.post.return_value = resp
+        result = await mock_client.move_io_area_groups(
+            [{"cortical_id": "A", "group_id": 2}], "agent1"
+        )
+        assert result["moved"][0]["new_id"] == "B"
+        body = mock_client._client.post.call_args.kwargs["json"]
+        assert body["requester_agent_id"] == "agent1"
+
+    @pytest.mark.asyncio
+    async def test_409(self, mock_client):
+        mock_client._client.post.return_value = MagicMock(status_code=409, text="occupied")
+        result = await mock_client.move_io_area_groups([{"cortical_id": "A", "group_id": 2}])
+        assert result["error"] == "HTTP 409" and "nothing moved" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_404(self, mock_client):
+        mock_client._client.post.return_value = MagicMock(status_code=404, text="")
+        result = await mock_client.move_io_area_groups([{"cortical_id": "A", "group_id": 2}])
+        assert "does not support move_groups yet" in result["message"]

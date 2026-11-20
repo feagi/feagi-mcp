@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import Any
 
 import httpx
@@ -369,3 +371,99 @@ async def test_cancel_and_list_stimulus_schedule() -> None:
     assert await listing.get_stimulus_schedule() == {"schedules": []}
     gone = _http_client(post_status=404)
     assert (await gone.cancel_stimulus(9))["error"] == "HTTP 404"
+
+
+# ------------------------------------------------------------- labels: cancel and renew
+
+
+def _hold_client() -> tuple[FeagiClient, FakeHoldClient]:
+    client = FeagiClient()
+    fake = FakeHoldClient()
+
+    async def resolve(*refs: str) -> tuple[list[str], None]:
+        return list(refs), None
+
+    client._resolve_area_refs = resolve  # type: ignore[method-assign]
+    for name in (
+        "get_burst_engine_config",
+        "get_burst_counter",
+        "_post_stimulation",
+        "get_fire_history",
+        "release_fire_history",
+    ):
+        setattr(client, name, getattr(fake, name))
+    client.acquire_fire_history = fake.acquire_fire_history  # type: ignore[method-assign]
+    return client, fake
+
+
+async def test_cancel_stimulus_by_label_stops_every_hold_of_the_group() -> None:
+    client, _ = _hold_client()
+    a = await client.hold_stimulus(AREA, VOXELS, 30, background=True, verify=False, label="g")
+    b = await client.hold_stimulus(AREA, VOXELS, 30, background=True, verify=False, label="g")
+    other = await client.hold_stimulus(AREA, VOXELS, 30, background=True, verify=False)
+    assert a["label"] == "g" and "label" not in other
+    out = await client.cancel_stimulus(label=" g ")
+    assert out["success"] is True and out["label"] == "g"
+    assert sorted(out["holds_cancelled"]) == sorted([a["hold_id"], b["hold_id"]])
+    assert (await client.get_stimulus_hold(a["hold_id"]))["state"] == "cancelled"
+    assert (await client.get_stimulus_hold(other["hold_id"]))["state"] in ("pending", "running")
+    listing = await client.get_stimulus_hold()
+    assert {h.get("label") for h in listing["holds"]} == {"g", None}
+    await client.get_stimulus_hold(other["hold_id"], cancel=True)
+    again = await client.cancel_stimulus(label="g")
+    assert again["holds_cancelled"] == [] and len(again["holds_not_active"]) == 2
+    missing = await client.cancel_stimulus(label="nope")
+    assert missing["success"] is False and "g" in missing["known_labels"]
+
+
+async def test_cancel_stimulus_needs_exactly_one_argument() -> None:
+    client, _ = _hold_client()
+    assert (await client.cancel_stimulus())["success"] is False
+    assert (await client.cancel_stimulus(1, "x"))["success"] is False
+    assert (await client.cancel_stimulus(-1))["success"] is False
+    assert (await client.hold_stimulus(AREA, VOXELS, 1, label=""))["success"] is False
+
+
+async def test_cancel_stimulus_by_label_deletes_registered_schedules() -> None:
+    client = FeagiClient()
+    deleted: list[str] = []
+
+    class Resp:
+        def __init__(self, code: int) -> None:
+            self.status_code = code
+            self.text = ""
+
+        def json(self) -> dict[str, Any]:
+            return {"cancelled": True}
+
+    async def delete(url: str) -> Resp:
+        deleted.append(url.rsplit("/", 1)[1])
+        return Resp(404 if url.endswith("/8") else 200)
+
+    client._client.delete = delete  # type: ignore[method-assign,assignment]
+    client._schedule_labels["s"] = [7, 8]
+    out = await client.cancel_stimulus(label="s")
+    assert deleted == ["7", "8"]
+    assert out["schedules_cancelled"] == [7] and out["schedules_already_finished"] == [8]
+    assert "s" not in client._schedule_labels
+
+
+async def test_renew_stimulus_extends_a_running_hold_past_its_original_end() -> None:
+    client, fake = _hold_client()
+    started = await client.hold_stimulus(
+        AREA, VOXELS, 0.2, background=True, verify=False, label="r"
+    )
+    await asyncio.sleep(0.05)
+    out = await client.renew_stimulus("r", 0.4)
+    assert out["success"] is True and out["renewed"] == [started["hold_id"]]
+    task = client._holds[started["hold_id"]]["_task"]
+    t0 = time.monotonic()
+    done = await task
+    assert done["state"] == "done" and done["renewals"] == 1
+    assert done["elapsed_s"] >= 0.4  # would be ~0.2 without the renewal
+    assert time.monotonic() - t0 < 2
+    after = await client.renew_stimulus("r", 1)
+    assert after["success"] is False and after["skipped"][0]["reason"].startswith("hold is done")
+    assert (await client.renew_stimulus("ghost", 1))["success"] is False
+    assert (await client.renew_stimulus("r", 0))["success"] is False
+    assert fake.posts > 0

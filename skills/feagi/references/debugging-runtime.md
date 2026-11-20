@@ -29,7 +29,7 @@ IPU width vs the columns present in the last sensor snapshot.
   mapping's weight statistics over time (min, max, avg, count at 0, count at the
   destination's PSP cap, the five largest and five smallest synapses) and reports
   `avg_delta` and `max_delta`. A flat series while the pair co-fires means no learning:
-  check reward modulators and `plasticity_flag` with `diagnose_mapping_plasticity()`, and a left-over freeze switch (it is not in that report; `freeze_mapping_plasticity(frozen=False)` resumes and reads back).
+  check reward modulators and `plasticity_flag` with `diagnose_mapping_plasticity()`, and a left-over freeze switch (it is not in that report; read every frozen mapping and memory area with `get_learning_frozen()`, and `freeze_mapping_plasticity(frozen=False)` resumes and reads back).
 - For memory-to-memory mappings `diagnose_mapping_plasticity()` splits
   `memory_neuron_synapse_count` (learned links) from `placeholder_synapse_count`.
 - `freeze_mapping_plasticity(src_area, dst_area, frozen=True)` stops learning on one

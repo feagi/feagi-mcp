@@ -12,6 +12,7 @@ from feagi_mcp.region_circuit import (
     area_role,
     collect_member_areas,
     mapping_edges,
+    region_io_blockers,
     summarize_region_circuit,
 )
 
@@ -188,3 +189,47 @@ class TestClientIntegration:
         out = await client.get_region_circuit("circ")
         assert out["error"] == "cortical_map_detailed failed"
         assert out["detail"]["error"] == "HTTP 503"
+
+
+class TestRegionIoBlockers:
+    def test_incoming_from_outside_blocks_output_only(self):
+        out = region_io_blockers(_regions(), _cortical_map(), _names(), HIDDEN)
+        assert out["region_id"] == "circ"
+        assert out["can_be_output"] is False
+        assert [r["area_id"] for r in out["blocks_output"]["incoming_from_outside"]] == [
+            OUTSIDE_SRC
+        ]
+        # the child region counts as another region (core uses direct containment)
+        assert out["can_be_input"] is False
+        assert [r["area_id"] for r in out["blocks_input"]["outgoing_to_outside"]] == [NESTED]
+        assert out["blocks_input"]["outgoing_to_outside"][0]["region_title"] == "Inner"
+
+    def test_area_with_only_internal_mappings_can_be_either(self):
+        out = region_io_blockers(_regions(), _cortical_map(), _names(), IPU)
+        assert out["can_be_input"] is True and out["can_be_output"] is True
+        assert out["designated_input"] is True and out["designated_output"] is False
+
+    def test_outgoing_to_outside_blocks_input(self):
+        out = region_io_blockers(_regions(), _cortical_map(), _names(), NESTED, "child")
+        assert out["can_be_input"] is False
+        assert out["blocks_input"]["outgoing_to_outside"][0]["area_id"] == OUTSIDE_DST
+        assert out["can_be_output"] is False  # HIDDEN (circ) feeds it from another region
+
+    def test_region_mismatch_and_regionless_area_are_errors(self):
+        assert region_io_blockers(_regions(), _cortical_map(), _names(), IPU, "root")["error"] == (
+            "area_not_in_region"
+        )
+        assert region_io_blockers(_regions(), _cortical_map(), _names(), "ghost")["error"] == (
+            "area_not_in_a_region"
+        )
+
+    async def test_client_tool_reads_the_three_payloads(self):
+        client = FeagiClient()
+        client._resolve_area_refs = AsyncMock(return_value=([HIDDEN], None))  # type: ignore[method-assign]
+        client.get_regions_members = AsyncMock(return_value=_regions())  # type: ignore[method-assign]
+        client.get_cortical_map_detailed = AsyncMock(return_value=_cortical_map())  # type: ignore[method-assign]
+        client.get_cortical_id_name_mapping = AsyncMock(return_value=_names())  # type: ignore[method-assign]
+        out = await client.get_region_io_blockers("Hidden")
+        assert out["can_be_output"] is False and out["name"] == "Hidden"
+        client.get_regions_members = AsyncMock(return_value={"error": "HTTP 500"})  # type: ignore[method-assign]
+        assert (await client.get_region_io_blockers("Hidden"))["error"] == "regions_members failed"

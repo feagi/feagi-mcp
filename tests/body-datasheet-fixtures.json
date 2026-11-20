@@ -1,0 +1,718 @@
+{
+  "format": "nrs.body_datasheet_fixtures/1",
+  "note": "One shared fixture for the four datasheet validators (feagi-mcp, nrs-composer, feagi-desktop, feagi-react-core-pro). Each case is a datasheet author document. valid=false means a validator must refuse it with an error whose path or text contains error_path. Single home: nrs-embodiments/schemas; byte-equal copies in the four repos.",
+  "cases": [
+    {
+      "name": "valid_full_serial_arm",
+      "datasheet": {
+        "format": "feagi.datasheet/1",
+        "body": {
+          "format": "nrs.body/1",
+          "roles_version": "1.0",
+          "family": "serial_arm",
+          "mount": "table_top_upright",
+          "use_cases": [
+            "pick_and_place"
+          ],
+          "joints_used": [
+            "arm.base_yaw",
+            "arm.shoulder_pitch",
+            "arm.elbow_bend",
+            "arm.wrist_flexion"
+          ],
+          "joints_required": [
+            "arm.shoulder_pitch",
+            "arm.elbow_bend"
+          ],
+          "gripper": "optional",
+          "home_deg": {
+            "arm.shoulder_pitch": 20,
+            "arm.elbow_bend": 0
+          },
+          "seeds": [
+            {
+              "slot": 1,
+              "move_id": "reach_low_left",
+              "pose_deg": {
+                "arm.base_yaw": -30,
+                "arm.elbow_bend": 70
+              }
+            },
+            {
+              "slot": 2,
+              "move_id": "reach_low_right",
+              "pose_deg": {
+                "arm.base_yaw": 30,
+                "arm.elbow_bend": 70
+              }
+            }
+          ]
+        }
+      },
+      "valid": true,
+      "error_path": null
+    },
+    {
+      "name": "valid_minimal",
+      "datasheet": {
+        "format": "feagi.datasheet/1",
+        "body": {
+          "format": "nrs.body/1",
+          "roles_version": "1.0",
+          "family": "serial_arm",
+          "joints_used": [
+            "arm.elbow_bend"
+          ]
+        }
+      },
+      "valid": true,
+      "error_path": null
+    },
+    {
+      "name": "valid_no_body_is_backward_compatible",
+      "datasheet": {
+        "format": "feagi.datasheet/1"
+      },
+      "valid": true,
+      "error_path": null
+    },
+    {
+      "name": "valid_unknown_body_key_is_ignored",
+      "datasheet": {
+        "format": "feagi.datasheet/1",
+        "body": {
+          "format": "nrs.body/1",
+          "roles_version": "1.0",
+          "family": "serial_arm",
+          "joints_used": [
+            "arm.elbow_bend"
+          ],
+          "future_key": {
+            "a": 1
+          }
+        }
+      },
+      "valid": true,
+      "error_path": null
+    },
+    {
+      "name": "valid_newer_minor_roles_version",
+      "datasheet": {
+        "format": "feagi.datasheet/1",
+        "body": {
+          "format": "nrs.body/1",
+          "roles_version": "1.7",
+          "family": "serial_arm",
+          "joints_used": [
+            "arm.elbow_bend"
+          ]
+        }
+      },
+      "valid": true,
+      "error_path": null
+    },
+    {
+      "name": "valid_sided_human_keys",
+      "datasheet": {
+        "format": "feagi.datasheet/1",
+        "body": {
+          "format": "nrs.body/1",
+          "roles_version": "1.0",
+          "family": "human",
+          "joints_used": [
+            "arm_left.elbow_bend",
+            "arm_right.elbow_bend",
+            "leg_left.knee_bend"
+          ],
+          "seeds": [
+            {
+              "slot": 1,
+              "move_id": "wave",
+              "pose_deg": {
+                "arm_right.elbow_bend": 90
+              }
+            }
+          ]
+        }
+      },
+      "valid": true,
+      "error_path": null
+    },
+    {
+      "name": "invalid_unknown_role",
+      "datasheet": {
+        "format": "feagi.datasheet/1",
+        "body": {
+          "format": "nrs.body/1",
+          "roles_version": "1.0",
+          "family": "serial_arm",
+          "joints_used": [
+            "arm.elbow_bend",
+            "arm.nope"
+          ]
+        }
+      },
+      "valid": false,
+      "error_path": "body.joints_used[1]"
+    },
+    {
+      "name": "invalid_role_not_in_family",
+      "datasheet": {
+        "format": "feagi.datasheet/1",
+        "body": {
+          "format": "nrs.body/1",
+          "roles_version": "1.0",
+          "family": "serial_arm",
+          "joints_used": [
+            "leg.knee_bend"
+          ]
+        }
+      },
+      "valid": false,
+      "error_path": "body.joints_used[0]"
+    },
+    {
+      "name": "invalid_missing_family",
+      "datasheet": {
+        "format": "feagi.datasheet/1",
+        "body": {
+          "format": "nrs.body/1",
+          "roles_version": "1.0",
+          "mount": "table_top_upright",
+          "use_cases": [
+            "pick_and_place"
+          ],
+          "joints_used": [
+            "arm.base_yaw",
+            "arm.shoulder_pitch",
+            "arm.elbow_bend",
+            "arm.wrist_flexion"
+          ],
+          "joints_required": [
+            "arm.shoulder_pitch",
+            "arm.elbow_bend"
+          ],
+          "gripper": "optional",
+          "home_deg": {
+            "arm.shoulder_pitch": 20,
+            "arm.elbow_bend": 0
+          },
+          "seeds": [
+            {
+              "slot": 1,
+              "move_id": "reach_low_left",
+              "pose_deg": {
+                "arm.base_yaw": -30,
+                "arm.elbow_bend": 70
+              }
+            },
+            {
+              "slot": 2,
+              "move_id": "reach_low_right",
+              "pose_deg": {
+                "arm.base_yaw": 30,
+                "arm.elbow_bend": 70
+              }
+            }
+          ]
+        }
+      },
+      "valid": false,
+      "error_path": "body.family"
+    },
+    {
+      "name": "invalid_missing_joints_used",
+      "datasheet": {
+        "format": "feagi.datasheet/1",
+        "body": {
+          "format": "nrs.body/1",
+          "roles_version": "1.0",
+          "family": "serial_arm",
+          "mount": "table_top_upright",
+          "use_cases": [
+            "pick_and_place"
+          ],
+          "joints_required": [
+            "arm.shoulder_pitch",
+            "arm.elbow_bend"
+          ],
+          "gripper": "optional",
+          "home_deg": {
+            "arm.shoulder_pitch": 20,
+            "arm.elbow_bend": 0
+          },
+          "seeds": [
+            {
+              "slot": 1,
+              "move_id": "reach_low_left",
+              "pose_deg": {
+                "arm.base_yaw": -30,
+                "arm.elbow_bend": 70
+              }
+            },
+            {
+              "slot": 2,
+              "move_id": "reach_low_right",
+              "pose_deg": {
+                "arm.base_yaw": 30,
+                "arm.elbow_bend": 70
+              }
+            }
+          ]
+        }
+      },
+      "valid": false,
+      "error_path": "body.joints_used"
+    },
+    {
+      "name": "invalid_missing_roles_version",
+      "datasheet": {
+        "format": "feagi.datasheet/1",
+        "body": {
+          "format": "nrs.body/1",
+          "family": "serial_arm",
+          "mount": "table_top_upright",
+          "use_cases": [
+            "pick_and_place"
+          ],
+          "joints_used": [
+            "arm.base_yaw",
+            "arm.shoulder_pitch",
+            "arm.elbow_bend",
+            "arm.wrist_flexion"
+          ],
+          "joints_required": [
+            "arm.shoulder_pitch",
+            "arm.elbow_bend"
+          ],
+          "gripper": "optional",
+          "home_deg": {
+            "arm.shoulder_pitch": 20,
+            "arm.elbow_bend": 0
+          },
+          "seeds": [
+            {
+              "slot": 1,
+              "move_id": "reach_low_left",
+              "pose_deg": {
+                "arm.base_yaw": -30,
+                "arm.elbow_bend": 70
+              }
+            },
+            {
+              "slot": 2,
+              "move_id": "reach_low_right",
+              "pose_deg": {
+                "arm.base_yaw": 30,
+                "arm.elbow_bend": 70
+              }
+            }
+          ]
+        }
+      },
+      "valid": false,
+      "error_path": "body.roles_version"
+    },
+    {
+      "name": "invalid_missing_body_format",
+      "datasheet": {
+        "format": "feagi.datasheet/1",
+        "body": {
+          "roles_version": "1.0",
+          "family": "serial_arm",
+          "mount": "table_top_upright",
+          "use_cases": [
+            "pick_and_place"
+          ],
+          "joints_used": [
+            "arm.base_yaw",
+            "arm.shoulder_pitch",
+            "arm.elbow_bend",
+            "arm.wrist_flexion"
+          ],
+          "joints_required": [
+            "arm.shoulder_pitch",
+            "arm.elbow_bend"
+          ],
+          "gripper": "optional",
+          "home_deg": {
+            "arm.shoulder_pitch": 20,
+            "arm.elbow_bend": 0
+          },
+          "seeds": [
+            {
+              "slot": 1,
+              "move_id": "reach_low_left",
+              "pose_deg": {
+                "arm.base_yaw": -30,
+                "arm.elbow_bend": 70
+              }
+            },
+            {
+              "slot": 2,
+              "move_id": "reach_low_right",
+              "pose_deg": {
+                "arm.base_yaw": 30,
+                "arm.elbow_bend": 70
+              }
+            }
+          ]
+        }
+      },
+      "valid": false,
+      "error_path": "body.format"
+    },
+    {
+      "name": "invalid_unknown_family",
+      "datasheet": {
+        "format": "feagi.datasheet/1",
+        "body": {
+          "format": "nrs.body/1",
+          "roles_version": "1.0",
+          "family": "alien",
+          "mount": "table_top_upright",
+          "use_cases": [
+            "pick_and_place"
+          ],
+          "joints_used": [
+            "arm.base_yaw",
+            "arm.shoulder_pitch",
+            "arm.elbow_bend",
+            "arm.wrist_flexion"
+          ],
+          "joints_required": [
+            "arm.shoulder_pitch",
+            "arm.elbow_bend"
+          ],
+          "gripper": "optional",
+          "home_deg": {
+            "arm.shoulder_pitch": 20,
+            "arm.elbow_bend": 0
+          },
+          "seeds": [
+            {
+              "slot": 1,
+              "move_id": "reach_low_left",
+              "pose_deg": {
+                "arm.base_yaw": -30,
+                "arm.elbow_bend": 70
+              }
+            },
+            {
+              "slot": 2,
+              "move_id": "reach_low_right",
+              "pose_deg": {
+                "arm.base_yaw": 30,
+                "arm.elbow_bend": 70
+              }
+            }
+          ]
+        }
+      },
+      "valid": false,
+      "error_path": "body.family"
+    },
+    {
+      "name": "invalid_unknown_body_major",
+      "datasheet": {
+        "format": "feagi.datasheet/1",
+        "body": {
+          "format": "nrs.body/2",
+          "roles_version": "1.0",
+          "family": "serial_arm",
+          "joints_used": [
+            "arm.elbow_bend"
+          ]
+        }
+      },
+      "valid": false,
+      "error_path": "body.format"
+    },
+    {
+      "name": "invalid_unknown_roles_major",
+      "datasheet": {
+        "format": "feagi.datasheet/1",
+        "body": {
+          "format": "nrs.body/1",
+          "roles_version": "2.0",
+          "family": "serial_arm",
+          "joints_used": [
+            "arm.elbow_bend"
+          ]
+        }
+      },
+      "valid": false,
+      "error_path": "body.roles_version"
+    },
+    {
+      "name": "invalid_empty_joints_used",
+      "datasheet": {
+        "format": "feagi.datasheet/1",
+        "body": {
+          "format": "nrs.body/1",
+          "roles_version": "1.0",
+          "family": "serial_arm",
+          "joints_used": []
+        }
+      },
+      "valid": false,
+      "error_path": "body.joints_used"
+    },
+    {
+      "name": "invalid_duplicate_joint",
+      "datasheet": {
+        "format": "feagi.datasheet/1",
+        "body": {
+          "format": "nrs.body/1",
+          "roles_version": "1.0",
+          "family": "serial_arm",
+          "joints_used": [
+            "arm.elbow_bend",
+            "arm.elbow_bend"
+          ]
+        }
+      },
+      "valid": false,
+      "error_path": "body.joints_used[1]"
+    },
+    {
+      "name": "invalid_required_not_used",
+      "datasheet": {
+        "format": "feagi.datasheet/1",
+        "body": {
+          "format": "nrs.body/1",
+          "roles_version": "1.0",
+          "family": "serial_arm",
+          "joints_used": [
+            "arm.elbow_bend"
+          ],
+          "joints_required": [
+            "arm.shoulder_pitch"
+          ]
+        }
+      },
+      "valid": false,
+      "error_path": "body.joints_required[0]"
+    },
+    {
+      "name": "invalid_bad_gripper",
+      "datasheet": {
+        "format": "feagi.datasheet/1",
+        "body": {
+          "format": "nrs.body/1",
+          "roles_version": "1.0",
+          "family": "serial_arm",
+          "joints_used": [
+            "arm.elbow_bend"
+          ],
+          "gripper": "maybe"
+        }
+      },
+      "valid": false,
+      "error_path": "body.gripper"
+    },
+    {
+      "name": "invalid_home_joint_not_used",
+      "datasheet": {
+        "format": "feagi.datasheet/1",
+        "body": {
+          "format": "nrs.body/1",
+          "roles_version": "1.0",
+          "family": "serial_arm",
+          "joints_used": [
+            "arm.elbow_bend"
+          ],
+          "home_deg": {
+            "arm.shoulder_pitch": 5
+          }
+        }
+      },
+      "valid": false,
+      "error_path": "body.home_deg"
+    },
+    {
+      "name": "invalid_home_not_number",
+      "datasheet": {
+        "format": "feagi.datasheet/1",
+        "body": {
+          "format": "nrs.body/1",
+          "roles_version": "1.0",
+          "family": "serial_arm",
+          "joints_used": [
+            "arm.elbow_bend"
+          ],
+          "home_deg": {
+            "arm.elbow_bend": "x"
+          }
+        }
+      },
+      "valid": false,
+      "error_path": "body.home_deg"
+    },
+    {
+      "name": "invalid_seed_missing_move_id",
+      "datasheet": {
+        "format": "feagi.datasheet/1",
+        "body": {
+          "format": "nrs.body/1",
+          "roles_version": "1.0",
+          "family": "serial_arm",
+          "joints_used": [
+            "arm.elbow_bend"
+          ],
+          "seeds": [
+            {
+              "slot": 1,
+              "pose_deg": {
+                "arm.elbow_bend": 10
+              }
+            }
+          ]
+        }
+      },
+      "valid": false,
+      "error_path": "body.seeds[0].move_id"
+    },
+    {
+      "name": "invalid_seed_missing_pose",
+      "datasheet": {
+        "format": "feagi.datasheet/1",
+        "body": {
+          "format": "nrs.body/1",
+          "roles_version": "1.0",
+          "family": "serial_arm",
+          "joints_used": [
+            "arm.elbow_bend"
+          ],
+          "seeds": [
+            {
+              "slot": 1,
+              "move_id": "a"
+            }
+          ]
+        }
+      },
+      "valid": false,
+      "error_path": "body.seeds[0].pose_deg"
+    },
+    {
+      "name": "invalid_seed_joint_not_used",
+      "datasheet": {
+        "format": "feagi.datasheet/1",
+        "body": {
+          "format": "nrs.body/1",
+          "roles_version": "1.0",
+          "family": "serial_arm",
+          "joints_used": [
+            "arm.elbow_bend"
+          ],
+          "seeds": [
+            {
+              "slot": 1,
+              "move_id": "a",
+              "pose_deg": {
+                "arm.shoulder_pitch": 10
+              }
+            }
+          ]
+        }
+      },
+      "valid": false,
+      "error_path": "body.seeds[0].pose_deg"
+    },
+    {
+      "name": "invalid_seed_angle_not_number",
+      "datasheet": {
+        "format": "feagi.datasheet/1",
+        "body": {
+          "format": "nrs.body/1",
+          "roles_version": "1.0",
+          "family": "serial_arm",
+          "joints_used": [
+            "arm.elbow_bend"
+          ],
+          "seeds": [
+            {
+              "slot": 1,
+              "move_id": "a",
+              "pose_deg": {
+                "arm.elbow_bend": true
+              }
+            }
+          ]
+        }
+      },
+      "valid": false,
+      "error_path": "body.seeds[0].pose_deg"
+    },
+    {
+      "name": "invalid_seed_slot_duplicate",
+      "datasheet": {
+        "format": "feagi.datasheet/1",
+        "body": {
+          "format": "nrs.body/1",
+          "roles_version": "1.0",
+          "family": "serial_arm",
+          "joints_used": [
+            "arm.elbow_bend"
+          ],
+          "seeds": [
+            {
+              "slot": 1,
+              "move_id": "a",
+              "pose_deg": {}
+            },
+            {
+              "slot": 1,
+              "move_id": "b",
+              "pose_deg": {}
+            }
+          ]
+        }
+      },
+      "valid": false,
+      "error_path": "body.seeds[1].slot"
+    },
+    {
+      "name": "invalid_body_not_object",
+      "datasheet": {
+        "format": "feagi.datasheet/1",
+        "body": "serial_arm"
+      },
+      "valid": false,
+      "error_path": "body"
+    },
+    {
+      "name": "invalid_unknown_datasheet_major",
+      "datasheet": {
+        "format": "feagi.datasheet/2",
+        "body": {
+          "format": "nrs.body/1",
+          "roles_version": "1.0",
+          "family": "serial_arm",
+          "joints_used": [
+            "arm.elbow_bend"
+          ]
+        }
+      },
+      "valid": false,
+      "error_path": "format"
+    },
+    {
+      "name": "invalid_unknown_top_level_key",
+      "datasheet": {
+        "format": "feagi.datasheet/1",
+        "bodyy": {
+          "format": "nrs.body/1",
+          "roles_version": "1.0",
+          "family": "serial_arm",
+          "joints_used": [
+            "arm.elbow_bend"
+          ]
+        }
+      },
+      "valid": false,
+      "error_path": "bodyy"
+    }
+  ]
+}

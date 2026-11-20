@@ -97,7 +97,11 @@ A foreground hold lasts at most 30 s (one tool call), a background hold at most 
 outcome with `get_stimulus_hold(hold_id)`, and stop it early with
 `get_stimulus_hold(hold_id, cancel=true)`. For pulses on exact bursts use
 `schedule_stimulus(entries=[{burst_offset, stimuli}])` (`cancel_stimulus(schedule_id)` stops it,
-`get_stimulus_schedule()` lists active ones). Summarize a recorded CSV with `analyze_run`.
+`get_stimulus_schedule()` lists active ones). Give holds (and schedules) of one set a common
+`label`: `cancel_stimulus(label=...)` stops them all and `renew_stimulus(label=..., seconds=...)`
+extends every running hold of the label. `record_spikes(modal_summary=True)` adds per area the
+modal firing pattern (voxel set per burst), its share, distinct pattern count and empty-burst
+runs. Summarize a recorded CSV with `analyze_run`.
 
 Recipe, a held stimulus and its response in one window:
 

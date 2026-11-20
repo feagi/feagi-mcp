@@ -224,10 +224,66 @@ def runs_of(bursts: list[int]) -> list[list[int]]:
     return runs
 
 
-def summarize_frames(
-    collector: LedgerCollector, first: int, last: int, max_runs: int = MAX_RUNS_LISTED
+MAX_MODAL_VOXELS_LISTED = 32
+
+
+def modal_pattern_summary(
+    frames: dict[int, tuple[Any, ...]], observed: list[int], max_runs: int = MAX_RUNS_LISTED
 ) -> dict[str, Any]:
-    """Per-area summary of the frames in bursts ``first..last`` (inclusive)."""
+    """Modal firing pattern of one area over its ``observed`` bursts.
+
+    A pattern is the set of voxels that fired in one burst (memory neurons have no voxel and
+    are left out); a burst with no voxel is an empty burst, not a pattern. ``modal`` is the
+    most common pattern (ties go to the earliest first burst) with its burst count and share
+    of the non-empty bursts and of all observed bursts. Empty bursts are listed as runs of
+    consecutive observed bursts (``empty_runs``, capped by ``max_runs``).
+    """
+    counts: dict[frozenset[tuple[int, int, int]], list[int]] = {}
+    empty: list[int] = []
+    for b in observed:
+        pattern = frozenset((v[0], v[1], v[2]) for v in frames[b][0])
+        if pattern:
+            counts.setdefault(pattern, []).append(b)
+        else:
+            empty.append(b)
+    fired = sum(len(v) for v in counts.values())
+    runs = runs_of(empty)
+    out: dict[str, Any] = {
+        "distinct_patterns": len(counts),
+        "empty_bursts": len(empty),
+        "empty_run_count": len(runs),
+        "longest_empty_run": max((r[1] - r[0] + 1 for r in runs), default=0),
+        "empty_runs": runs[:max_runs],
+        "empty_runs_truncated": len(runs) > max_runs,
+        "modal": None,
+    }
+    if counts:
+        pattern, bursts = max(counts.items(), key=lambda kv: (len(kv[1]), -kv[1][0]))
+        voxels = sorted(pattern)
+        out["modal"] = {
+            "voxel_count": len(voxels),
+            "voxels": [list(v) for v in voxels[:MAX_MODAL_VOXELS_LISTED]],
+            "voxels_truncated": len(voxels) > MAX_MODAL_VOXELS_LISTED,
+            "bursts": len(bursts),
+            "share_of_fired": round(len(bursts) / fired, 4),
+            "share_of_observed": round(len(bursts) / len(observed), 4),
+            "first_burst": bursts[0],
+            "last_burst": bursts[-1],
+        }
+    return out
+
+
+def summarize_frames(
+    collector: LedgerCollector,
+    first: int,
+    last: int,
+    max_runs: int = MAX_RUNS_LISTED,
+    modal: bool = False,
+) -> dict[str, Any]:
+    """Per-area summary of the frames in bursts ``first..last`` (inclusive).
+
+    With ``modal`` each area also carries ``modal_pattern`` (see :func:`modal_pattern_summary`).
+    """
     window = range(first, last + 1)
     seen_any: set[int] = set()
     areas: dict[str, Any] = {}
@@ -290,6 +346,8 @@ def summarize_frames(
                 for k, c in top
             ],
         }
+        if modal:
+            areas[area_id]["modal_pattern"] = modal_pattern_summary(frames, observed, max_runs)
     gaps = [b for b in window if b not in seen_any]
     return {
         "areas": areas,
@@ -370,13 +428,14 @@ async def record_spikes_window(
     max_runs: int = MAX_RUNS_LISTED,
     cancel: asyncio.Event | None = None,
     budget_s: float | None = None,
+    modal: bool = False,
 ) -> dict[str, Any]:
     """Record ``bursts`` bursts of ``area_ids`` and return the compact summary.
 
     ``cancel`` (optional) ends the wait early; the summary then covers the bursts recorded so
     far and reports ``cancelled``. ``budget_s`` (optional) refuses a window that would take
     longer than that many seconds at the current burst rate. The subscription is always
-    released.
+    released. ``modal`` adds each area's ``modal_pattern`` summary.
     """
     problem = validate_record_args(area_ids, bursts, max_runs)
     if problem:
@@ -418,7 +477,7 @@ async def record_spikes_window(
         await collector.finish()
     last_seen = max((b for frames in collector.frames.values() for b in frames), default=c0)
     first, last = c0 + 1, min(target, last_seen)
-    summary = summarize_frames(collector, first, last, max_runs)
+    summary = summarize_frames(collector, first, last, max_runs, modal)
     result: dict[str, Any] = {
         "success": not timed_out and not cancelled and summary["gap_count"] == 0,
         "first_burst": first,
