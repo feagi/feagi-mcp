@@ -18,6 +18,7 @@ Spec::
      "delete": [{"src", "dst"}],
      "edit_areas": [{"name", "properties"}],
      "ports": {"inputs": [area names], "outputs": [area names]}?,
+     "port_encoding": {area name: {"kind"?, "signed"?, "frame"?, "positioning"?}}?,
      "templates": [{"template": "port|onset_pulse|ring_cpg|servo_channel_two_rest|"
                                 "phase_window_gate", "name": str, ...}]}
 
@@ -38,6 +39,10 @@ it (``port``: the area is input and output; ``onset_pulse``: ``<name>_Onset`` ou
 ``phase_window_gate``: gate output). A spec that ends with none declared gets the warning
 "block has no declared ports"; nothing is guessed.
 
+``port_encoding`` sets the author encoding (kind, signed, frame, positioning) of declared ports
+in the same ``PUT /v1/region/region`` as ``ports``; each key must be a declared port. Use it for
+a port no IO area feeds directly (FEAGI derives the others). Vocabulary: ``port_encoding.py``.
+
 Names in ``src``/``dst`` are spec areas or live areas (resolved when run). Membrane model used
 for sizing (feagi-core ``neural_dynamics``): ``V <- V * (1 - leak) + I``, fire at ``V >= T``,
 reset to 0 on fire; an area's PSP times a mapping's PSC multiplier is the input a spike adds.
@@ -53,6 +58,7 @@ from typing import Any
 
 from feagi_mcp.connectivity_rules import validate_morphology_parameters
 from feagi_mcp.percentage_coding import UnitCoding
+from feagi_mcp.port_encoding import PORT_ENCODING_FIELDS, author_entry, author_entry_error
 from feagi_mcp.stance_mapping import compile_stance_offset_rows, range_fraction
 
 GRID_COLUMNS = 6
@@ -523,6 +529,8 @@ class Plan:
         # template-default and explicitly declared region ports (area names)
         self.default_ports: dict[str, list[str]] = {"inputs": [], "outputs": []}
         self.explicit_ports: dict[str, list[str]] = {}
+        # author port encoding per declared port area name (all four fields, null = unknown)
+        self.port_encoding: dict[str, dict[str, Any]] = {}
         # ``port`` template areas: input by default, output when the block projects out of them
         self.flex_ports: set[str] = set()
         # registered unit coding per existing OPU area name (see ``servo_channel_two_rest``)
@@ -1288,6 +1296,28 @@ def _read_ports(plan: Plan, ports: Any) -> None:
         plan.explicit_ports[direction] = list(dict.fromkeys(n.strip() for n in names))
 
 
+def _read_port_encoding(plan: Plan, encoding: Any) -> None:
+    """Read ``port_encoding``: each key a declared port, each entry a valid author entry."""
+    if encoding is None:
+        return
+    if not isinstance(encoding, dict):
+        raise SpecError("'port_encoding' must map declared port area names to encoding entries")
+    declared = {n for names in plan.ports.values() for n in names}
+    for raw_name, entry in encoding.items():
+        name = raw_name.strip() if isinstance(raw_name, str) else ""
+        if name not in declared:
+            raise SpecError(
+                f"port_encoding '{raw_name}' is not a declared port: add it to 'ports' (or use "
+                "a template that declares it)"
+            )
+        if not isinstance(entry, dict):
+            raise SpecError(f"port_encoding.{name} must be an object")
+        problem = author_entry_error(entry)
+        if problem:
+            raise SpecError(f"port_encoding.{name}: {problem}")
+        plan.port_encoding[name] = author_entry(*(entry.get(f) for f in PORT_ENCODING_FIELDS))
+
+
 def _expand_region(spec: dict[str, Any]) -> dict[str, Any] | None:
     region = spec.get("region")
     if region is None:
@@ -1404,13 +1434,13 @@ def calls_for(plan: Plan) -> list[dict[str, Any]]:
             )
     ports = {d: names for d, names in plan.ports.items() if names}
     if ports:
+        properties: dict[str, Any] = {f"designated_{d}": names for d, names in ports.items()}
+        if plan.port_encoding:
+            properties["port_encoding"] = dict(plan.port_encoding)
         calls.append(
             {
                 "call": "update_brain_region",
-                "args": {
-                    "region_id": region_ref,
-                    "properties": {f"designated_{d}": names for d, names in ports.items()},
-                },
+                "args": {"region_id": region_ref, "properties": properties},
             }
         )
     for i, c in enumerate(calls, start=1):
@@ -1455,6 +1485,7 @@ def expand_spec(
             "delete",
             "edit_areas",
             "ports",
+            "port_encoding",
         }
     )
     if unknown:
@@ -1541,6 +1572,7 @@ def expand_spec(
                 "edit_areas needs 'region': {region_id} of the region holding the areas"
             )
         _read_ports(plan, spec.get("ports"))
+        _read_port_encoding(plan, spec.get("port_encoding"))
         check_memory_wiring(plan)
         errors.extend(plan.port_direction_errors())
         _place(plan, spec)
@@ -1880,11 +1912,14 @@ async def _declare_ports(
     regions = await client.get_regions_members()
     entry = regions.get(region_id) if isinstance(regions, dict) else None
     entry = entry if isinstance(entry, dict) else {}
-    props: dict[str, list[str]] = {}
+    props: dict[str, Any] = {}
     for d, cids in wanted.items():
         key = f"designated_{d}"
         existing = [c for c in entry.get(key) or [] if isinstance(c, str)]
         props[key] = list(dict.fromkeys([*existing, *cids]))
+    encoding = {ids[n]: dict(e) for n, e in plan.port_encoding.items()}
+    if encoding:
+        props["port_encoding"] = encoding
     res = await client.update_brain_region(region_id, props)
     if _is_error(res):
         return {"step": "declare ports (update_brain_region)", "detail": res}
@@ -1892,12 +1927,21 @@ async def _declare_ports(
     entry = after.get(region_id) if isinstance(after, dict) else None
     entry = entry if isinstance(entry, dict) else {}
     missing = {
-        key: [c for c in cids if c not in (entry.get(key) or [])] for key, cids in props.items()
+        key: [c for c in cids if c not in (entry.get(key) or [])]
+        for key, cids in props.items()
+        if key != "port_encoding"
     }
     missing = {k: v for k, v in missing.items() if v}
+    stored = entry.get("port_encoding")
+    stored = stored if isinstance(stored, dict) else {}
+    unstored = [c for c in encoding if (stored.get(c) or {}).get("source") != "author"]
+    if unstored:
+        missing["port_encoding"] = unstored
     if missing:
         return {"step": "verify declared ports", "error": "not stored", "missing": missing}
     created["ports"] = {d: list(names) for d, names in plan.ports.items()}
+    if encoding:
+        created["port_encoding"] = {n: dict(e) for n, e in plan.port_encoding.items()}
     return None
 
 

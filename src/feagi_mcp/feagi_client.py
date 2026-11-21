@@ -106,6 +106,7 @@ from feagi_mcp.placement_policy import (
     check_min_separation_to_existing,
     check_origin_exclusion,
 )
+from feagi_mcp.port_encoding import author_entry, author_entry_error, port_encoding_of
 from feagi_mcp.region_circuit import region_io_blockers, summarize_region_circuit
 from feagi_mcp.registration_units import (
     ChannelRegistration,
@@ -459,6 +460,26 @@ def _as_json_dict(data: Any) -> dict[str, Any]:
     if isinstance(data, dict):
         return cast(dict[str, Any], data)
     return {}
+
+
+def _port_encoding_error(sent: dict[str, Any], region_id: str, area_id: str) -> dict[str, Any]:
+    """Name FEAGI's refusal of a ``port_encoding`` delta; other errors pass through."""
+    status = str(sent.get("error", ""))
+    message = sent.get("message", "")
+    if status == "HTTP 409":
+        return {
+            "error": "area_not_designated",
+            "region_id": region_id,
+            "area_id": area_id,
+            "message": message,
+            "hint": "port_encoding applies to a designated input or output of the region: "
+            "check get_region_io_blockers, then designate the area first",
+        }
+    if status == "HTTP 400":
+        return {"error": "rejected_by_feagi", "region_id": region_id, "message": message}
+    if status == "HTTP 404":
+        return {"error": "unknown_region", "region_id": region_id, "message": message}
+    return sent
 
 
 def _normalize_mapping_rule(rule: Any) -> Any:
@@ -2800,6 +2821,57 @@ class FeagiClient:
         except Exception as e:
             logger.error(f"update_brain_region failed: {e}")
             return {"error": str(e)}
+
+    async def set_port_encoding(
+        self,
+        region_id: str,
+        area: str,
+        kind: str | None = None,
+        signed: bool | None = None,
+        frame: str | None = None,
+        positioning: str | None = None,
+        clear: bool = False,
+    ) -> dict[str, Any]:
+        """Set or clear the author ``port_encoding`` entry of one designated port.
+
+        Validates locally, resolves ``area`` (id or exact name), sends the delta with
+        ``PUT /v1/region/region`` (``{area_id: entry}``, or ``{area_id: null}`` when ``clear``)
+        and reads the region back. Returns the region's resulting entry for the port (None when
+        it has none). FEAGI answers 409 when the area is not a designated port and 400 for a
+        rejected entry; both are returned as named errors.
+        """
+        rid = region_id.strip()
+        if not rid:
+            return {"error": "region_id is required"}
+        entry: dict[str, Any] | None = None
+        if clear:
+            if any(v is not None for v in (kind, signed, frame, positioning)):
+                return {"error": "clear=True takes no kind, signed, frame or positioning"}
+        else:
+            entry = author_entry(kind, signed, frame, positioning)
+            problem = author_entry_error(entry)
+            if problem:
+                return {"error": problem}
+        (area_id,), problem = await self._resolve_known_areas(area.strip())
+        if problem:
+            return {"error": problem}
+        sent = await self.update_brain_region(rid, {"port_encoding": {area_id: entry}})
+        if "error" in sent:
+            return _port_encoding_error(sent, rid, area_id)
+        regions = await self.get_regions_members()
+        if "error" in regions:
+            return {
+                "error": "set was sent but the region could not be read back",
+                "detail": regions,
+            }
+        if rid not in regions:
+            return {"error": "unknown_region", "region_id": rid}
+        return {
+            "region_id": rid,
+            "area_id": area_id,
+            "cleared": clear,
+            "port_encoding": port_encoding_of(regions[rid], area_id),
+        }
 
     async def get_genome_file_name(self) -> dict[str, Any]:
         """GET /v1/genome/file_name — loaded genome file label."""

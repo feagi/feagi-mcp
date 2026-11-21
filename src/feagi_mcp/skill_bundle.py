@@ -78,6 +78,7 @@ TOOL_CATEGORIES: dict[str, tuple[str, ...]] = {
         "get_brain_regions",
         "get_region_circuit",
         "get_region_io_blockers",
+        "set_port_encoding",
         "create_brain_region",
         "build_circuit_from_spec",
         "validate_brain_region_hierarchy",

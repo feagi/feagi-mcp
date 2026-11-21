@@ -334,6 +334,8 @@ class FakeBrain:
         self.sent: dict[str, Any] = {}
         self.store_empty = False
         self.designated: dict[str, Any] = {}
+        self.encoding: dict[str, Any] = {}
+        self.drop_encoding = False
 
     async def get_cortical_id_name_mapping(self) -> dict[str, str]:
         return dict(self.live)
@@ -348,6 +350,9 @@ class FakeBrain:
         self.log.append(("region_update", props))
         self.region_moves_to = None
         self.designated.update({k: v for k, v in props.items() if k.startswith("designated_")})
+        if not self.drop_encoding:
+            for cid, entry in (props.get("port_encoding") or {}).items():
+                self.encoding[cid] = {**entry, "source": "author"}
         return {"message": "Brain region updated", "region_id": region_id}
 
     async def delete_cortical_area(self, cid: str) -> dict[str, Any]:
@@ -364,6 +369,7 @@ class FakeBrain:
             "region-1": {
                 "coordinate_2d": self.region_args.get("coordinates_2d"),
                 **self.designated,
+                "port_encoding": self.encoding,
             }
         }
 
@@ -1541,3 +1547,63 @@ def test_both_directions_on_one_area_is_an_error() -> None:
         {"region": REGION, "templates": [_PORT], "ports": {"inputs": ["P"], "outputs": ["P"]}}
     )
     assert any("both input and output" in e for e in report["errors"])
+
+
+# ---- port encoding in the spec
+_ENCODED_SPEC: dict[str, Any] = {
+    "region": REGION,
+    "areas": [
+        {"name": "In", "dimensions": [1, 1, 2], "position": [0, 0, 0]},
+        {"name": "Out", "dimensions": [1, 1, 2], "position": [1, 0, 0]},
+    ],
+    "ports": {"inputs": ["In"], "outputs": ["Out"]},
+    "port_encoding": {"In": {"kind": "SignedPercentage", "signed": True, "frame": "Absolute"}},
+}
+
+
+def test_spec_port_encoding_reaches_the_region_update_call() -> None:
+    report, plan = expand_spec(_ENCODED_SPEC)
+    assert report["errors"] == []
+    assert plan.port_encoding == {
+        "In": {"kind": "SignedPercentage", "signed": True, "frame": "Absolute", "positioning": None}
+    }
+    props = report["calls"][-1]["args"]["properties"]
+    assert props["designated_inputs"] == ["In"]
+    assert props["port_encoding"] == plan.port_encoding
+
+
+@pytest.mark.parametrize(
+    ("encoding", "expected"),
+    [
+        ({"Out2": {"kind": "Boolean"}}, "not a declared port"),
+        ({"In": {"kind": "Float"}}, "kind must be one of"),
+        ({"In": {"source": "wiring"}}, "unknown port_encoding field"),
+        ({"In": {}}, "at least one"),
+        ({"In": "Boolean"}, "must be an object"),
+        (["In"], "must map declared port area names"),
+    ],
+)
+def test_spec_port_encoding_errors_name_the_problem(encoding: Any, expected: str) -> None:
+    report, _ = expand_spec({**_ENCODED_SPEC, "port_encoding": encoding})
+    assert report["valid"] is False
+    assert any(expected in e for e in report["errors"]), report["errors"]
+
+
+async def test_execute_plan_sends_encoding_by_id_in_the_ports_update_and_reads_it_back() -> None:
+    _, plan = expand_spec(_ENCODED_SPEC)
+    brain = FakeBrain()
+    out = await execute_plan(brain, plan)
+    assert out["failed"] is None
+    sent = [props for kind, props in brain.log if kind == "region_update"][-1]
+    assert sent["port_encoding"]["id_In"]["kind"] == "SignedPercentage"
+    assert out["created"]["port_encoding"]["In"]["signed"] is True
+    assert brain.encoding["id_In"]["source"] == "author"
+
+
+async def test_execute_plan_fails_when_the_encoding_is_not_stored() -> None:
+    _, plan = expand_spec(_ENCODED_SPEC)
+    brain = FakeBrain()
+    brain.drop_encoding = True
+    out = await execute_plan(brain, plan)
+    assert out["failed"]["step"] == "verify declared ports"
+    assert out["failed"]["missing"] == {"port_encoding": ["id_In"]}

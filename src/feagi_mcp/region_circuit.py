@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 from feagi_mcp.cortical_id_decode import decode_cortical_id_interpretation
+from feagi_mcp.port_encoding import port_encoding_of, port_encoding_table
 
 # @cursor:ffi-safe - stable role vocabulary shared with feagi-evolutionary AreaRole.
 _ROLE_BY_IO_KIND = {"sensory": "sensory", "motor_output": "motor", "non_io": "internal"}
@@ -127,6 +128,7 @@ def summarize_region_circuit(
             "inputs": _string_list(entry, "designated_inputs"),
             "outputs": _string_list(entry, "designated_outputs"),
         },
+        "port_encoding": port_encoding_table(entry),
         "edges": {"internal": internal, "incoming": incoming, "outgoing": outgoing},
         "isolated_area_ids": [c for c in member_ids if c not in touched],
     }
@@ -196,6 +198,7 @@ def region_io_blockers(
         "region_title": entry.get("title", ""),
         "designated_input": area_id in _string_list(entry, "designated_inputs"),
         "designated_output": area_id in _string_list(entry, "designated_outputs"),
+        "port_encoding": port_encoding_of(entry, area_id),
         "can_be_input": not outgoing,
         "can_be_output": not incoming,
         "blocks_input": {"outgoing_to_outside": outgoing},

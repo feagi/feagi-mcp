@@ -61,15 +61,16 @@ with `synaptic_delay_bursts`) instead of raising the self-hold.
 Template options `ring_cpg` `wrap: false` and `servo_channel_two_rest` `exclusive: true`: see [building-circuits-placement.md](building-circuits-placement.md), "Template options".
 
 Ports: `ports` (`{inputs, outputs}`, area names) declares the interface, written to the region's
-`designated_inputs` / `designated_outputs` (`created.ports`). Template defaults: `port`
+`designated_inputs` / `designated_outputs`. Template defaults: `port`
 in (out if the block maps out of it), `onset_pulse` Onset out, `ring_cpg` ring and readouts out,
 `drive` in; `phase_window_gate` out; a direction in `ports` replaces them. None: warning.
+Port encoding (`port_encoding`): [concepts.md](concepts.md#port-encoding).
 Direction rule (FEAGI answers 409; the dry run names the mapping): an output cannot have
 an incoming mapping from outside the block, an input cannot have an outgoing one, and no area is
-both. Remedy: a relay area inside the block, one area the input, another the output.
+both. Remedy: a relay area inside the block (one input, one output).
 
-Spec keys beyond templates: `delete` (`[{src, dst}]`, removes those mappings before the new ones
-are written, so a pair can be deleted and rebuilt in one spec) and `edit_areas` (`[{name,
+Spec keys beyond templates: `delete` (`[{src, dst}]` removes those mappings before the new ones
+are written, so a pair can be rebuilt) and `edit_areas` (`[{name,
 properties}]` on live areas that are members of `region.region_id`, checked against the parameter
 schema). New areas in an existing region are ordinary `areas` entries with a `position` under
 `region: {region_id}`. A real run does not roll back deletes or edits: snapshot first.

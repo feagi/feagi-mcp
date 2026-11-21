@@ -118,12 +118,21 @@ def test_null_is_unknown_and_absent_is_reported() -> None:
 
 def test_enums_equal_shared_vocabulary() -> None:
     vocab = json.loads(VOCABULARY_PATH.read_text(encoding="utf-8"))
-    assert set(vocab) == {"code", "code_source", "kind", "frame", "positioning"}
+    assert set(vocab) == {
+        "code",
+        "code_source",
+        "kind",
+        "frame",
+        "positioning",
+        "mandatory_port_keys",
+    }
     assert list(CODE_ENUM) == vocab["code"]
     assert list(CODE_SOURCE_ENUM) == vocab["code_source"]
     assert list(KIND_ENUM) == vocab["kind"]
     assert list(FRAME_ENUM) == vocab["frame"]
     assert list(POSITIONING_ENUM) == vocab["positioning"]
+    assert isinstance(MANDATORY_PORT_KEYS, tuple)
+    assert list(MANDATORY_PORT_KEYS) == vocab["mandatory_port_keys"]
 
 
 def test_non_object_rejected() -> None:

@@ -1285,7 +1285,9 @@ async def build_circuit_from_spec(spec_json: str, dry_run: bool = True) -> dict[
     A direction given in ``ports`` replaces the template defaults (``port``: area in and out;
     ``onset_pulse``: ``<name>_Onset`` out; ``ring_cpg``: ring + readouts out, ``drive`` in when
     it is a spec area; ``phase_window_gate``: gate out). With none declared the result warns
-    "block has no declared ports" and nothing is guessed.
+    "block has no declared ports" and nothing is guessed. Optional ``port_encoding``
+    ({area name: {kind?, signed?, frame?, positioning?}}, declared ports only) sets author
+    entries in the same update; see ``set_port_encoding``.
 
     Also: ``delete`` ([{src, dst}]: remove those mappings before the new ones are written) and
     ``edit_areas`` ([{name, properties}] on live areas of ``region.region_id``, which must be an
@@ -3304,7 +3306,8 @@ async def get_region_circuit(
     ``internal``, ``incoming`` (from outside) and ``outgoing`` (to outside). A member is
     a boundary input if it is IPU or fed from outside, an output if it is OPU or feeds
     outside. ``designated`` echoes the region's own inputs/outputs lists, which cover
-    direct member areas only. ``isolated_area_ids`` have no mappings at all.
+    direct member areas only. ``port_encoding`` echoes each designated port's kind, signed,
+    frame, positioning and source (not in ``compact``). ``isolated_area_ids`` have no mappings.
 
     ``compact=True`` returns names instead of ids: members (name, dimensions) and edges
     (src, dst, scope, rules, synapse count) only, without roles or boundary lists.
@@ -3336,6 +3339,41 @@ async def get_region_io_blockers(area: str, region_id: str | None = None) -> dic
         region_id: Optional region id to check the area really belongs to it
     """
     return await feagi.get_region_io_blockers(area.strip(), region_id)
+
+
+@mcp.tool()
+async def set_port_encoding(
+    region_id: str,
+    area: str,
+    kind: str | None = None,
+    signed: bool | None = None,
+    frame: str | None = None,
+    positioning: str | None = None,
+    clear: bool = False,
+) -> dict[str, Any]:
+    """Set or clear the author encoding of a designated port of a brain region.
+
+    FEAGI derives a port's encoding from IO areas wired directly across the region boundary
+    (``source: wiring``); set one only for a port no IO area feeds directly. An author entry is
+    never overwritten by wiring. ``clear=True`` removes it so derivation resumes. The area must
+    already be a designated input or output (409 otherwise). Read entries under
+    ``port_encoding`` in ``get_brain_regions`` or ``get_region_circuit``.
+
+    Args:
+        region_id: Brain region id (from ``get_brain_regions``).
+        area: Designated port area id or exact name.
+        kind: Data type: Boolean, Percentage, Percentage2D/3D/4D, SignedPercentage,
+            SignedPercentage2D/3D/4D, CartesianPlane, Misc or PoseEstimation.
+        signed: Whether negative values are allowed.
+        frame: Absolute (value) or Incremental (change).
+        positioning: Linear or Fractional (bin layout).
+        clear: Remove the author entry; no other field may be given.
+
+    Returns:
+        ``{region_id, area_id, cleared, port_encoding}``: the region's resulting entry for the
+        port (``kind``, ``signed``, ``frame``, ``positioning``, ``source``), or null.
+    """
+    return await feagi.set_port_encoding(region_id, area, kind, signed, frame, positioning, clear)
 
 
 @mcp.tool(annotations=READ_ONLY)

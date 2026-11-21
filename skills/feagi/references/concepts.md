@@ -37,6 +37,7 @@ Each region record from `get_brain_regions()` carries:
 - `title`, `parent_region_id`, child `regions`, and member `areas` (cortical IDs).
 - `designated_inputs` / `designated_outputs`: the inputs and outputs the region declares.
 - `inputs` / `outputs`: boundary areas inferred from wiring.
+- `port_encoding`: what each designated port carries (see "Port encoding").
 - `coordinate_2d` (brain map position) and `coordinate_3d` (3D anchor).
 
 `get_region_circuit(region_id)` (or `compact=True` for names, dimensions, rules and synapse counts only) returns one region as a graph: members with roles, boundary
@@ -46,6 +47,25 @@ boundary output when it is an OPU or sends a mapping outside. `isolated_area_ids
 with no mappings at all.
 
 `validate_brain_region_hierarchy()` checks the tree invariants Brain Visualizer relies on.
+
+## Port encoding
+
+A designated port's signal has four fields: `kind` (data type, such as `Boolean`, `Percentage`
+or `SignedPercentage`), `signed` (negative values allowed), `frame` (`Absolute` value or
+`Incremental` change) and `positioning` (`Linear` or `Fractional` bin layout). Region reads
+(`get_brain_regions()`, `get_region_circuit()`) return them under `port_encoding`, keyed by area
+id, each entry with a `source`:
+
+- `wiring`: FEAGI derives the entry from the IPU/OPU areas wired directly across the region
+  boundary. A field on which those peers disagree, or that no peer states, is `null` (unknown).
+- `author`: set with `set_port_encoding(region_id, area, kind=..., signed=..., frame=...,
+  positioning=...)`. Wiring never overwrites it; `clear=True` removes it so derivation resumes.
+
+Set an author entry when no IO area feeds the port directly (for example a port fed through an
+internal area), because there is nothing to derive from. The area must already be designated
+(FEAGI answers 409 otherwise); a value outside the vocabulary is a 400 and is checked locally
+first. `build_circuit_from_spec` takes the same entries in a `port_encoding` key. The entries
+pre-fill the port rows suggested for a Hub datasheet ([hub-block-datasheet.md](hub-block-datasheet.md)).
 
 ## Cortical areas and their types
 

@@ -31,7 +31,7 @@ MAX_BENCH_TESTS = 32
 MAX_MISTAKES = 20
 MAX_NOTES = 10
 
-#: The one shared vocabulary (code, code_source, kind, frame, positioning). The same file is
+#: The one shared vocabulary (the enums and the mandatory port keys). The same file is
 #: copied into each repo that validates a datasheet; a unit test asserts the enums equal it.
 VOCABULARY_PATH = Path(__file__).with_name("datasheet-vocabulary.json")
 VOCABULARY: dict[str, tuple[str, ...]] = {
@@ -88,19 +88,7 @@ AUTHOR_TOP_KEYS = frozenset(
 GENERATED_TOP_KEYS = frozenset({"level", "burst", "dependencies"})
 #: Mandatory author keys per port: the key must be present; ``None`` means unknown and may
 #: publish; an absent key blocks publish (see :func:`missing_mandatory_keys`).
-MANDATORY_PORT_KEYS = (
-    "function",
-    "code",
-    "code_source",
-    "kind",
-    "signed",
-    "frame",
-    "positioning",
-    "hold",
-    "zero",
-    "positive",
-    "if_silent",
-)
+MANDATORY_PORT_KEYS = VOCABULARY["mandatory_port_keys"]
 _OPTIONAL_PORT_KEYS = ("quantity", "unit", "range", "min_bins_that_pass", "fits")
 AUTHOR_PORT_KEYS = frozenset({"name", *MANDATORY_PORT_KEYS, *_OPTIONAL_PORT_KEYS})
 GENERATED_PORT_KEYS = frozenset({"area_id", "dir", "shape", "drive", "latency_bursts", "bins"})
