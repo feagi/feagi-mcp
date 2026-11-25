@@ -46,7 +46,11 @@ from feagi_mcp.memory_diagnostics import (
     memory_area_diagnostics,
     rematch_rate,
 )
-from feagi_mcp.mujoco_scene_control import MujocoSceneControl, scene_object_payload
+from feagi_mcp.mujoco_scene_control import (
+    MujocoSceneControl,
+    fence_verdict,
+    scene_object_payload,
+)
 from feagi_mcp.placement_policy import (
     LAYOUT_XY_PLANE,
     MIN_ANCHOR_SEPARATION_VOXELS,
@@ -1043,6 +1047,9 @@ async def schedule_stimulus(
     burst, and fires an entry that is already late on the next burst. Returns ``schedule_id``,
     ``start_burst`` and ``end_burst`` (``end_burst`` is null for a repeating schedule). Stop a
     schedule with ``cancel_stimulus``; list active ones with ``get_stimulus_schedule``.
+    An entry fires once, at its ``burst_offset``; FEAGI's request has no per-entry duration, so a
+    ``bursts`` key is rejected. To hold a pattern for N bursts, list one entry per burst
+    (offsets k..k+N-1; put them in ``steps_file`` to cost no tokens) or use ``hold_stimulus``.
     To hold an area on, use one entry at offset 0 with ``repeat_period_bursts=1`` and cancel it
     with ``cancel_stimulus``.
 
@@ -1244,8 +1251,9 @@ async def build_circuit_from_spec(spec_json: str, dry_run: bool = True) -> dict[
     """Create a region, its areas, morphologies and mappings from one JSON spec.
 
     Spec keys: ``region`` ({title, coordinates_2d, coordinates_3d, parent_region_id?} or
-    {region_id}), ``areas`` ([{name, dimensions, position?, properties?}]), ``morphologies``,
-    ``mappings`` ([{src, dst, rules, replace?}]) and ``templates`` (expanded in the spec):
+    {region_id}), ``areas`` ([{name, dimensions, position?, properties?, psp_uniform?}]),
+    ``morphologies``, ``mappings`` ([{src, dst, rules, replace?}]) and ``templates``
+    (expanded in the spec):
 
     - ``port``: [1,1,N] leaky integrator; ``threshold``, ``psp``, ``input`` (and ``leak``,
       ``refractory``); self-hold mapping sized by threshold - input <= s < threshold.
@@ -1263,6 +1271,15 @@ async def build_circuit_from_spec(spec_json: str, dry_run: bool = True) -> dict[
       ``*_psc``/``*_psp`` and ``inhibit_psc`` (default sized) are checked: enable alone < T,
       pulse alone < T (>= T without enable), enable + pulse >= T, enable + pulse - inhibition < T
       (``V <- V (1 - leak) + I``, steady state); a violation fails the dry run.
+
+    ``replace`` (per mapping, default false): a mapping whose source or destination is an
+    existing area keeps the rules already on that edge and appends the spec's rules, so running
+    the same spec twice doubles the rule. Set ``replace: true`` to send only the spec's rules
+    (as ``update_cortical_mapping`` does), or list the edge under ``delete`` first.
+
+    ``psp_uniform`` (per area) sets ``neuron_psp_uniform_distribution``. Areas keep FEAGI's
+    default (off: PSP is split over fan-out); the result warns when an area with two or more
+    incoming mappings is fed by such areas, since AND-style gates then fail silently.
 
     Memory and plasticity: an area may set ``cortical_type: "MEMORY"`` (id must come back with
     prefix ``m``), memory ``properties`` (``temporal_depth``, ``neuron_init_lifespan``,
@@ -3777,7 +3794,9 @@ async def brain_visualizer_api(
 
 
 @mcp.tool()
-async def queue_amalgamation_by_payload(genome_json: str) -> Any:
+async def queue_amalgamation_by_payload(
+    genome_json: str, fit_plan: dict[str, Any] | None = None
+) -> Any:
     """Queue an incoming genome for amalgamation (POST /v1/genome/amalgamation_by_payload).
 
     ``genome_json`` must be a UTF-8 JSON string of the **full** genome document (same as
@@ -3786,10 +3805,22 @@ async def queue_amalgamation_by_payload(genome_json: str) -> Any:
     ``confirm_amalgamation_destination`` with the returned ``amalgamation_id`` and a
     parent ``brain_region_id`` (typically ``brain_regions_root`` from health_check).
 
+    ``fit_plan`` (optional) sets the dimensions the guest's areas are created at, so they
+    are born at the right size on confirm (no later rebuild). Shape:
+    ``{"areas": [{"cortical_id": "<guest id, base64>", "dimensions": [x, y, z]}]}``; every
+    dimension is at least 1, IO areas keep their size, and an invalid plan is refused (400)
+    with nothing queued. ``circuit_size`` reflects the fitted sizes. Without it the guest
+    is imported as published. The confirm call is the same either way.
+
     Returns:
         API response, usually ``message`` and ``amalgamation_id``.
     """
     body = json.loads(genome_json)
+    if fit_plan is not None:
+        return await feagi.brain_visualizer_operation(
+            "post_genome_amalgamation_by_payload_with_fit",
+            json_body={"genome": body, "fit_plan": fit_plan},
+        )
     return await feagi.brain_visualizer_operation(
         "post_genome_amalgamation_by_payload",
         json_body=body,
@@ -4945,6 +4976,34 @@ async def lint_motor_channels(
     )
 
 
+async def with_fence_verdict(result: dict[str, Any], before: dict[str, Any]) -> dict[str, Any]:
+    """Add the controller's fence verdict for a command that was just sent.
+
+    The controller counts a rejected target when its loop handles the motor packet, a few
+    bursts after the stimulation, so the second read waits that long (capped at 2 s).
+    """
+    cfg = await feagi.get_burst_engine_config()
+    interval = cfg.get("burst_interval_seconds") if isinstance(cfg, dict) else None
+    interval = float(interval) if isinstance(interval, (int, float)) and interval > 0 else 0.1
+    waited = min(max(5 * interval, 0.25), 2.0)
+    await asyncio.sleep(waited)
+    after = await MujocoSceneControl().fence_status()
+    fence = fence_verdict(before, after, waited)
+    result = {**result, "fence": fence}
+    if fence.get("rejected"):
+        mm = fence.get("violation_mm")
+        result.update(
+            ok=False,
+            success=False,
+            violation_mm=mm,
+            error=(
+                f"the controller's safety fence rejected this move (violation {mm} mm); "
+                "the arm did not move"
+            ),
+        )
+    return result
+
+
 @mcp.tool()
 async def send_motor_command(
     agent_id: str,
@@ -4952,7 +5011,7 @@ async def send_motor_command(
     fraction: float | None = None,
     value: float | None = None,
 ) -> dict[str, Any]:
-    """Command one robot channel to a fraction or a physical value via OPU stimulation.
+    """Command one robot channel to a fraction or value via OPU stimulation (fence-checked).
 
     This is a high-level convenience tool that:
     1. Looks up the channel's OPU area and index from the agent's device registrations.
@@ -4985,11 +5044,18 @@ async def send_motor_command(
 
     Returns:
         Stimulation result with resolved cortical area, voxels, the bin, and the fraction
-        (and value) that bin decodes to.
+        (and value) that bin decodes to. When a MuJoCo controller with an enabled Cartesian
+        fence is reachable, the result also has ``fence`` (rejection count before and after,
+        and ``rejected``). If the fence refused the move, ``ok`` and ``success`` are false and
+        ``error`` / ``violation_mm`` say by how much; the arm did not move. The controller
+        counts a rejection asynchronously, so the call waits a few bursts (``fence.waited_s``)
+        before reading it. ``fence.checked`` is false when the controller cannot be read.
     """
-    return annotate_with_experiment_status(
-        await feagi.send_motor_command(agent_id, joint_name, fraction=fraction, value=value)
-    )
+    before = await MujocoSceneControl().fence_status()
+    result = await feagi.send_motor_command(agent_id, joint_name, fraction=fraction, value=value)
+    if result.get("success"):
+        result = await with_fence_verdict(result, before)
+    return annotate_with_experiment_status(result)
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -5434,8 +5500,10 @@ async def move_io_area_groups(
 
 
 @mcp.tool(annotations=READ_ONLY)
-async def get_mujoco_scene_config(controller_id: str = "mujoco") -> dict[str, Any]:
-    """Read live MuJoCo settings: boundary, objects, cameras, embodiment, feedback, rate.
+async def get_mujoco_scene_config(
+    controller_id: str = "mujoco", section: str | None = None
+) -> dict[str, Any]:
+    """Read live MuJoCo settings (``section="fence"`` for the compact fence status only).
 
     Call this before replacing a list (objects, cameras, embodiment bodies, feedback
     rules) so an edit keeps what is already in the scene. Positions are millimeters.
@@ -5443,8 +5511,14 @@ async def get_mujoco_scene_config(controller_id: str = "mujoco") -> dict[str, An
     Object friction is optional ``[sliding, torsional, rolling]``. Omit it to keep
     MuJoCo's default contact. ``get_loop_timing`` is the controller loop's per-phase
     timing (mean, p95, max ms), overruns and real-time factor over the last 10 s.
+
+    The full read is several KB. ``section="fence"`` returns only the Cartesian fence status
+    (``supported``, ``fence_enabled``, ``ee_pose_mm``, ``fence_violation_mm``,
+    ``fence_violated``, ``fence_rejection_count``, ``last_rejection_at``,
+    ``last_rejection_violation_mm``, ``workspace_min_mm``, ``workspace_max_mm``); any section
+    name (``status``, ``list_scene_objects``, ...) returns just that section.
     """
-    return await MujocoSceneControl().read_config(controller_id)
+    return await MujocoSceneControl().read_config(controller_id, section)
 
 
 @mcp.tool()
@@ -5531,14 +5605,23 @@ async def add_mujoco_scene_object(
 
 
 @mcp.tool()
-async def set_mujoco_safety_boundary(
+async def set_safety_boundary(
     enabled: bool,
     workspace_min_mm: list[float] | None = None,
     workspace_max_mm: list[float] | None = None,
     center_approach_mm_s: float | None = None,
     controller_id: str = "mujoco",
+    frame: str | None = None,
+    pain: bool | None = None,
 ) -> dict[str, Any]:
-    """Turn the Cartesian safety box on or off in the running MuJoCo scene.
+    """Set the safety boundary (Cartesian box) for the experiment and robot.
+
+    There is one boundary per experiment and robot. The real arm and every sim
+    enforce it. It is stored with its ``frame`` (``embodiment_base`` or ``world``;
+    when omitted, a new box takes its frame from the robot model) and a ``pain``
+    flag (default on: the brain receives pain when the robot presses against the
+    boundary). The user can also edit it in Studio under Embodiment settings >
+    Safety boundary.
 
     When ``enabled`` is true, ``workspace_min_mm`` and ``workspace_max_mm`` are
     required ``[x, y, z]`` corners in millimeters, and max must exceed min on
@@ -5555,6 +5638,10 @@ async def set_mujoco_safety_boundary(
         body["workspace_max_mm"] = workspace_max_mm
         if center_approach_mm_s is not None:
             body["center_approach_mm_s"] = center_approach_mm_s
+    if frame is not None:
+        body["frame"] = frame
+    if pain is not None:
+        body["pain"] = pain
     return await MujocoSceneControl().command("set_cartesian_safety_boundary", body, controller_id)
 
 

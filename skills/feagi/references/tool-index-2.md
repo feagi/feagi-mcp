@@ -77,7 +77,7 @@ Part 2 of 2. Other parts: [tool-index.md](tool-index.md).
 - `list_agent_capabilities_all()`: Raw multi-agent capabilities payload (`/v1/agent/capabilities/all`).
 - `compare_device_registration_store()`: Compare session vs descriptor device-registration stores (compact).
 - `get_agent_connection_endpoints()`: Get the live FEAGI agent connection endpoints (ZMQ/WebSocket) and burst rate.
-- `send_motor_command()`: Command one robot channel to a fraction or a physical value via OPU stimulation.
+- `send_motor_command()`: Command one robot channel to a fraction or value via OPU stimulation (fence-checked).
 - `auto_polarity_probe()`: Empirically discover OPU column -> sensor direction by force-firing each column.
 - `list_controller_bridges()`: List all active controller bridges (xARM, MuJoCo, ROS2, etc.) discovered on this machine.
 - `get_embodiment_status()`: Get the robot controller's own status (the controller's `GET /status`).
@@ -92,10 +92,10 @@ Part 2 of 2. Other parts: [tool-index.md](tool-index.md).
 
 ## MuJoCo scene and simulator packs
 
-- `get_mujoco_scene_config()`: Read live MuJoCo settings: boundary, objects, cameras, embodiment, feedback, rate.
+- `get_mujoco_scene_config()`: Read live MuJoCo settings (`section="fence"` for the compact fence status only).
 - `configure_mujoco_scene()`: Apply one MuJoCo settings action on the running controller.
 - `add_mujoco_scene_object()`: Add one primitive to the running MuJoCo scene without removing the others.
-- `set_mujoco_safety_boundary()`: Turn the Cartesian safety box on or off in the running MuJoCo scene.
+- `set_safety_boundary()`: Set the safety boundary (Cartesian box) for the experiment and robot.
 - `composer_list_simulator_packs()`: Query Composer public catalog of shared simulator asset packs (GCS-backed).
 - `composer_get_simulator_pack_versions()`: List semver versions indexed for `pack_id` on Composer.
 - `composer_get_simulator_pack_resolved()`: Resolved pack manifest with per-file HTTPS URLs (include.xml, LICENSE, etc.).

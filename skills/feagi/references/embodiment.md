@@ -116,7 +116,7 @@ These change the **running** MuJoCo simulation, the same settings as the desktop
 Settings dialog. They are not cortical areas and not asset-pack XML.
 
 - Read first: `get_mujoco_scene_config()`.
-- **Safety box**: `set_mujoco_safety_boundary(enabled, workspace_min_mm, workspace_max_mm)`.
+- **Safety box**: `set_safety_boundary(enabled, workspace_min_mm, workspace_max_mm, frame, pain)`.
   Corners are millimeters `[x, y, z]`. If the user gives no numbers, choose a box around the
   robot and say what you chose.
 - **Add an object**: `add_mujoco_scene_object(object_id, shape, size_mm, position_mm, dynamic, mass_g, friction)`.
@@ -137,6 +137,11 @@ Settings dialog. They are not cortical areas and not asset-pack XML.
   for one robot do not apply to another robot in the same experiment.
 - If a tool reports a missing control URL, ask the user to restart the MuJoCo controller.
   Never invent MJCF as a substitute.
+- With Environment Feedback on, the simulator controller fires its Shock input when it rejects
+  a move at the safety box (`nrs-embodiments/controllers/simulators/mujoco/cartesian_safety_state.py`).
+  Wire that Shock through the body adapter to a `bump` port, so exploring or babbling circuits
+  can back off innately instead of repeating rejected moves. Check the platform controller for an
+  equivalent before relying on it on a real body (unverified).
 
 ## Simulator asset packs
 

@@ -1069,5 +1069,12 @@
         "direction": "Quaternion component qw, raw -1..1."
       }
     }
+  ],
+  "role_sets": [
+    {
+      "id": "arm_joints",
+      "limb": "arm",
+      "description": "All joints of one serial or human arm, base to tip."
+    }
   ]
 }

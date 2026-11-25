@@ -1,0 +1,950 @@
+{
+ "format": "nrs.port_fit_datasheet_fixture/1",
+ "note": "Shared fixture for the optional port fit fields body_role, size_rule and precision, checked identically by the datasheet validators in feagi-mcp, nrs-composer and feagi-desktop. Each case is a datasheet author document. A per_role size rule over joints_used or joints_required needs a non-empty body set of that name. valid=false means a validator must refuse it with an error whose path or text contains error_path. Single home: nrs-embodiments/schemas; byte-equal copies in the three repos.",
+ "cases": [
+  {
+   "name": "valid_no_fit_fields_unchanged",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in"
+     }
+    ]
+   },
+   "valid": true,
+   "error_path": null
+  },
+  {
+   "name": "valid_body_role_id",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "body_role": "arm.elbow_bend"
+     }
+    ]
+   },
+   "valid": true,
+   "error_path": null
+  },
+  {
+   "name": "valid_body_role_set",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "body_role": "arm_joints"
+     }
+    ]
+   },
+   "valid": true,
+   "error_path": null
+  },
+  {
+   "name": "valid_fixed_size_no_role",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "size_rule": {
+       "x": 2,
+       "y": 1,
+       "z": 8
+      }
+     }
+    ]
+   },
+   "valid": true,
+   "error_path": null
+  },
+  {
+   "name": "valid_per_role_joints_used",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "body_role": "arm_joints",
+      "size_rule": {
+       "x": {
+        "per_role": "joints_used",
+        "cells_each": 4
+       },
+       "y": 1,
+       "z": 1
+      }
+     }
+    ],
+    "body": {
+     "format": "nrs.body/1",
+     "roles_version": "1.0",
+     "family": "serial_arm",
+     "joints_used": [
+      "arm.elbow_bend"
+     ],
+     "joints_required": [
+      "arm.elbow_bend"
+     ]
+    }
+   },
+   "valid": true,
+   "error_path": null
+  },
+  {
+   "name": "valid_per_role_joints_required",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "body_role": "arm.elbow_bend",
+      "size_rule": {
+       "x": 1,
+       "y": {
+        "per_role": "joints_required",
+        "cells_each": 2
+       },
+       "z": 3
+      }
+     }
+    ],
+    "body": {
+     "format": "nrs.body/1",
+     "roles_version": "1.0",
+     "family": "serial_arm",
+     "joints_used": [
+      "arm.elbow_bend"
+     ],
+     "joints_required": [
+      "arm.elbow_bend"
+     ]
+    }
+   },
+   "valid": true,
+   "error_path": null
+  },
+  {
+   "name": "valid_per_role_gripper",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "body_role": "arm.wrist_flexion",
+      "size_rule": {
+       "x": 1,
+       "y": 1,
+       "z": {
+        "per_role": "gripper",
+        "cells_each": 1
+       }
+      }
+     }
+    ]
+   },
+   "valid": true,
+   "error_path": null
+  },
+  {
+   "name": "valid_precision_measured",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "precision": {
+       "deg_per_bin": 1.5,
+       "source": "measured"
+      }
+     }
+    ]
+   },
+   "valid": true,
+   "error_path": null
+  },
+  {
+   "name": "valid_precision_default_whole",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "precision": {
+       "deg_per_bin": 2,
+       "source": "default"
+      }
+     }
+    ]
+   },
+   "valid": true,
+   "error_path": null
+  },
+  {
+   "name": "valid_all_three",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "body_role": "arm_joints",
+      "size_rule": {
+       "x": 1,
+       "y": 1,
+       "z": {
+        "per_role": "joints_used",
+        "cells_each": 8
+       }
+      },
+      "precision": {
+       "deg_per_bin": 0.5,
+       "source": "measured"
+      }
+     }
+    ],
+    "body": {
+     "format": "nrs.body/1",
+     "roles_version": "1.0",
+     "family": "serial_arm",
+     "joints_used": [
+      "arm.elbow_bend"
+     ],
+     "joints_required": [
+      "arm.elbow_bend"
+     ]
+    }
+   },
+   "valid": true,
+   "error_path": null
+  },
+  {
+   "name": "invalid_body_role_unknown",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "body_role": "arm.not_a_role"
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "ports[0].body_role"
+  },
+  {
+   "name": "invalid_body_role_not_text",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "body_role": 5
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "ports[0].body_role"
+  },
+  {
+   "name": "invalid_body_role_tool_position_not_defined",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "body_role": "tool_position"
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "ports[0].body_role"
+  },
+  {
+   "name": "invalid_body_role_null",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "body_role": null
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "ports[0].body_role"
+  },
+  {
+   "name": "invalid_size_rule_expression_x",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "size_rule": {
+       "x": "2*joints_used",
+       "y": 1,
+       "z": 1
+      }
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "size_rule.x"
+  },
+  {
+   "name": "invalid_size_rule_expression_all_axes",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "size_rule": {
+       "x": "2*joints_used",
+       "y": "joints_used+1",
+       "z": "len(joints)"
+      }
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "size_rule.y"
+  },
+  {
+   "name": "invalid_size_rule_text",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "size_rule": "2*joints_used"
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "ports[0].size_rule"
+  },
+  {
+   "name": "invalid_size_rule_list",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "size_rule": [
+       1,
+       1,
+       1
+      ]
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "ports[0].size_rule"
+  },
+  {
+   "name": "invalid_size_rule_null",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "size_rule": null
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "ports[0].size_rule"
+  },
+  {
+   "name": "invalid_size_rule_missing_axis",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "size_rule": {
+       "x": 1,
+       "y": 1
+      }
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "size_rule.z"
+  },
+  {
+   "name": "invalid_size_rule_extra_key",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "size_rule": {
+       "x": 1,
+       "y": 1,
+       "z": 1,
+       "w": 1
+      }
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "size_rule.w"
+  },
+  {
+   "name": "invalid_size_rule_zero",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "size_rule": {
+       "x": 0,
+       "y": 1,
+       "z": 1
+      }
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "size_rule.x"
+  },
+  {
+   "name": "invalid_size_rule_negative",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "size_rule": {
+       "x": 1,
+       "y": -3,
+       "z": 1
+      }
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "size_rule.y"
+  },
+  {
+   "name": "invalid_size_rule_float",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "size_rule": {
+       "x": 1,
+       "y": 1,
+       "z": 2.5
+      }
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "size_rule.z"
+  },
+  {
+   "name": "invalid_size_rule_whole_float",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "size_rule": {
+       "x": 2.0,
+       "y": 1,
+       "z": 1
+      }
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "size_rule.x"
+  },
+  {
+   "name": "invalid_size_rule_bool",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "size_rule": {
+       "x": true,
+       "y": 1,
+       "z": 1
+      }
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "size_rule.x"
+  },
+  {
+   "name": "invalid_size_rule_numeric_text",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "size_rule": {
+       "x": 1,
+       "y": "4",
+       "z": 1
+      }
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "size_rule.y"
+  },
+  {
+   "name": "invalid_per_role_without_body_role",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "size_rule": {
+       "x": {
+        "per_role": "joints_used",
+        "cells_each": 2
+       },
+       "y": 1,
+       "z": 1
+      }
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "ports[0].body_role"
+  },
+  {
+   "name": "invalid_per_role_unknown_set",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "body_role": "arm_joints",
+      "size_rule": {
+       "x": {
+        "per_role": "joints",
+        "cells_each": 2
+       },
+       "y": 1,
+       "z": 1
+      }
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "per_role"
+  },
+  {
+   "name": "invalid_per_role_expression",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "body_role": "arm_joints",
+      "size_rule": {
+       "x": {
+        "per_role": "2*joints_used",
+        "cells_each": 2
+       },
+       "y": 1,
+       "z": 1
+      }
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "per_role"
+  },
+  {
+   "name": "invalid_per_role_cells_zero",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "body_role": "arm_joints",
+      "size_rule": {
+       "x": {
+        "per_role": "joints_used",
+        "cells_each": 0
+       },
+       "y": 1,
+       "z": 1
+      }
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "cells_each"
+  },
+  {
+   "name": "invalid_per_role_cells_text",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "body_role": "arm_joints",
+      "size_rule": {
+       "x": {
+        "per_role": "joints_used",
+        "cells_each": "2*3"
+       },
+       "y": 1,
+       "z": 1
+      }
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "cells_each"
+  },
+  {
+   "name": "invalid_per_role_extra_key",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "body_role": "arm_joints",
+      "size_rule": {
+       "x": {
+        "per_role": "joints_used",
+        "cells_each": 2,
+        "scale": 3
+       },
+       "y": 1,
+       "z": 1
+      }
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "size_rule.x.scale"
+  },
+  {
+   "name": "invalid_per_role_missing_cells",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "body_role": "arm_joints",
+      "size_rule": {
+       "x": {
+        "per_role": "joints_used"
+       },
+       "y": 1,
+       "z": 1
+      }
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "cells_each"
+  },
+  {
+   "name": "invalid_precision_zero",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "precision": {
+       "deg_per_bin": 0,
+       "source": "measured"
+      }
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "deg_per_bin"
+  },
+  {
+   "name": "invalid_precision_negative",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "precision": {
+       "deg_per_bin": -1,
+       "source": "measured"
+      }
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "deg_per_bin"
+  },
+  {
+   "name": "invalid_precision_text",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "precision": {
+       "deg_per_bin": "1.5",
+       "source": "measured"
+      }
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "deg_per_bin"
+  },
+  {
+   "name": "invalid_precision_bool",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "precision": {
+       "deg_per_bin": true,
+       "source": "default"
+      }
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "deg_per_bin"
+  },
+  {
+   "name": "invalid_precision_bad_source",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "precision": {
+       "deg_per_bin": 1,
+       "source": "guessed"
+      }
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "precision.source"
+  },
+  {
+   "name": "invalid_precision_missing_source",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "precision": {
+       "deg_per_bin": 1
+      }
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "precision.source"
+  },
+  {
+   "name": "invalid_precision_extra_key",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "precision": {
+       "deg_per_bin": 1,
+       "source": "default",
+       "note": "x"
+      }
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "precision.note"
+  },
+  {
+   "name": "invalid_precision_not_object",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "precision": 1.5
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "ports[0].precision"
+  },
+  {
+   "name": "invalid_precision_null",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "precision": null
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "ports[0].precision"
+  },
+  {
+   "name": "invalid_per_role_joints_used_without_body",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "body_role": "arm_joints",
+      "size_rule": {
+       "x": {
+        "per_role": "joints_used",
+        "cells_each": 2
+       },
+       "y": 1,
+       "z": 1
+      }
+     }
+    ]
+   },
+   "valid": false,
+   "error_path": "per_role"
+  },
+  {
+   "name": "invalid_per_role_joints_used_empty_set",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "body_role": "arm_joints",
+      "size_rule": {
+       "x": {
+        "per_role": "joints_used",
+        "cells_each": 2
+       },
+       "y": 1,
+       "z": 1
+      }
+     }
+    ],
+    "body": {
+     "format": "nrs.body/1",
+     "roles_version": "1.0",
+     "family": "serial_arm",
+     "joints_used": [],
+     "joints_required": [
+      "arm.elbow_bend"
+     ]
+    }
+   },
+   "valid": false,
+   "error_path": "per_role"
+  },
+  {
+   "name": "invalid_per_role_joints_required_not_listed",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "body_role": "arm_joints",
+      "size_rule": {
+       "x": 1,
+       "y": {
+        "per_role": "joints_required",
+        "cells_each": 2
+       },
+       "z": 1
+      }
+     }
+    ],
+    "body": {
+     "format": "nrs.body/1",
+     "roles_version": "1.0",
+     "family": "serial_arm",
+     "joints_used": [
+      "arm.elbow_bend"
+     ]
+    }
+   },
+   "valid": false,
+   "error_path": "per_role"
+  },
+  {
+   "name": "invalid_per_role_joints_required_empty_set",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "body_role": "arm_joints",
+      "size_rule": {
+       "x": 1,
+       "y": {
+        "per_role": "joints_required",
+        "cells_each": 2
+       },
+       "z": 1
+      }
+     }
+    ],
+    "body": {
+     "format": "nrs.body/1",
+     "roles_version": "1.0",
+     "family": "serial_arm",
+     "joints_used": [
+      "arm.elbow_bend"
+     ],
+     "joints_required": []
+    }
+   },
+   "valid": false,
+   "error_path": "per_role"
+  },
+  {
+   "name": "valid_per_role_joints_used_with_body",
+   "datasheet": {
+    "format": "feagi.datasheet/1",
+    "ports": [
+     {
+      "name": "p_in",
+      "body_role": "arm_joints",
+      "size_rule": {
+       "x": {
+        "per_role": "joints_used",
+        "cells_each": 2
+       },
+       "y": 1,
+       "z": 1
+      }
+     }
+    ],
+    "body": {
+     "format": "nrs.body/1",
+     "roles_version": "1.0",
+     "family": "serial_arm",
+     "joints_used": [
+      "arm.elbow_bend"
+     ]
+    }
+   },
+   "valid": true,
+   "error_path": null
+  }
+ ]
+}

@@ -1607,3 +1607,61 @@ async def test_execute_plan_fails_when_the_encoding_is_not_stored() -> None:
     out = await execute_plan(brain, plan)
     assert out["failed"]["step"] == "verify declared ports"
     assert out["failed"]["missing"] == {"port_encoding": ["id_In"]}
+
+
+def test_area_psp_uniform_field_sets_the_property_and_conflicts_fail() -> None:
+    spec = {
+        "region": REGION,
+        "areas": [{"name": "A", "dimensions": [1, 1, 1], "psp_uniform": True}],
+    }
+    report, plan = expand_spec(spec)
+    assert report["valid"], report["errors"]
+    assert plan.areas[0]["properties"]["neuron_psp_uniform_distribution"] is True
+    spec["areas"][0]["properties"] = {"neuron_psp_uniform_distribution": False}
+    assert not expand_spec(spec)[0]["valid"]
+
+
+def _gate_spec(uniform: bool | None) -> dict[str, Any]:
+    def area(name: str) -> dict[str, Any]:
+        a: dict[str, Any] = {"name": name, "dimensions": [1, 1, 1]}
+        if uniform is not None:
+            a["psp_uniform"] = uniform
+        return a
+
+    rule = [{"morphology": "block_to_block", "psc": 1}]
+    return {
+        "region": REGION,
+        "areas": [area("A"), area("B"), {"name": "Gate", "dimensions": [1, 1, 1]}],
+        "mappings": [
+            {"src": "A", "dst": "Gate", "rules": rule},
+            {"src": "B", "dst": "Gate", "rules": rule},
+        ],
+    }
+
+
+def test_gate_fed_by_split_psp_areas_warns_and_uniform_does_not() -> None:
+    warned = expand_spec(_gate_spec(None))[0]["warnings"]
+    assert any("'Gate'" in w and "psp_uniform" in w for w in warned)
+    quiet = expand_spec(_gate_spec(True))[0]["warnings"]
+    assert not any("psp_uniform" in w for w in quiet)
+
+
+async def test_spec_mapping_on_a_live_edge_appends_unless_replace() -> None:
+    def spec(replace: bool) -> dict[str, Any]:
+        return {
+            "region": {"region_id": "R1"},
+            "mappings": [
+                {
+                    "src": "Old",
+                    "dst": "Other",
+                    "replace": replace,
+                    "rules": [{"morphology": "block_to_block", "psc": 1}],
+                }
+            ],
+        }
+
+    for replace, expected in ((False, 2), (True, 1)):
+        _, plan = expand_spec(spec(replace))
+        brain = FakeBrain(existing={"id_Old": "Old", "id_Other": "Other"})
+        await execute_plan(brain, plan)
+        assert ("mapping", ("id_Old", "id_Other", expected)) in brain.log

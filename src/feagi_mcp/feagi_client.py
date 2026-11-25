@@ -4220,6 +4220,8 @@ class FeagiClient:
         same burst. Returns ``{schedule_id, start_burst, end_burst}``; ``end_burst`` is ``None``
         for a repeating schedule.
 
+        An entry fires once; a ``bursts`` key is rejected (FEAGI has no per-entry duration).
+
         ``repeat_period_bursts`` (optional, int > the largest ``burst_offset``) replays the
         entries at ``offset + k * period`` until ``cancel_stimulus``.
 
@@ -4246,6 +4248,14 @@ class FeagiClient:
             for i, entry in enumerate(entries):
                 if not isinstance(entry, dict):
                     return {"success": False, "error": f"entries[{i}] must be an object"}
+                if "bursts" in entry:
+                    return {
+                        "success": False,
+                        "error": f"entries[{i}].bursts is not supported: FEAGI fires an entry "
+                        "once at its burst_offset and has no per-entry duration. List one entry "
+                        "per burst (consecutive burst_offset values, e.g. from steps_file), or "
+                        "use hold_stimulus",
+                    }
                 offset = entry.get("burst_offset")
                 if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
                     return {

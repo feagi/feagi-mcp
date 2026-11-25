@@ -82,7 +82,9 @@ re-measure with `get_runtime_metrics(measure_s=10)` before sizing a real run.
   `all_to_all` to 40 targets delivers 0.75 each, below a threshold of 1, and the targets
   stay silent with no error. Recognize it with `list_area_neuron_states()`: membrane
   potentials sit just under threshold. Fix with `update_cortical_area()` setting
-  `neuron_psp_uniform_distribution` true on the source, or raise the PSC multiplier.
+  `neuron_psp_uniform_distribution` true on the source, or raise the PSC multiplier. In
+  `build_circuit_from_spec`, set `psp_uniform: true` on the area; the dry run warns when a
+  gate with two or more incoming mappings is fed by areas left at the default.
 - **Positional servo depth is pinned by the agent.** The agent registers each servo OPU with
   its own depth (commonly 20). Resizing the OPU deeper in the genome drops it from the motor
   feed: the area fires but no packets reach the robot. Finer joint resolution comes from

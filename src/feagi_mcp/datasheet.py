@@ -62,6 +62,10 @@ for _role in _BODY_ROLES["roles"]:
     for _seg in _BODY_ROLES["segments"]:
         if _seg["limb"] == _role["limb"]:
             BODY_JOINT_FAMILIES[f"{_seg['id']}.{_motion}"] = frozenset(_role["families"])
+#: Valid ``body_role`` values on a port: a role id or a role-set id.
+BODY_PORT_ROLES = frozenset(r["id"] for r in _BODY_ROLES["roles"]) | frozenset(
+    s["id"] for s in _BODY_ROLES.get("role_sets", [])
+)
 BODY_GRIPPER_ENUM = ("none", "optional", "required")
 MAX_BODY_JOINTS = 64
 MAX_BODY_USE_CASES = 8
@@ -91,7 +95,15 @@ GENERATED_TOP_KEYS = frozenset({"level", "burst", "dependencies"})
 MANDATORY_PORT_KEYS = VOCABULARY["mandatory_port_keys"]
 _OPTIONAL_PORT_KEYS = ("quantity", "unit", "range", "min_bins_that_pass", "fits")
 AUTHOR_PORT_KEYS = frozenset({"name", *MANDATORY_PORT_KEYS, *_OPTIONAL_PORT_KEYS})
-GENERATED_PORT_KEYS = frozenset({"area_id", "dir", "shape", "drive", "latency_bursts", "bins"})
+#: Port fit fields: extracted at publish, never typed; accepted when present and
+#: checked by ``_validate_port_fit``.
+PORT_FIT_KEYS = ("body_role", "size_rule", "precision")
+SIZE_AXES = ("x", "y", "z")
+SIZE_PER_ROLE_SETS = ("joints_used", "joints_required", "gripper")
+PRECISION_SOURCES = ("measured", "default")
+GENERATED_PORT_KEYS = frozenset(
+    {"area_id", "dir", "shape", "drive", "latency_bursts", "bins", *PORT_FIT_KEYS}
+)
 _PORT_TEXT_KEYS = ("function", "hold", "zero", "positive", "if_silent", "quantity", "unit", "range")
 _FITS_KEYS = frozenset({"io_kind", "frame", "positioning", "min_bins", "note"})
 
@@ -124,7 +136,8 @@ def _is_int(value: Any) -> TypeGuard[int]:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def _is_num(value: Any) -> bool:
+def _is_num(value: Any) -> TypeGuard[int | float]:
+    """True for an int or float that is not a bool, so callers can compare the value."""
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
@@ -266,7 +279,30 @@ def validate_author_fields(doc: Any) -> list[str]:
 
     if doc.get("body") is not None:
         _validate_body(doc["body"], out)
+    if isinstance(doc.get("ports"), list):
+        _check_per_role_sets(doc["ports"][:MAX_PORTS], doc.get("body"), out)
     return out
+
+
+def _check_per_role_sets(ports: list[Any], body: Any, out: list[str]) -> None:
+    """A per_role size rule over joints_used / joints_required needs that body
+    set to hold a joint role.
+    """
+    for i, port in enumerate(ports):
+        rule = port.get("size_rule") if isinstance(port, dict) else None
+        if not isinstance(rule, dict):
+            continue
+        for axis in ("x", "y", "z"):
+            item = rule.get(axis)
+            name = item.get("per_role") if isinstance(item, dict) else None
+            if name not in ("joints_used", "joints_required"):
+                continue
+            listed = body.get(name) if isinstance(body, dict) else None
+            if not (isinstance(listed, list) and listed):
+                out.append(
+                    f"ports[{i}].size_rule.{axis}.per_role: {name} is empty: "
+                    f"body.{name} must list at least one joint role"
+                )
 
 
 def _validate_body(body: Any, out: list[str]) -> None:
@@ -393,6 +429,65 @@ def _validate_port(port: Any, where: str, out: list[str]) -> None:
     if port.get("fits") is not None:
         for i, fit in enumerate(_check_list(port["fits"], f"{where}.fits", MAX_FITS, out)):
             _validate_fit(fit, f"{where}.fits[{i}]", out)
+    _validate_port_fit(port, where, out)
+
+
+def _validate_port_fit(port: dict[str, Any], where: str, out: list[str]) -> None:
+    """``body_role``, ``size_rule`` and ``precision`` on one port.
+
+    Data only: a size rule is never evaluated.
+    """
+    if "body_role" in port:
+        role = port["body_role"]
+        if not isinstance(role, str) or role not in BODY_PORT_ROLES:
+            out.append(
+                f"{where}.body_role: must be a role id or role-set id from the body vocabulary"
+            )
+    if "size_rule" in port:
+        rule, at = port["size_rule"], f"{where}.size_rule"
+        if not isinstance(rule, dict):
+            out.append(f"{at}: must be an object with x, y and z")
+        else:
+            for key in rule:
+                if key not in SIZE_AXES:
+                    out.append(f"{at}.{key}: is not a known field")
+            for axis in SIZE_AXES:
+                if axis not in rule:
+                    out.append(f"{at}.{axis}: is required")
+                    continue
+                item = rule[axis]
+                if _is_int(item) and item > 0:
+                    continue
+                if isinstance(item, dict):
+                    for key in item:
+                        if key not in ("per_role", "cells_each"):
+                            out.append(f"{at}.{axis}.{key}: is not a known field")
+                    if item.get("per_role") not in SIZE_PER_ROLE_SETS:
+                        out.append(
+                            f"{at}.{axis}.per_role: must be one of {', '.join(SIZE_PER_ROLE_SETS)}"
+                        )
+                    cells = item.get("cells_each")
+                    if not (_is_int(cells) and cells > 0):
+                        out.append(f"{at}.{axis}.cells_each: must be a positive whole number")
+                    if "body_role" not in port:
+                        out.append(f"{where}.body_role: is required when a size_rule uses per_role")
+                else:
+                    out.append(
+                        f"{at}.{axis}: must be a positive whole number or {{per_role, cells_each}}"
+                    )
+    if "precision" in port:
+        prec, at = port["precision"], f"{where}.precision"
+        if not isinstance(prec, dict):
+            out.append(f"{at}: must be an object with deg_per_bin and source")
+        else:
+            for key in prec:
+                if key not in ("deg_per_bin", "source"):
+                    out.append(f"{at}.{key}: is not a known field")
+            step = prec.get("deg_per_bin")
+            if not (_is_num(step) and math.isfinite(step) and step > 0):
+                out.append(f"{at}.deg_per_bin: must be a number above 0")
+            if prec.get("source") not in PRECISION_SOURCES:
+                out.append(f"{at}.source: must be one of {', '.join(PRECISION_SOURCES)}")
 
 
 def _validate_fit(fit: Any, where: str, out: list[str]) -> None:
@@ -579,9 +674,7 @@ def check_port_contract(
         min_bins,
         live_bins,
         ">= min_bins_that_pass",
-        ok=(
-            _is_num(min_bins) and _is_num(live_bins) and live_bins >= min_bins  # type: ignore[operator]
-        ),
+        ok=(_is_num(min_bins) and _is_num(live_bins) and live_bins >= min_bins),
     )
 
     rel: Any = drive.get("tolerance_rel", drive_rel_tolerance)
@@ -609,7 +702,7 @@ def check_port_contract(
         ok=(
             _is_num(expected_lat)
             and _is_num(observed_lat)
-            and abs(observed_lat - expected_lat) <= lat_tol  # type: ignore[operator]
+            and abs(observed_lat - expected_lat) <= lat_tol
         ),
     )
     if live_area.get("responded") is not None:
@@ -697,7 +790,7 @@ def _io_checks(
         floor,
         z,
         ">= fits min_bins (else min_bins_that_pass)",
-        ok=_is_num(floor) and _is_num(z) and z >= floor,  # type: ignore[operator]
+        ok=_is_num(floor) and _is_num(z) and z >= floor,
     )
 
 

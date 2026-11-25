@@ -132,6 +132,13 @@ and see per-area ledger windows with `get_fire_ledger_areas_window_config()`.
   all learning. Freeze overview: [memory-and-plasticity.md](memory-and-plasticity.md).
 - `eligibility_decay_bursts` sets the credit window. Match it to the reward latency in
   bursts.
+- Associative-memory mappings forget only by punished co-firing: reward below 0 while both ends
+  fire inside the window, with LTD above 0. Punishment that arrives after the co-firing has
+  ended changes nothing. A new synapse starts at `plasticity_constant` x LTP, not scaled by
+  `plasticity_eta`, so one coincidence equals many eta steps. There is no weight
+  normalization or decay. Read a learned map through opponent inhibition and a threshold above
+  one creation step, never through an OR of everything recalled (read in feagi-core and
+  measured once on a learned direction map).
 
 Do not quote internal parameter names, kernel details, or module paths that tools or this
 skill do not show; they change between releases.

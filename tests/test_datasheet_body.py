@@ -26,3 +26,17 @@ def test_vendored_roles_vocabulary_is_the_nrs_one() -> None:
     doc = json.loads(BODY_ROLES_PATH.read_text("utf-8"))
     assert doc["format"] == "nrs.body_roles/1"
     assert {f["id"] for f in doc["families"]} == {"human", "serial_arm"}
+
+
+PORT_FIT_CASES = json.loads(
+    (Path(__file__).with_name("port-fit-fixtures.json")).read_text("utf-8")
+)["cases"]
+
+
+@pytest.mark.parametrize("case", PORT_FIT_CASES, ids=[c["name"] for c in PORT_FIT_CASES])
+def test_port_fit_shared_fixture(case: dict) -> None:
+    errors = validate_author_fields(case["datasheet"])
+    if case["valid"]:
+        assert errors == []
+    else:
+        assert any(case["error_path"] in e for e in errors), errors

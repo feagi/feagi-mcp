@@ -11,7 +11,8 @@ Spec::
                | {"region_id"},
      "defaults": {"origin": [x, y, z]?, "step": 40?},
      "areas": [{"name", "dimensions", "position"?, "neurons_per_voxel"?, "properties"?,
-                "cortical_type"?: "CUSTOM"|"MEMORY", "mp_encoding"?, "modulators"?: [ids]}],
+                "cortical_type"?: "CUSTOM"|"MEMORY", "mp_encoding"?, "modulators"?: [ids],
+                "psp_uniform"?: bool}],
      "morphologies": [{"name", "type", "parameters"}],
      "mappings": [{"src", "dst", "rules": [...], "replace"?, "modulators"?: [ids],
                    "frozen"?: bool}],
@@ -512,6 +513,30 @@ def auto_region_2d(regions: dict[str, Any], parent_region_id: str | None) -> lis
 
 
 _DIRECTIONS = ("inputs", "outputs")
+
+
+def _warn_split_psp_gates(plan: Plan) -> None:
+    """Warn when a gate (area with several incoming mappings) is fed by split-PSP spec areas.
+
+    An area without ``neuron_psp_uniform_distribution`` splits its PSP over its fan-out
+    (FEAGI's default is off), so AND-style gates fed by it can stay silent with no error.
+    """
+    props = {a["name"]: a["properties"] for a in plan.areas}
+    sources: dict[str, list[str]] = {}
+    for src, dst in plan.mappings:
+        sources.setdefault(dst, []).append(src)
+    for dst, srcs in sources.items():
+        if dst not in props or len(srcs) < 2:
+            continue
+        split = sorted(
+            s for s in srcs if s in props and not props[s].get("neuron_psp_uniform_distribution")
+        )
+        if split:
+            plan.warnings.append(
+                f"area '{dst}' has {len(srcs)} incoming mappings and source(s) {split} keep "
+                "FEAGI's default (PSP split over fan-out): a gate summing them may never reach "
+                "threshold. Set 'psp_uniform': true on those areas (or size PSC for the split)"
+            )
 
 
 class Plan:
@@ -1513,6 +1538,16 @@ def expand_spec(
             area_props = memory_properties(
                 a["name"], ctype, a.get("properties") or {}, a.get("mp_encoding")
             )
+            if "psp_uniform" in a:
+                flag = a["psp_uniform"]
+                if not isinstance(flag, bool):
+                    raise SpecError(f"area '{a['name']}': psp_uniform must be true or false")
+                key = "neuron_psp_uniform_distribution"
+                if key in area_props and area_props[key] != flag:
+                    raise SpecError(
+                        f"area '{a['name']}': psp_uniform and properties.{key} disagree"
+                    )
+                area_props[key] = flag
             if ctype == "MEMORY" and "neuron_post_synaptic_potential" not in area_props:
                 plan.warnings.append(MEMORY_PSP_DEFAULT_WARNING.format(name=a["name"]))
             plan.add_area(
@@ -1578,6 +1613,7 @@ def expand_spec(
         _place(plan, spec)
     except (SpecError, AttributeError, TypeError) as e:
         errors.append(str(e))
+    _warn_split_psp_gates(plan)
     own = {a["name"] for a in plan.areas}
     morph_names = {m["name"] for m in plan.morphologies}
     touched = {n for pair in [*plan.mappings, *plan.deletions] for n in pair}

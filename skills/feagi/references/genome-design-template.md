@@ -123,6 +123,28 @@ the `suggest_cortical_anchor_positions()` value (`xy_plane`, `hierarchy_y`, `tem
   `brain_visualizer_api(operation_id="put_region_relocate_members", ...)`.
 - The schematic's node order equals the scene order, so Brain Visualizer reads like the diagram.
 
+## Diagrams through the design
+
+Show the user the design as it grows, not only the final schematic. Three views, each a
+`show_in_studio` kind `circuit` graph (in Hey FEAGI chat, a `feagi-circuit` block; same schema):
+
+1. **Block view, at the start of a design and again after each stage.** One node per block,
+   label `<Block> (<status>)` with status `built`, `in progress` or `planned`; adapter blocks
+   labelled `<Block> adapter (<status>)`; sensors and actuators as plain nodes on the outer
+   layers. Edges are ports, labelled with the port name. Layers run from sense (0) to act.
+   Re-show it after every stage with the statuses updated, so the user sees what passed and
+   what is next.
+2. **Mode view, one per learning mechanism.** Two short chains in one graph: how the block
+   learns (what drives the destination, what it senses, what gets bound) and how it is used
+   (cue in, recall out). Label nodes by role, not area name; start each chain with a node
+   `learn:` or `use:`.
+3. **Area schematic, before the first build** (Schematic, below): the areas and rules the build
+   creates.
+
+Draw only blocks and ports that exist in the design's block table, never show a planned block
+as built, and keep each view under 20 nodes with the detail in prose. The format has no colour
+or status field, so the status lives in the label.
+
 ## Schematic
 
 `show_in_studio` kind `circuit`, one fenced block in the document. Allowed layouts, fields and limits:

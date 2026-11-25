@@ -191,3 +191,14 @@ async def test_protocol_posts_potential_and_surfaces_applied() -> None:
     assert http.posts and all(b["potential"] == 70.0 for _, b in http.posts)
     bad = await _client(Http(old_server=True)).run_stimulus_protocol(steps, [AREA], potential=70.0)
     assert bad["success"] is False and "did not apply" in bad["error"]
+
+
+async def test_schedule_stimulus_rejects_unsupported_bursts_field() -> None:
+    http = Http()
+    entries = [
+        {"burst_offset": 0, "bursts": 5, "stimuli": [{"area_id": AREA, "coordinates": [[0, 0, 0]]}]}
+    ]
+    out = await _client(http).schedule_stimulus(entries)
+    assert out["success"] is False
+    assert "bursts" in out["error"] and "hold_stimulus" in out["error"]
+    assert http.posts == []

@@ -10,10 +10,9 @@ the release artifact; the author supplies meaning (code, sign, function) and mea
 1. Read: `get_block_datasheet(item_id, version)`. Note each port's `dir`, `shape`, `code`, `kind`, `signed`,
    `frame`, `positioning`, `hold`, `zero`, `positive`, `if_silent`, `fits`, `min_bins_that_pass`,
    `drive`, `latency_bursts`, and the `burst` timestep the block was built for, plus
-   `host_requirements`, `characterised_on` and `dependencies`. A null value is an explicit
-   Unknown, not a pass.
+   `host_requirements`, `characterised_on` and `dependencies`. Null is Unknown, not a pass.
 2. Inspect your own devices (`get_agent_device_registrations`, `list_io_areas_compact`): which of
-   your areas can play each port, with what code and how many bins.
+   your areas can play each port, with what code and bins.
 3. Design the adapter (port to port glue, your robot's names live only here). Have it reviewed by the
    architect before any build. If your burst rate differs from the datasheet's, say so in the design.
 4. Build the adapter. Do not edit the block's internal areas; if a port does not fit, report it.
@@ -23,19 +22,17 @@ the release artifact; the author supplies meaning (code, sign, function) and mea
    `fits`; the result adds advisory text on conversions, never wiring. A fail names the datasheet
    number and your observed number; a null datasheet value is `skipped: datasheet states no value`.
    Nothing is fixed silently. Sign: run `auto_polarity_probe` and compare with `positive` by hand.
-6. Optional latency check: pass `latency_probe`. It stimulates the area and changes live activity, so
-   run it only when no experiment is live.
+6. Optional latency check: pass `latency_probe`; it changes live activity, so run it with no experiment live.
 7. Run the datasheet's `acceptance` (tool, expectation, conditions) and quote its numbers.
 
 ## Choose and adapt a block
 
 - **Choosing among matches:** open each, then prefer a block that has a datasheet, whose
   `characterised_on` and `host_requirements` resemble your host, whose `burst` timestep is nearest
-  yours, and that has the fewest `dependencies`. A null field is Unknown, not a pass. Recommend one or
-  two and say why; do not claim a block fits a body it was not characterised on.
+  yours, and that has the fewest `dependencies`. A null field is Unknown, not a pass. Recommend one or two and say why; never claim a fit to an uncharacterised body.
 - **Reading `fits` and `min_bins_that_pass`:** `fits` lists device kinds the port natively matches
-  (advisory, never wiring). `min_bins_that_pass` is the fewest bins that still pass acceptance: if your
-  area has fewer bins, the port cannot be used as it stands.
+  (advisory, never wiring). `min_bins_that_pass` is the fewest bins that still pass acceptance; with
+  fewer bins the port cannot be used as is.
 - **Burst-rate mismatch:** derive your own burst rate first. If it differs from the block's `burst`,
   rescale the block's burst-counted settings in the same change and re-run its `acceptance`, or reject
   the block. Never run it unchanged and never edit its internal areas.
@@ -47,7 +44,7 @@ the release artifact; the author supplies meaning (code, sign, function) and mea
 
 ## Propose publishing what just worked
 
-When a check in the conversation passes (an acceptance check, a probe or a trial that meets its goal), propose publishing the region or regions that produced that result, and only those. Never propose a region that has no passed result behind it. In one or two sentences, say what passed with its numbers, which region did it, what someone else could use it for (read from its ports), and whether Brain Hub already has a similar block (from `search_brain_hub_genomes`). If robot-specific rows sit inside that region, say the adapter has to be split off first, and offer to do that. Offer to package it with a measured datasheet (steps below). Propose once per result. Don't propose while troubleshooting, and don't propose a region again after the user said no to it. Published versions cannot be edited or deleted, only superseded. The creator can make the work private later, but copies people already made cannot be taken back. Connectomes carry learned data and need two-step consent. The user publishes in Studio (Publish version…); never publish for them.
+When a check in the conversation passes (an acceptance check, a probe or a trial that meets its goal), propose publishing the region or regions that produced that result, and only those. Never propose a region that has no passed result behind it. In one or two sentences, say what passed (numbers), which region, what others could use it for (from its ports), and whether Brain Hub already has a similar block (from `search_brain_hub_genomes`). If robot-specific rows sit inside it, say the adapter must be split off first, and offer to do that. Offer to package it with a measured datasheet (below). Once per result. Not while troubleshooting; not again after a no. Published versions can't be edited or deleted, only superseded; the creator can make them private later, but copies already made stay. Connectomes carry learned data and need two-step consent. The user publishes in Studio (Publish version…); never publish for them.
 
 ## Publish a block with its datasheet
 
@@ -114,6 +111,7 @@ rejected. Port rows are matched by `name` (the area name in the artifact).
 | `ports[].quantity`, `unit`, `range` | what the signal measures, unit, span | optional text |
 | `ports[].min_bins_that_pass` | fewest bins that still pass acceptance | optional, integer >= 1 |
 | `ports[].fits[]` | up to 8 of `io_kind`, `frame`, `positioning`, `min_bins`, `note`: device kinds this port natively matches | advisory, never wiring |
+| `ports[].body_role`, `size_rule`, `precision` | role or set; size rule (`x`,`y`,`z`: integer or `{per_role, cells_each}`); `{deg_per_bin, source}` (informational only) | generated at publish, never typed |
 | `host_requirements` | capabilities the body must provide, no joint names | 20 |
 | `characterised_on` | `plant_class`, `size`, `mass`, `time_constant`, `dof`, `control_rate_hz` | |
 | `measured[]` | `from`, `to`, `sign`, `gain`, `lag_bursts`, `test`, `bin_map`, `latency_bursts`, `suppression`, `gate` (bool), `burst_hz` | 64 |
@@ -130,14 +128,16 @@ goes in `notes`, not on a port.
 ## Writing the encoding fields
 
 - Mandatory keys must be present on every port. `null` means unknown and still publishes; an absent
-  key blocks publish. Unknown is an explicit, honest value: write it rather than guess.
+  key blocks publish. Unknown is an explicit value: write it, don't guess.
 - A Custom port carries no encoding flag in its id, so its `code` is measured or stated, never
-  read from the area. Set `code_source` to say which. Measure the code and the hold with a
-  stimulus (`stimulate_area`, `hold_stimulus`, then `monitor_activity`): which bins fire for a
-  value, and how long they stay after the stimulus ends.
+  read from the area. Set `code_source` to say which. Measure code and hold with a
+  stimulus (`stimulate_area`, `hold_stimulus`, `monitor_activity`): which bins fire for a
+  value, and how long they stay.
 - Block bins and device bins are different. A port's Z is the block's bins; an IPU or OPU has its own
   Z. The adapter converts between them; the datasheet never carries device bin order.
-- Kind, frame and positioning mirror `IOCorticalAreaConfigurationFlag`; use the exact spellings above.
+- Per-joint motor port layout: for joint i (base to tip) x = 2i is increase and 2i+1 decrease, y = 1,
+  z = the host's step level; the adapter permutes channels and swaps a joint's columns if its sign is negative.
+- Kind, frame and positioning mirror `IOCorticalAreaConfigurationFlag`; use these exact spellings.
   `SignedPercentage*` needs `signed: true`, `Percentage*` needs `signed: false`.
 
 ## Rules

@@ -247,7 +247,7 @@ TOOL_CATEGORIES: dict[str, tuple[str, ...]] = {
         "get_mujoco_scene_config",
         "configure_mujoco_scene",
         "add_mujoco_scene_object",
-        "set_mujoco_safety_boundary",
+        "set_safety_boundary",
         "composer_list_simulator_packs",
         "composer_get_simulator_pack_versions",
         "composer_get_simulator_pack_resolved",

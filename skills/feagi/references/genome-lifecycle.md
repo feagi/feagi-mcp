@@ -74,7 +74,7 @@ ancestry, including the exact release. `queue_amalgamation_by_payload` is for lo
 region exports only. It records no Hub download and no lineage.
 
 1. `queue_amalgamation_by_payload(genome_json)` with the full genome document as a JSON
-   string. It returns an `amalgamation_id`.
+   string. It returns an `amalgamation_id`. Pass `fit_plan` to create areas at sizes fitted to the robot.
 2. `health_check()` shows `amalgamation_pending` and `brain_regions_root`.
 3. `confirm_amalgamation_destination(amalgamation_id, circuit_origin_x, circuit_origin_y,
    circuit_origin_z, brain_region_id)` places it, usually under the root region. The result

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import Any
+from typing import Any, cast
 
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _ERROR_ACCESS_DENIED = 5
@@ -35,14 +35,17 @@ def _pid_alive_windows(pid: int, kernel32: Any = None) -> bool:
     from ctypes import wintypes
 
     if kernel32 is None:
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+        # WinDLL and get_last_error are present at runtime on Windows and absent
+        # from the non-Windows ctypes stubs. cast keeps both mypy platforms quiet.
+        win_ctypes = cast(Any, ctypes)
+        kernel32 = win_ctypes.WinDLL("kernel32", use_last_error=True)
         kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
         kernel32.OpenProcess.restype = wintypes.HANDLE
         kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
         kernel32.GetExitCodeProcess.restype = wintypes.BOOL
         kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
         kernel32.CloseHandle.restype = wintypes.BOOL
-        get_last_error = ctypes.get_last_error  # type: ignore[attr-defined]
+        get_last_error = win_ctypes.get_last_error
     else:
         get_last_error = kernel32.get_last_error
 

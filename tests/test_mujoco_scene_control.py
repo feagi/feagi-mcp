@@ -9,7 +9,9 @@ import pytest
 
 from feagi_mcp.introspection_discovery import IntrospectionEndpoint
 from feagi_mcp.mujoco_scene_control import (
+    FENCE_STATUS_KEYS,
     MujocoSceneControl,
+    fence_verdict,
     loopback_base_url,
     normalize_size_mm,
     scene_object_payload,
@@ -307,3 +309,91 @@ async def test_read_config_omits_actions_the_controller_does_not_know(
     assert "get_loop_timing" not in result["sections"]
     assert result["absent_actions"] == ["get_loop_timing"]
     assert result["sections"]["status"] == {"action": "status"}
+
+
+def _status(count: int, enabled: bool = True) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "result": {
+            "supported": True,
+            "fence_enabled": enabled,
+            "ee_pose_mm": [1, 2, 3],
+            "fence_violation_mm": 0.0,
+            "fence_violated": False,
+            "fence_rejection_count": count,
+            "last_rejection_at": 12.5 if count else None,
+            "last_rejection_violation_mm": 7.25 if count else None,
+            "workspace_min_mm": [0, 0, 0],
+            "workspace_max_mm": [9, 9, 9],
+            "boundary_frame": "world",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_fence_section_returns_only_fence_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("feagi_mcp.mujoco_scene_control.discover_endpoint", lambda _c: _endpoint())
+    posted: list[str] = []
+
+    async def poster(_url: str, payload: dict[str, Any], _timeout: float) -> dict[str, Any]:
+        posted.append(payload["action"])
+        return _status(2)
+
+    out = await MujocoSceneControl(poster=poster).read_config(section="fence")
+    assert posted == ["status"]
+    assert set(out["fence"]) == set(FENCE_STATUS_KEYS)
+    assert out["fence"]["fence_rejection_count"] == 2
+    assert "boundary_frame" not in out["fence"]
+    bad = await MujocoSceneControl(poster=poster).read_config(section="nope")
+    assert bad["ok"] is False
+
+
+def test_fence_verdict_reports_rejection_between_two_reads() -> None:
+    def read(n: int) -> dict[str, Any]:
+        return {"ok": True, "fence": _status(n)["result"]}
+
+    verdict = fence_verdict(read(0), read(1), 0.5)
+    assert verdict["checked"] and verdict["rejected"] is True
+    assert verdict["violation_mm"] == 7.25
+    same = fence_verdict(read(1), read(1), 0.5)
+    assert same["checked"] and same["rejected"] is False
+    off = fence_verdict(read(0), {"ok": True, "fence": _status(0, enabled=False)["result"]}, 0)
+    assert off["checked"] is False
+    down = fence_verdict({"ok": False, "error": "no controller"}, read(0), 0)
+    assert down["checked"] is False and "no controller" in down["reason"]
+
+
+@pytest.mark.asyncio
+async def test_send_motor_command_fails_when_the_fence_rejects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from feagi_mcp import server
+
+    monkeypatch.setattr("feagi_mcp.mujoco_scene_control.discover_endpoint", lambda _c: _endpoint())
+    counts = iter([0, 1])
+
+    async def poster(_url: str, _payload: dict[str, Any], _timeout: float) -> dict[str, Any]:
+        return _status(next(counts))
+
+    def fake_poster_init(self: MujocoSceneControl, *, poster_fn: Any = poster) -> None:
+        self._poster = poster_fn
+
+    monkeypatch.setattr(MujocoSceneControl, "__init__", fake_poster_init)
+
+    async def sent(*_a: Any, **_k: Any) -> dict[str, Any]:
+        return {"success": True, "joint_name": "j1"}
+
+    async def cfg() -> dict[str, Any]:
+        return {"burst_interval_seconds": 0.001}
+
+    async def no_sleep(_s: float) -> None:
+        return None
+
+    monkeypatch.setattr(server.feagi, "send_motor_command", sent)
+    monkeypatch.setattr(server.feagi, "get_burst_engine_config", cfg)
+    monkeypatch.setattr(server.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(server, "annotate_with_experiment_status", lambda r: r)
+    out = await server.send_motor_command("agent", "j1", fraction=0.5)
+    assert out["ok"] is False and out["success"] is False
+    assert out["violation_mm"] == 7.25
+    assert out["fence"]["rejected"] is True

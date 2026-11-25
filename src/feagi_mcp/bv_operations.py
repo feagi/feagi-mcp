@@ -53,6 +53,12 @@ BV_OPERATIONS: Final[tuple[BvOperation, ...]] = (
         "Queue amalgamation: JSON body is the full genome document (same shape as upload)",
     ),
     BvOperation(
+        "post_genome_amalgamation_by_payload_with_fit",
+        "POST",
+        "/v1/genome/amalgamation_by_payload_with_fit",
+        "Queue amalgamation with a fit plan: JSON body is {genome, fit_plan}",
+    ),
+    BvOperation(
         "delete_genome_amalgamation_cancellation",
         "DELETE",
         "/v1/genome/amalgamation_cancellation",

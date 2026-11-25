@@ -163,3 +163,25 @@ async def test_unknown_tool_arguments_are_an_error_and_nothing_runs() -> None:
     with pytest.raises(ToolError) as exc:
         await server.mcp.call_tool("get_burst_counter", {"help": True})
     assert "help" in str(exc.value) and "Nothing ran" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_queue_amalgamation_fit_plan_uses_wrapped_endpoint(monkeypatch):
+    """Without a plan the body is the genome; with one it goes to the fit endpoint."""
+    from feagi_mcp import server
+
+    calls = []
+
+    async def fake_operation(operation_id, **kwargs):
+        calls.append((operation_id, kwargs["json_body"]))
+        return {}
+
+    monkeypatch.setattr(server.feagi, "brain_visualizer_operation", fake_operation)
+    plan = {"areas": [{"cortical_id": "abc", "dimensions": [14, 1, 1]}]}
+    await server.queue_amalgamation_by_payload('{"a": 1}')
+    await server.queue_amalgamation_by_payload('{"a": 1}', fit_plan=plan)
+    assert calls[0] == ("post_genome_amalgamation_by_payload", {"a": 1})
+    assert calls[1] == (
+        "post_genome_amalgamation_by_payload_with_fit",
+        {"genome": {"a": 1}, "fit_plan": plan},
+    )

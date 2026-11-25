@@ -52,6 +52,19 @@ _READ_ACTIONS = (
     "get_simulation_rate",
     "get_loop_timing",
 )
+# The controller's ``status`` fields that describe the Cartesian fence (compact read).
+FENCE_STATUS_KEYS = (
+    "supported",
+    "fence_enabled",
+    "ee_pose_mm",
+    "fence_violation_mm",
+    "fence_violated",
+    "fence_rejection_count",
+    "last_rejection_at",
+    "last_rejection_violation_mm",
+    "workspace_min_mm",
+    "workspace_max_mm",
+)
 _DEFAULT_RGBA = [0.2, 0.6, 1.0, 1.0]
 
 Poster = Callable[[str, dict[str, Any], float], Awaitable[dict[str, Any]]]
@@ -92,6 +105,39 @@ def resolve_control_target(controller_id: str) -> dict[str, Any]:
         "control_url": base,
         "controller_id": controller_id,
     }
+
+
+def fence_verdict(before: dict[str, Any], after: dict[str, Any], waited_s: float) -> dict[str, Any]:
+    """Compare two :meth:`MujocoSceneControl.fence_status` reads taken around one command.
+
+    Returns the ``fence`` block for a command result. ``rejected`` is true when the
+    controller's ``fence_rejection_count`` grew; ``violation_mm`` is then its
+    ``last_rejection_violation_mm``. ``checked`` is false when either read failed or the fence
+    is off, with the reason.
+    """
+    block: dict[str, Any] = {"checked": False, "waited_s": round(waited_s, 3)}
+    for name, read in (("before", before), ("after", after)):
+        if not read.get("ok"):
+            block["reason"] = f"fence status {name} the command unavailable: {read.get('error')}"
+            return block
+    fb, fa = before["fence"], after["fence"]
+    if not fa.get("fence_enabled"):
+        block["reason"] = "the controller's Cartesian fence is not enabled"
+        return block
+    n0, n1 = fb.get("fence_rejection_count"), fa.get("fence_rejection_count")
+    if not (isinstance(n0, int) and isinstance(n1, int)):
+        block["reason"] = "the controller reports no fence_rejection_count"
+        return block
+    block.update(
+        checked=True,
+        rejection_count_before=n0,
+        rejection_count_after=n1,
+        rejected=n1 > n0,
+    )
+    if n1 > n0:
+        block["violation_mm"] = fa.get("last_rejection_violation_mm")
+        block["last_rejection_at"] = fa.get("last_rejection_at")
+    return block
 
 
 class MujocoSceneControl:
@@ -211,12 +257,40 @@ class MujocoSceneControl:
             }
         return {"ok": True, "action": "reset_episode", "result": response.get("result")}
 
-    async def read_config(self, controller_id: str = "mujoco") -> dict[str, Any]:
-        """Read every live MuJoCo settings section the control server exposes."""
+    async def fence_status(self, controller_id: str = "mujoco") -> dict[str, Any]:
+        """Compact fence read: only :data:`FENCE_STATUS_KEYS` of the controller's ``status``."""
+        outcome = await self.command("status", controller_id=controller_id)
+        if not outcome.get("ok"):
+            return outcome
+        status = outcome.get("result")
+        if not isinstance(status, dict):
+            return {"ok": False, "error": "status returned no object", "action": "status"}
+        return {
+            "ok": True,
+            "controller_id": controller_id,
+            "fence": {k: status.get(k) for k in FENCE_STATUS_KEYS},
+        }
+
+    async def read_config(
+        self, controller_id: str = "mujoco", section: str | None = None
+    ) -> dict[str, Any]:
+        """Read the live MuJoCo settings sections the control server exposes.
+
+        ``section`` narrows the read: ``"fence"`` returns only the compact fence status
+        (:meth:`fence_status`); a name from ``_READ_ACTIONS`` returns just that section.
+        """
+        if section == "fence":
+            return await self.fence_status(controller_id)
+        if section is not None and section not in _READ_ACTIONS:
+            return {
+                "ok": False,
+                "error": f"unknown section {section!r}; use 'fence' or one of "
+                f"{list(_READ_ACTIONS)}",
+            }
         sections: dict[str, Any] = {}
         absent: list[str] = []
         ok = True
-        for action in _READ_ACTIONS:
+        for action in _READ_ACTIONS if section is None else (section,):
             outcome = await self.command(action, controller_id=controller_id)
             if not outcome.get("ok") and _is_unknown_action(outcome):
                 # An older controller lacks this action: omit the section, note it.

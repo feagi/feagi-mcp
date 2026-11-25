@@ -224,7 +224,8 @@ skill).
 1. Intake: the goal as a number with a baseline, what must never happen (safety), the body's
    facts and the burst rate derived from it.
 2. Hub first (step 0 of "Build a circuit"); keep what fits a module, record the ancestry.
-3. Decompose into one region per function, with an interface contract table per port.
+3. Decompose into one region per function, with an interface contract table per port. Show the
+   block view ([genome-design-template.md](references/genome-design-template.md "Diagrams through the design")).
 4. Choose the mechanism per module: innate wiring first; memory or plasticity only with a
    credit path; decide which modulator freezes learning.
 5. Orchestrate: modulators and an influence table; reward only from hard-wired detectors.
@@ -233,6 +234,7 @@ skill).
    schematic (`show_in_studio` kind `circuit`, format in [building-circuits.md](references/building-circuits.md) "Circuit diagram format"; edges `<rule>, <sign>`), design notes, and a
    report to the user with at most one exclusive question and the cost line.
 8. Build one stage per module with its acceptance number, snapshot first, black-box test after.
+   Re-show the block view with each stage's status.
 
 ### Teach or fix a robot behavior
 

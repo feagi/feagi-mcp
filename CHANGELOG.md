@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.14] - 2026-11-24
+
+### Changed
+- **`set_mujoco_safety_boundary` renamed `set_safety_boundary`** (no alias). One safety boundary per experiment and robot, enforced by the real arm and every sim, stored with its `frame` (`embodiment_base` or `world`) and a `pain` flag (default on). New optional params `frame` and `pain` are passed through to the controller command. Users edit it in Studio under Embodiment settings > Safety boundary.
+- **Dependencies**: pin `feagi-core==2.6.26`, the latest published Python SDK (Brain Visualizer `2.14.5`, `feagi-rust-py-libs==0.0.130`). `uv.lock` now resolves that pin; it had been left at `2.6.22`.
+
 ## [0.1.13] - 2026-11-21
 
 ### Changed
