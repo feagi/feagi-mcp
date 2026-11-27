@@ -64,9 +64,9 @@ When a check in the conversation passes (an acceptance check, a probe or a trial
 
 1. Call `get_region_circuit(region_id)`. Show the user in chat the region boundary: inputs and
    outputs, the designated lists, and any IPU/OPU members.
-2. Propose ports. Ports must be Custom areas that are direct members of the region. An area is
-   never both input and output. IPU/OPU areas inside the region mean the robot adapter is mixed
-   in: propose the split first, before packaging.
+2. Propose ports: Custom areas, direct members of the region. A port may be both-way (under
+   inputs and outputs, accepting mappings both ways); identity is direction + name. IPU/OPU
+   areas inside mean the adapter is mixed in: split it first.
 3. Propose the datasheet author fields (above) from the design notebook and measurements.
 4. Ask the user to confirm ports and fields in chat.
 5. Prepare the whole Publish form. Gather every value: destination (new item, or a new version of

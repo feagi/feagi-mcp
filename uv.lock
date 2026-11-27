@@ -1004,7 +1004,7 @@ wheels = [
 
 [[package]]
 name = "feagi-core"
-version = "2.6.26"
+version = "2.6.27"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -1016,14 +1016,14 @@ dependencies = [
     { name = "requests" },
     { name = "toml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/bf/1f/28c3d1f62d247fae06802065bd4e24b6582afdcbf3358fd98b6af13efc67/feagi_core-2.6.26.tar.gz", hash = "sha256:61121abd3771af9092807e1ef355bd858f56cbfeb033200198d8874593460249", size = 37826105, upload-time = "2026-11-21T19:24:20.284Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/47/bf/fccd990fb37974a43b549b66ebcacfce0eab53bfe1d4f2a49f537f57051d/feagi_core-2.6.27.tar.gz", hash = "sha256:9793d2747f24fbd5605c98f89453d516df651541096286239fdade382c662ce7", size = 38322217, upload-time = "2026-11-27T17:18:21.202Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/be/bc/ac165c68287e58211bf92c6e0b0e124fa3026b0dafa4a0f636f7838ed98b/feagi_core-2.6.26-py3-none-any.whl", hash = "sha256:9c86343994e97ca15dfacb4f1d09634148c136c10702e79a4dd91f74bf98251f", size = 38061333, upload-time = "2026-11-21T19:24:16.709Z" },
+    { url = "https://files.pythonhosted.org/packages/94/5a/e688e7381e3542758845258e41345ad7b360af935d3501dc3b0709952995/feagi_core-2.6.27-py3-none-any.whl", hash = "sha256:f4f90e8b0bc0a72267d3719f5daf6ca47aa34ccb647e21d4ecc82eb7aa4b8138", size = 38565742, upload-time = "2026-11-27T17:18:17.975Z" },
 ]
 
 [[package]]
 name = "feagi-mcp"
-version = "0.1.14"
+version = "0.1.15"
 source = { editable = "." }
 dependencies = [
     { name = "feagi-core" },
@@ -1047,7 +1047,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "feagi-core", specifier = "==2.6.26" },
+    { name = "feagi-core", specifier = "==2.6.27" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "mcp", specifier = ">=1.0.0,<2.0.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = "==2.4.1" },
@@ -1063,19 +1063,19 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "feagi-rust-py-libs"
-version = "0.0.130"
+version = "0.0.132"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/ac/3b/32b6bfc90d38d915bf51becb0b2ba2c2a46904bedc61ab7815e9b4ef8a9d/feagi_rust_py_libs-0.0.130.tar.gz", hash = "sha256:f481ace3f4a94f566261d2be0651285c129b872b5f1efea2572d2d4e0a7afb28", size = 156425, upload-time = "2026-11-21T15:06:40.311Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/eb/46/6365ae9e65ecb8db6dcb392e856971031dabbfe6f4f2b8bcd971ccbe7112/feagi_rust_py_libs-0.0.132.tar.gz", hash = "sha256:e45ad38e66cfa52acb73e0db7adf5ec607c186e0e3028a5523e63ef6527efe5e", size = 156495, upload-time = "2026-11-27T15:22:17.936Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6a/1d/8651f5061b91ec61f70e33a01fd8eb7ffb7e00970ea1ddc6a8d51b1ea543/feagi_rust_py_libs-0.0.130-cp38-abi3-macosx_10_12_x86_64.whl", hash = "sha256:73a0ea8e0332cdd7ebdb3097ec7ca1058346667c8383fbcfb80cb073139e6727", size = 8828048, upload-time = "2026-11-21T15:06:22.661Z" },
-    { url = "https://files.pythonhosted.org/packages/95/12/4b87071890095d3171fc7507f136642a60ee51cf6412a15d15b189507f8a/feagi_rust_py_libs-0.0.130-cp38-abi3-macosx_11_0_arm64.whl", hash = "sha256:2ad96552dfee9bdd9823dc788495537c62c6e6986d9ba701373dbdb9dceec0d9", size = 8481189, upload-time = "2026-11-21T15:06:24.675Z" },
-    { url = "https://files.pythonhosted.org/packages/58/a8/e79e31d51a38a9923d3f039667506b3091ded363c87e3f65cbc811cf570a/feagi_rust_py_libs-0.0.130-cp38-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:67f6c8b1299b781eb2cd5ed6a5c9e5049034163d96c04791a20665392e96e233", size = 9287186, upload-time = "2026-11-21T15:06:26.771Z" },
-    { url = "https://files.pythonhosted.org/packages/49/a3/4e839d43eb3ddff0db5681b1c90bd6b0c6a893469edc577700a4a5e4593b/feagi_rust_py_libs-0.0.130-cp38-abi3-manylinux2014_i686.manylinux_2_17_i686.whl", hash = "sha256:d8f96fc5c28611e9b63f7bb414f392b38996a6bf0f0859e4b34f9dff9c3268fa", size = 9885452, upload-time = "2026-11-21T15:06:28.548Z" },
-    { url = "https://files.pythonhosted.org/packages/9e/2b/bfe2557375088cbfb63d58d1d22bb0927f1f5e0116d640fb9cd634094a04/feagi_rust_py_libs-0.0.130-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:49cc057ed9b08e711eb8206b90c467e6cc82498a2dddd7a58e9d94c15e8233a0", size = 9616982, upload-time = "2026-11-21T15:06:30.539Z" },
-    { url = "https://files.pythonhosted.org/packages/90/82/bdc35e4b696f5fcaddf8c80fbe5fa5c5017bf223e7bfcdee7377379187af/feagi_rust_py_libs-0.0.130-cp38-abi3-musllinux_1_2_i686.whl", hash = "sha256:159814f5581604987a7f5fd69f3fb7582eab96614cafb7a31f706a217a453964", size = 15947308, upload-time = "2026-11-21T15:06:32.445Z" },
-    { url = "https://files.pythonhosted.org/packages/54/5e/ebba4da62eafd1c102993ac5c5ad9462eb57f316d8be1130d53ab0ebbc63/feagi_rust_py_libs-0.0.130-cp38-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:dc679c651b69b1b63f5d9ae08d83b94ee62abd4ca9b0b12ff832d4af8314c3e1", size = 16316460, upload-time = "2026-11-21T15:06:34.66Z" },
-    { url = "https://files.pythonhosted.org/packages/72/89/7a4f0f8abc008c23855d65b4dbd497711e183504bec38ffed2f0c0500ecd/feagi_rust_py_libs-0.0.130-cp38-abi3-win32.whl", hash = "sha256:93915828b1483f856f41d7f8684a3f6a43da45a206482eaa3efb97c608f95aca", size = 7295879, upload-time = "2026-11-21T15:06:36.881Z" },
-    { url = "https://files.pythonhosted.org/packages/4b/50/d05b94e3ea082fe1d16b4b6b93cd0074e793679665bbfef736498a58638f/feagi_rust_py_libs-0.0.130-cp38-abi3-win_amd64.whl", hash = "sha256:596d5bfa0cd45d3f59cd1fbe6c3d532d2f6eeb9bbe42c06cc6025300030e581b", size = 8177314, upload-time = "2026-11-21T15:06:38.376Z" },
+    { url = "https://files.pythonhosted.org/packages/82/42/e496b5884a320cad4cb8c8a65aca962f83079a94084e5da45f20ade7c418/feagi_rust_py_libs-0.0.132-cp38-abi3-macosx_10_12_x86_64.whl", hash = "sha256:ba405aa33b7822e3188a64988966bad5c2413e8a48bc85d4d33ec22be45474aa", size = 8841376, upload-time = "2026-11-27T15:21:56.615Z" },
+    { url = "https://files.pythonhosted.org/packages/10/98/58eb26380b5b71070482a86a37d5ad1d24cb365508c4b25f476e7ad5dd5b/feagi_rust_py_libs-0.0.132-cp38-abi3-macosx_11_0_arm64.whl", hash = "sha256:13d84f77aad75918a60face472ea97a9ad704634e83e541a02a40e01e3093cc5", size = 8503613, upload-time = "2026-11-27T15:21:58.846Z" },
+    { url = "https://files.pythonhosted.org/packages/59/ee/cb9e315e8515515a4ee2ddfccecfd0a37537d73fb50f329990c5313dd8c9/feagi_rust_py_libs-0.0.132-cp38-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:5e70f2e326d3ba296f7d82cdec0d922bec187159592b22b21c80eb72a66b6611", size = 9316782, upload-time = "2026-11-27T15:22:00.983Z" },
+    { url = "https://files.pythonhosted.org/packages/98/af/179e487e783eaccbe84bd9eb8d272b6471fd0f9ece774db1134d02d29643/feagi_rust_py_libs-0.0.132-cp38-abi3-manylinux2014_i686.manylinux_2_17_i686.whl", hash = "sha256:b07f47a14e7bb147b68372b40086e7d76cca7e62398445b612499ffd8d742e80", size = 9907371, upload-time = "2026-11-27T15:22:02.893Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/35/49805b37151b3ab56de5fc19f6ca35d550fbe25c1f07d6acf236c1d54cae/feagi_rust_py_libs-0.0.132-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:eab296881794eaa0b2ad4f1504c42a2c6b22f457de2f52ab3410129f78f85ecd", size = 9641616, upload-time = "2026-11-27T15:22:04.966Z" },
+    { url = "https://files.pythonhosted.org/packages/ae/78/d04772fc2732bba5a29009bbb20997d18808b0a158aa5e7d2b6563d33cb5/feagi_rust_py_libs-0.0.132-cp38-abi3-musllinux_1_2_i686.whl", hash = "sha256:0745713ce6dbffa49ee8de92e4f13549645d7b5385c17166a39c8489012928d4", size = 15970500, upload-time = "2026-11-27T15:22:07.152Z" },
+    { url = "https://files.pythonhosted.org/packages/97/a0/df7fe1b4b9a1a3ef821a910e3c720750719cc52402d1ee1072ef4dab36b3/feagi_rust_py_libs-0.0.132-cp38-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:8895c16f92d587d08e426210d6eafea568b3d28ff6fccd9b73d4fdcab26b1d71", size = 16339534, upload-time = "2026-11-27T15:22:12.634Z" },
+    { url = "https://files.pythonhosted.org/packages/bd/a3/0607b0fb6e477773852fa9bde9d1c08fa6947a0a8f4cf3a7914f700e1683/feagi_rust_py_libs-0.0.132-cp38-abi3-win32.whl", hash = "sha256:b97eda4b4bbf70620f3621eb9dffe7da6f71b9c2ad8dbe04dbe00d6724491284", size = 7312348, upload-time = "2026-11-27T15:22:14.621Z" },
+    { url = "https://files.pythonhosted.org/packages/32/17/5ecdbae6024194276a794361b15c078cbcac198d6fa56ec060a88542fc47/feagi_rust_py_libs-0.0.132-cp38-abi3-win_amd64.whl", hash = "sha256:c9b36dea1fdf368c20bc6e247ca0b24e1cd21de4b1fad9452e639539766346c0", size = 8197304, upload-time = "2026-11-27T15:22:16.339Z" },
 ]
 
 [[package]]

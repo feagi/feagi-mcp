@@ -370,3 +370,19 @@ async def test_check_port_contract_tool(monkeypatch: pytest.MonkeyPatch) -> None
     failing = AsyncMock(return_value={"error": "x"})
     monkeypatch.setattr(server.feagi, "get_area_parameters", failing)
     assert (await server.check_port_contract({}, "a"))["error"] == "area_unavailable"
+
+
+def _port_row(name: str, direction: str) -> dict[str, Any]:
+    return {"name": name, "dir": direction}
+
+
+def test_both_way_port_is_two_rows_without_problems() -> None:
+    doc = _doc()
+    doc["ports"] = [_port_row("hub", "in"), _port_row("hub", "out")]
+    assert validate_author_fields(doc) == []
+
+
+def test_same_direction_duplicate_name_is_flagged() -> None:
+    doc = _doc()
+    doc["ports"] = [_port_row("hub", "in"), _port_row("hub", "in")]
+    assert any("listed twice" in p for p in validate_author_fields(doc))

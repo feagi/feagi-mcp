@@ -9,7 +9,7 @@ Part 1 of 2: agents, joints, simulator ground truth, scene settings, asset packs
 - Driving joints
 - Matching the genome to the robot
 - Simulator ground truth
-- Actuator-force (MiscData) sensing: measured caveats
+- Force sensing (Force Sensor input)
 - MuJoCo scene settings
 - Simulator asset packs
 
@@ -92,23 +92,27 @@ After a `motor_z_resolution` change, rebuild every z pattern that feeds a servo 
 
 How servo, motor and sensor channels decode (absolute, incremental and speed areas, the mean of active z, held targets): [io-encodings.md](io-encodings.md).
 
-## Actuator-force (MiscData) sensing: measured caveats
+## Force sensing (Force Sensor input)
 
-Measured once on one simulator controller pack at 200 Hz (root cause being traced; read the pack version from the live controller; derive your own):
+Actuator, torque and contact force arrive on the generic **Force Sensor** input (unit `frc`), not
+MiscData. One signed value in [-1, 1] per channel; one channel per sensor axis in the MuJoCo
+controller. The sign follows the sensor's frame or actuator direction; probe it. Layout and decode:
+[io-encodings.md](io-encodings.md). `sensory_hold_last_frame` defaults on (signed percentage
+type), so a missed controller frame re-injects the last one for one burst; confirm it survives a
+Stop/Start. A genome that wired these sensors through MiscData must be rewired to the Force area.
 
-- The per-actuator force IPU arrives on about 86% of bursts at 200 Hz, all channels together.
-  Cause: the controller loop and the burst clock are independent, so some bursts get no new
-  frame. FEAGI re-injects the previous frame for one burst only on areas with
-  `sensory_hold_last_frame` (default on for servo, percentage, SmartIMU and RawIMU types, off for
-  MiscData). Turn that property on for a scalar MiscData area (force, load) before building a
-  per-burst gate on it, and confirm the setting survives a Stop/Start. Rare 2- and 4-burst gaps
-  remain; values with |v| <= 0.0001 are dropped by the encoder.
-- Its potentials are tanh(|N m|), so 0.03 to 0.1 for a loaded knee, not 0 to 100, and the area
-  read a fire threshold of 1000 (origin under investigation), so it never fires until lowered.
+Normalization (MuJoCo controller, read from code): `raw / cutoff`, clamped to [-1, 1]. Cutoff
+precedence per sensor: mapping `sensor_cutoffs` entry, then the MJCF `<sensor cutoff>`, then an
+adaptive running max of |raw| when neither is declared. Declare a cutoff for reproducible runs.
+
+Measured once on one pack at 200 Hz, before the move (derive your own):
+
+- The old MiscData force frame arrived on about 86% of bursts: controller loop and burst clock are
+  independent. Rare 2- and 4-burst gaps remain; values with |v| <= 0.0001 are dropped by the
+  encoder. Re-measure on Force.
 - Neurons that fired read 0 in `neuron_state` (the membrane resets on fire), so sample
   potentials just before the fire or count spikes instead.
-- On a small biped the knee separates a loaded foot from a lifted one better than the ankle
-  (loaded about 0.03 to 0.04, lifted about 0.003).
+- On a small biped the knee separated a loaded foot from a lifted one better than the ankle.
 
 ## MuJoCo scene settings
 

@@ -576,8 +576,13 @@ class Plan:
         }
         defaults["inputs"] = [n for n in defaults["inputs"] if n not in sends_out]
         defaults["outputs"] += [n for n in sorted(sends_out) if n in own]
+        # An area the author lists explicitly in one direction is not also a default in the
+        # other: a both-way port only comes from listing it under both directions.
+        explicit_names = {n for names in self.explicit_ports.values() for n in names}
         return {
-            d: list(self.explicit_ports[d]) if d in self.explicit_ports else defaults[d]
+            d: list(self.explicit_ports[d])
+            if d in self.explicit_ports
+            else [n for n in defaults[d] if n not in explicit_names]
             for d in _DIRECTIONS
         }
 
@@ -586,7 +591,8 @@ class Plan:
 
         Mirrors feagi-core ``region_io_designation.rs``: an output cannot have an incoming
         mapping from outside the region, an input cannot have an outgoing mapping to outside
-        it, and an area cannot be both. A mapping endpoint that is not a block area counts as
+        it. An area that is both input and output (a both-way port) takes mappings in and sends
+        them out. A mapping endpoint that is not a block area counts as
         outside the region.
         """
         own = {a["name"] for a in self.areas}
@@ -595,28 +601,27 @@ class Plan:
         # not create, so only ``port`` areas and explicitly declared ports are checked.
         explicit = {n for d in self.explicit_ports.values() for n in d} | self.flex_ports
         ports = {d: [n for n in ports[d] if n in explicit] for d in _DIRECTIONS}
-        errs = [
-            f"port '{n}' is declared as both input and output; an area crossing the region "
-            "boundary both ways can be neither: use a relay area so one area is the input "
-            "and another the output"
-            for n in ports["inputs"]
-            if n in ports["outputs"]
-        ]
+        errs: list[str] = []
+        both = set(ports["inputs"]) & set(ports["outputs"])
         for n in ports["outputs"]:
+            if n in both:
+                continue
             for src, dst in self.mappings:
                 if dst == n and src not in own:
                     errs.append(
                         f"area '{n}' cannot be a region output: mapping {src} -> {dst} enters "
-                        "it from outside the block (FEAGI refuses with 409); add a relay area "
-                        "inside the block as the input and keep this one as the output"
+                        "it from outside the block (FEAGI refuses with 409); also list it "
+                        "under inputs to make it a both-way port"
                     )
         for n in ports["inputs"]:
+            if n in both:
+                continue
             for src, dst in self.mappings:
                 if src == n and dst not in own:
                     errs.append(
                         f"area '{n}' cannot be a region input: mapping {src} -> {dst} leaves "
-                        "it to outside the block (FEAGI refuses with 409); add a relay area "
-                        "inside the block as the output and keep this one as the input"
+                        "it to outside the block (FEAGI refuses with 409); also list it "
+                        "under outputs to make it a both-way port"
                     )
         return errs
 

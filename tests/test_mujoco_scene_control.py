@@ -397,3 +397,26 @@ async def test_send_motor_command_fails_when_the_fence_rejects(
     assert out["ok"] is False and out["success"] is False
     assert out["violation_mm"] == 7.25
     assert out["fence"]["rejected"] is True
+
+
+@pytest.mark.asyncio
+async def test_body_appearance_is_a_live_action_with_a_read_section(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "feagi_mcp.mujoco_scene_control.discover_endpoint",
+        lambda _controller_id: _endpoint(),
+    )
+    posted: list[dict[str, Any]] = []
+
+    async def poster(_url: str, payload: dict[str, Any], _timeout: float) -> dict[str, Any]:
+        posted.append(payload)
+        return {"ok": True, "result": {"action": payload["action"]}}
+
+    client = MujocoSceneControl(poster=poster)
+    overrides = [{"body_name": "part_a", "rgba": [1.0, 0.0, 0.0, 1.0]}]
+    applied = await client.command("apply_body_appearance", {"overrides": overrides})
+    assert applied["ok"] is True
+    assert posted[-1] == {"action": "apply_body_appearance", "overrides": overrides}
+    read = await client.read_config(section="list_body_appearance")
+    assert read["sections"]["list_body_appearance"] == {"action": "list_body_appearance"}

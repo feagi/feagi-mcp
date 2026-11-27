@@ -1542,11 +1542,28 @@ def test_input_with_outgoing_outside_mapping_is_an_error() -> None:
     assert any("'P' cannot be a region input" in e and "P -> Ext" in e for e in report["errors"])
 
 
-def test_both_directions_on_one_area_is_an_error() -> None:
+def test_both_directions_on_one_area_is_accepted() -> None:
     report, _ = expand_spec(
-        {"region": REGION, "templates": [_PORT], "ports": {"inputs": ["P"], "outputs": ["P"]}}
+        {
+            "region": REGION,
+            "templates": [_PORT],
+            "mappings": [
+                {"src": "Ext", "dst": "P", "rules": [{"morphology": "block_to_block", "psc": 1}]},
+                {"src": "P", "dst": "Ext2", "rules": [{"morphology": "block_to_block", "psc": 1}]},
+            ],
+            "ports": {"inputs": ["P"], "outputs": ["P"]},
+        }
     )
-    assert any("both input and output" in e for e in report["errors"])
+    assert not any("both input and output" in e or "relay" in e for e in report["errors"])
+    assert not any("'P' cannot be" in e for e in report["errors"])
+
+
+def test_explicit_output_does_not_make_template_port_both_way() -> None:
+    report, plan = expand_spec(
+        {"region": REGION, "templates": [_PORT], "ports": {"outputs": ["P"]}}
+    )
+    assert not report["errors"]
+    assert plan.ports == {"inputs": [], "outputs": ["P"]}
 
 
 # ---- port encoding in the spec

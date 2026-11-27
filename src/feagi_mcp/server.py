@@ -5516,7 +5516,12 @@ async def get_mujoco_scene_config(
     (``supported``, ``fence_enabled``, ``ee_pose_mm``, ``fence_violation_mm``,
     ``fence_violated``, ``fence_rejection_count``, ``last_rejection_at``,
     ``last_rejection_violation_mm``, ``workspace_min_mm``, ``workspace_max_mm``); any section
-    name (``status``, ``list_scene_objects``, ...) returns just that section.
+    name returns just that section. Valid sections: ``fence`` (compact fence status),
+    ``status`` (controller state), ``list_scene_objects`` (added objects),
+    ``list_scene_cameras`` (cameras), ``list_embodiment_bodies`` (model body names, for
+    attachments and colours), ``list_body_appearance`` (current body colour overrides:
+    ``{overrides, rejected}``), ``get_environment_feedback`` (feedback rules),
+    ``get_simulation_rate`` and ``get_loop_timing``. Any other name is an error.
     """
     return await MujocoSceneControl().read_config(controller_id, section)
 
@@ -5529,8 +5534,13 @@ async def configure_mujoco_scene(
 ) -> dict[str, Any]:
     """Apply one MuJoCo settings action on the running controller.
 
+    Limits: ``rgba`` and the other object fields apply only to objects added with these
+    tools. Bodies from the model file can be given a solid colour with
+    ``apply_body_appearance`` (textures cannot be changed); their other properties cannot be
+    edited here.
+
     ``apply_scene_objects``, ``apply_scene_cameras``, ``apply_embodiment_attachments``,
-    and ``set_environment_feedback`` replace the full document. Read
+    ``apply_body_appearance`` and ``set_environment_feedback`` replace the full document. Read
     ``get_mujoco_scene_config`` first and send the complete list back.
 
     Actions and body fields:
@@ -5558,6 +5568,15 @@ async def configure_mujoco_scene(
       requires ``device_id`` (stable motor-group name) and ``feagi_group``
       (pinned CorticalUnitIndex, must not collide with host limbs or cameras).
       Restart after a full-I/O mount so FEAGI creates those cortical areas.
+    - ``apply_body_appearance``: ``overrides`` list of ``{body_name, rgba}``; ``rgba`` is
+      ``[r, g, b, a]`` in 0..1 (a solid colour; textures cannot change). Example:
+      ``body={"overrides":[{"body_name":"<model body>","rgba":[r,g,b,a]}]}``. Replaces the
+      full list and ``[]`` clears it; the current list is section ``list_body_appearance``.
+      Body names come from section ``list_embodiment_bodies``. To colour one body the user
+      named, no config read is needed when ``list_embodiment_bodies`` confirms the name.
+      Bodies the controller cannot recolour (unknown
+      names, scene-object bodies) come back under ``rejected``. Removing an entry restores
+      the body's own look.
     - ``set_environment_feedback``: ``rules`` of ``{id, enabled, display_name, source}``
       where ``source`` is ``safety_boundary``, ``imu_tilt``, ``body_height``, or
       ``body_contact``. Tilt adds ``target_body``, ``tilt_limit_deg``, ``up_axis``.
@@ -5586,7 +5605,9 @@ async def add_mujoco_scene_object(
     ``[radius, half_length]`` for a capsule, or three half-extents for a box, in mm.
     A weight means ``dynamic=true`` and ``mass_g`` in grams. Optional ``friction``
     is ``[sliding, torsional, rolling]``; omit it to keep MuJoCo's default contact.
-    Reusing ``object_id`` replaces that object.
+    Reusing ``object_id`` replaces that object. ``rgba`` colours only objects added with
+    these tools; bodies from the model file can be given a solid colour with
+    ``apply_body_appearance`` (textures cannot be changed).
     """
     try:
         scene_object = scene_object_payload(

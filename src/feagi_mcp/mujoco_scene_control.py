@@ -25,6 +25,7 @@ _APPLY_ACTIONS = frozenset(
         "apply_scene_objects",
         "apply_scene_cameras",
         "apply_embodiment_attachments",
+        "apply_body_appearance",
     }
 )
 LIVE_ACTIONS = frozenset(
@@ -37,6 +38,8 @@ LIVE_ACTIONS = frozenset(
         "apply_scene_cameras",
         "list_embodiment_bodies",
         "apply_embodiment_attachments",
+        "list_body_appearance",
+        "apply_body_appearance",
         "get_simulation_rate",
         "get_loop_timing",
         "get_environment_feedback",
@@ -48,6 +51,7 @@ _READ_ACTIONS = (
     "list_scene_objects",
     "list_scene_cameras",
     "list_embodiment_bodies",
+    "list_body_appearance",
     "get_environment_feedback",
     "get_simulation_rate",
     "get_loop_timing",

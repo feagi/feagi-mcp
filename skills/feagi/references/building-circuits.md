@@ -66,8 +66,7 @@ in (out if the block maps out of it), `onset_pulse` Onset out, `ring_cpg` ring a
 `drive` in; `phase_window_gate` out; a direction in `ports` replaces them. None: warning.
 Port encoding (`port_encoding`): [concepts.md](concepts.md#port-encoding).
 Direction rule (FEAGI answers 409; the dry run names the mapping): an output cannot have
-an incoming mapping from outside the block, an input cannot have an outgoing one, and no area is
-both. Remedy: a relay area inside the block (one input, one output).
+an incoming mapping from outside the block, an input cannot have an outgoing one. A both-way port (in both lists) may have both.
 
 Spec keys beyond templates: `delete` (`[{src, dst}]` removes those mappings before the new ones
 are written, so a pair can be rebuilt) and `edit_areas` (`[{name,

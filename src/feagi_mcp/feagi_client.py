@@ -8993,6 +8993,7 @@ class FeagiClient:
 
         subtype_hint_by_device: dict[str, str] = {
             "PositionalServo": "opse",
+            "Muscle": "omus",
             "SpatialPointer": "optr",
             "RotaryServo": "opse",
             "MiscData": "omis",

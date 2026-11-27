@@ -24,13 +24,12 @@ depth and decoded fraction, from FEAGI's own coder and the agent's registration.
 - The coding (data type, absolute or incremental, linear or fractional) is part of the
   cortical ID, so changing it changes the ID. Bind areas with `compute_io_cortical_id()` /
   `create_io_area_for_unit()` ([concepts.md](concepts.md#cortical-area-ids)).
-- The controller must use the same map. A signed command does not match an unsigned area.
-- Read template shapes and defaults with `get_cortical_template()` and the live
-  area, not this file.
+- The controller must use the same map; a signed command does not match an unsigned area.
+- Read shapes and defaults from `get_cortical_template()` and the live area.
 
 ## Percentage codings along Z
 
-`Z` is the channel depth, `z` the active index. *code-read*.
+`Z` is the channel depth, `z` the active index (*code-read*).
 
 | Variant | Used when | Decode | Encode |
 |---|---|---|---|
@@ -41,23 +40,22 @@ depth and decoded fraction, from FEAGI's own coder and the agent's registration.
 | Signed fractional | signed, fractional | two lobes, each `Σ 0.5^(z+1)`; `v = pos - neg` | greedy bits on the lobe of the sign |
 
 - Linear: one "value is here" neuron; deeper areas give finer steps. Fractional
-  (also called exponential): a value is a small bit pattern of Z planes.
-- Encoder and decoder differ by up to one bin: the linear encoder scales by `Z`, the unsigned
-  decoder by `Z-1`. To pick the bin that decodes to a wanted value, use `convert_io_value`
+  (exponential): a value is a bit pattern of Z planes.
+- Encoder and decoder differ by up to one bin: linear encoder scales by `Z`, the unsigned
+  decoder by `Z-1`. To pick the bin for a wanted value, use `convert_io_value`
   with `fraction` (it inverts the decoder), never `(1-v)·Z` by hand. *code-read*
 - Two-lobe linear lobes divide by `Z`, not `Z-1`, so one lobe's last z reads `1/Z`, not 0.
   *code-read*
 
 ## Reading rules shared by every percentage decoder
 
-*code-read* in the percentage and positional-servo decoders:
+*code-read* (percentage, positional-servo decoders):
 
-- Only `y = 0` is read, voxels with potential 0 are skipped, and z beyond the depth is ignored.
-- Several active z on one channel: linear takes the **mean index** (so z 0 plus last z reads
-  0.5), fractional **sums** the planes (a repeated z counts twice).
-- Firing strength (potential) does not change a percentage value; position does.
-- A silent channel is not decoded: the cached value **holds**, unmarked as changed. Whether the controller then holds or zeroes the actuator is controller-defined
-  (*unverified* per controller; check with `get_motor_snapshot_last()`).
+- Only `y = 0` is read; potential-0 voxels and z beyond the depth are skipped.
+- Several active z on one channel: linear takes the **mean index** (z 0 plus last z reads 0.5), fractional **sums** the planes (repeats count twice).
+- Potential does not change a percentage value; position does.
+- A silent channel is not decoded: the cached value **holds**, unmarked as changed. Whether the controller then holds or zeroes the actuator is
+  controller-defined (*unverified*; check `get_motor_snapshot_last()`).
 
 ## Absolute and incremental
 
@@ -167,6 +165,7 @@ time; Smart IMU uses the raw components. Read the cutoffs before mapping z to an
 | MIDI output | OPU | one unit per instrument. Notes: X note, potential 0-255 = strength; firing = sounding, every decode is one frame. Expression: X control, Z unsigned level; silent = not driven |
 | MIDI input | IPU | inverse of MIDI output: one Notes voxel per sounding note (potential = strength x 255); Expression X control, Z level. One frame per burst, nothing latched; velocity reaches downstream only with `mp_driven_psp` ([concepts.md](concepts.md)) |
 | Text in and out | IPU/OPU | bits along Z at x 0, y 0, z 0 = highest bit, any potential > 0 sets a bit; integer = token id + 1, so a quiet frame is "no token" |
+| Force sensor | IPU | one signed value per channel (actuator, torque, contact force): signed along Z, or two lobes if fractional |
 | Miscellaneous | IPU/OPU | no meaning assigned; the dimensions are the contract between brain and controller |
 
 Before wiring a channel, read what drives it (`explain_motor_channel()`) and lint the OPU

@@ -94,7 +94,7 @@ GENERATED_TOP_KEYS = frozenset({"level", "burst", "dependencies"})
 #: publish; an absent key blocks publish (see :func:`missing_mandatory_keys`).
 MANDATORY_PORT_KEYS = VOCABULARY["mandatory_port_keys"]
 _OPTIONAL_PORT_KEYS = ("quantity", "unit", "range", "min_bins_that_pass", "fits")
-AUTHOR_PORT_KEYS = frozenset({"name", *MANDATORY_PORT_KEYS, *_OPTIONAL_PORT_KEYS})
+AUTHOR_PORT_KEYS = frozenset({"name", "dir", *MANDATORY_PORT_KEYS, *_OPTIONAL_PORT_KEYS})
 #: Port fit fields: extracted at publish, never typed; accepted when present and
 #: checked by ``_validate_port_fit``.
 PORT_FIT_KEYS = ("body_role", "size_rule", "precision")
@@ -206,8 +206,18 @@ def validate_author_fields(doc: Any) -> list[str]:
         _check_object(doc["block"], _BLOCK_KEYS, "block", ("name", "behavior"), out)
 
     if "ports" in doc:
+        seen: set[tuple[Any, Any]] = set()
         for i, port in enumerate(_check_list(doc["ports"], "ports", MAX_PORTS, out)):
             _validate_port(port, f"ports[{i}]", out)
+            if isinstance(port, dict) and isinstance(port.get("name"), str):
+                # Port identity is (dir, name): a both-way port is two rows, one per direction.
+                key = (port.get("dir"), port["name"])
+                if key in seen:
+                    out.append(
+                        f"ports[{i}].name: {port['name']!r} is listed twice under "
+                        f"dir {port.get('dir')!r}"
+                    )
+                seen.add(key)
 
     if "host_requirements" in doc:
         for i, item in enumerate(
@@ -402,6 +412,8 @@ def _validate_port(port: Any, where: str, out: list[str]) -> None:
         out.append(f"{where}.name: required, the port's area name")
     elif len(name) > MAX_TEXT_CHARS:
         out.append(f"{where}.name: exceeds {MAX_TEXT_CHARS} chars")
+    if "dir" in port and port["dir"] not in PORT_DIR_ENUM:
+        out.append(f"{where}.dir: must be one of {list(PORT_DIR_ENUM)}")
     for key in _PORT_TEXT_KEYS:
         if key in port:
             _check_text(port[key], f"{where}.{key}", out)
@@ -514,6 +526,8 @@ def missing_mandatory_keys(doc: Any) -> list[str]:
         if not isinstance(port, dict):
             continue
         label = port.get("name") or f"ports[{i}]"
+        if port.get("dir") in PORT_DIR_ENUM:
+            label = f"{label} ({port['dir']})"
         out.extend(
             f"{label}: mandatory key {key!r} is absent (use null for unknown)"
             for key in MANDATORY_PORT_KEYS
@@ -720,6 +734,7 @@ def check_port_contract(
     passed_any = any(c["status"] == PASS for c in checks)
     result = {
         "port": port_row.get("name"),
+        "dir": port_row.get("dir"),
         "passed": False if failed else (True if passed_any else None),
         "failed_checks": [c["check"] for c in failed],
         "checks": checks,
